@@ -1,0 +1,42 @@
+#pragma once
+// Metrics: one CSV row every N ticks, plus an optional end-of-run snapshot
+// (every creature + the heightmap) for plotting a map.
+
+#include <cstdint>
+#include <fstream>
+#include <string>
+
+#include "sim.hpp"
+
+namespace luca {
+
+// Sums TickStats over one metrics interval and checks energy conservation:
+//   stored(end) == stored(start) + energy_in - energy_out
+class IntervalTotals {
+public:
+    void begin(const Simulation& sim);
+    void add(const TickStats& s);
+
+    double stored_start = 0.0;
+    double energy_in = 0.0, energy_out = 0.0;
+    double out_upkeep = 0.0, out_thermal = 0.0, out_movement = 0.0;
+    std::size_t births = 0, deaths = 0;
+    double total_ms = 0.0;
+    uint64_t ticks = 0;
+};
+
+class MetricsWriter {
+public:
+    bool open(const std::string& path);
+    // Writes one row; returns the audit's relative error for this interval.
+    double write_row(const Simulation& sim, const IntervalTotals& t);
+
+private:
+    std::ofstream out_;
+};
+
+// End-of-run snapshot for map plots.
+bool write_creature_snapshot(const Simulation& sim, const std::string& path);
+bool write_world_snapshot(const Simulation& sim, const std::string& path);
+
+}  // namespace luca
