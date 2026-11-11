@@ -191,14 +191,19 @@ std::string species_name(uint32_t id) {
     return name;
 }
 
-std::string describe_difference(const Genome& child, const Genome& parent) {
+const char* part_noun(PartType t) {
     static const char* const noun[NUM_TYPES] = {"a sun patch", "a mouth", "a tail", "legs",
                                                 "an eye", "armour", "a fat store", "poison"};
+    const int i = static_cast<int>(t);
+    return i >= 0 && i < NUM_TYPES ? noun[i] : "something";
+}
+
+std::string describe_difference(const Genome& child, const Genome& parent) {
     static const char* const lost[NUM_TYPES] = {"its sun patch", "its mouth", "its tail", "its legs",
                                                 "its eyes", "its armour", "its fat store", "its poison"};
     const PartSums c = sum_parts(child), p = sum_parts(parent);
     for (int t = 0; t < NUM_TYPES; ++t)
-        if (c.size[t] > 0.0f && p.size[t] <= 0.0f) return std::string("has grown ") + noun[t];
+        if (c.size[t] > 0.0f && p.size[t] <= 0.0f) return std::string("has grown ") + part_noun(static_cast<PartType>(t));
     for (int t = 0; t < NUM_TYPES; ++t)
         if (c.size[t] <= 0.0f && p.size[t] > 0.0f) return std::string("has lost ") + lost[t];
 

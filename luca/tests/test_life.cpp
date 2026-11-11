@@ -794,6 +794,59 @@ void test_poison() {
     CHECK(audit_plain < 1e-5 && audit_toxic < 1e-5);   // and the burned energy is on the books
 }
 
+// Gene transfer: a body that feeds on another can take up one of its parts'
+// blueprints. Its own body does not change; its genome does.
+void test_gene_transfer() {
+    using namespace luca;
+    Rng rng(5);
+    Genome donor = make_luca();
+    donor.parts[0].size = 2.0f;
+    Genome taker = with_part(PartType::Absorber, 1.0f);
+    PartType copied = PartType::Absorber;
+    CHECK(transfer_part(donor, taker, rng, copied));
+    CHECK(copied == PartType::Photo && taker.parts.size() == 2);
+    CHECK(taker.parts[1].type == PartType::Photo && taker.parts[1].size == 1.0f);   // arrives as a bud, half size
+    Genome full = taker;
+    while (full.parts.size() < static_cast<std::size_t>(limits::MAX_PARTS)) full.parts.push_back(full.parts[0]);
+    CHECK(!transfer_part(donor, full, rng, copied));                                 // no room: nothing happens
+    Genome bare = make_luca();
+    bare.parts.clear();
+    CHECK(!transfer_part(bare, taker, rng, copied));                                 // nothing to copy
+
+    // In the world: a mouth feeding on a LUCA, with transfer made common.
+    auto feed = [](float chance, std::size_t& transfers, std::size_t& novel, bool& body_changed, double& matter_drift) {
+        SimConfig cfg = small_config();
+        cfg.nutrient_mean = 0.0f;       // nobody breeds
+        cfg.day_length = 0;
+        cfg.gene_transfer_chance = chance;
+        Simulation sim(cfg);
+        const uint64_t h = sim.add_creature(24.2f, 6.0f, 200.0f, with_part(PartType::Absorber, 1.5f));
+        sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
+        const float mass0 = sim.creatures().pheno[find(sim, h)].mass;
+        const double matter0 = sim.total_matter();
+        transfers = novel = 0;
+        for (int t = 0; t < 60; ++t) {
+            sim.step();
+            transfers += sim.last_stats().gene_transfers;
+            novel += sim.last_stats().gene_transfers_novel;
+        }
+        const std::size_t i = find(sim, h);
+        if (i == sim.creatures().size()) return std::size_t{0};
+        body_changed = sim.creatures().pheno[i].mass != mass0 || sim.creatures().pheno[i].light_capture != 0.0f;
+        matter_drift = std::abs(sim.total_matter() - matter0);
+        return static_cast<std::size_t>(total_part_size(sim.creatures().genome[i], PartType::Photo) > 0.0f ? 1 : 0);
+    };
+    std::size_t transfers = 0, novel = 0;
+    bool body_changed = true;
+    double drift = 1.0;
+    CHECK(feed(0.2f, transfers, novel, body_changed, drift) == 1);   // its genome now holds a sun patch
+    CHECK(transfers >= 1 && novel == 1);                             // only the first was new to it
+    CHECK(!body_changed);                                            // but the body it already has is as it was
+    CHECK(drift < 1e-4);                                             // and no matter appeared
+    CHECK(feed(0.0f, transfers, novel, body_changed, drift) == 0);   // switched off: never
+    CHECK(transfers == 0);
+}
+
 void test_species() {
     using namespace luca;
 
@@ -891,6 +944,7 @@ int main() {
     test_moving_costs_sunlight();
     test_dormancy();
     test_poison();
+    test_gene_transfer();
     test_species();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;

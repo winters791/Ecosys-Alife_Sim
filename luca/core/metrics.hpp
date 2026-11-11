@@ -23,6 +23,7 @@ public:
     double out_transfer = 0.0, out_decay = 0.0, out_waste = 0.0, out_poison = 0.0;
     double eaten_living = 0.0, eaten_dead = 0.0;
     std::size_t births = 0, deaths = 0;
+    std::size_t gene_transfers = 0, gene_transfers_cross = 0, gene_transfers_novel = 0;
     double total_ms = 0.0;
     uint64_t ticks = 0;
 };

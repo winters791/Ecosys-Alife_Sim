@@ -83,6 +83,9 @@ private:
 // A pronounceable name, unique per id for the first 51,200 species ("Velox").
 std::string species_name(uint32_t id);
 
+// A part type in plain words: "a mouth", "armour".
+const char* part_noun(PartType t);
+
 // What sets `child` apart from `parent`, as the end of a sentence:
 // "has grown a mouth", "is smaller". Empty if nothing stands out.
 std::string describe_difference(const Genome& child, const Genome& parent);

@@ -167,4 +167,14 @@ Genome mutate(const Genome& parent, Rng& rng) {
     return g;
 }
 
+bool transfer_part(const Genome& from, Genome& to, Rng& rng, PartType& copied) {
+    if (from.parts.empty() || to.parts.size() >= static_cast<std::size_t>(limits::MAX_PARTS)) return false;
+    Part bud = from.parts[rng.below(static_cast<uint32_t>(from.parts.size()))];
+    bud.size *= 0.5f;   // it arrives as a bud, like a duplicated part
+    copied = bud.type;
+    to.parts.push_back(bud);
+    clamp_genome(to);
+    return true;
+}
+
 }  // namespace luca

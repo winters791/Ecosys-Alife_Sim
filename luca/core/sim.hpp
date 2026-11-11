@@ -34,6 +34,10 @@ struct TickStats {
     // Energy that changed hands inside the world (not part of in/out):
     double eaten_living    = 0.0;  // arrived from living bodies
     double eaten_dead      = 0.0;  // arrived from corpses
+    // Blueprints taken up through contact (see Simulation::step, phase 2a):
+    std::size_t gene_transfers = 0;        // all of them
+    std::size_t gene_transfers_cross = 0;  // between different species
+    std::size_t gene_transfers_novel = 0;  // a kind of part the taker's genome lacked
     double tick_ms         = 0.0;  // wall-clock time of this tick
 };
 
@@ -143,7 +147,7 @@ private:
     uint64_t    day_seen_ = 0;
     bool        extinct_logged_ = false;
     bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false;
-    bool        sighted_logged_ = false, armoured_logged_ = false, poisonous_logged_ = false;
+    bool        sighted_logged_ = false, armoured_logged_ = false, poisonous_logged_ = false, transfer_logged_ = false;
 
     // Scratch buffers, reused every tick to avoid allocation.
     std::vector<int>   cell_of_;

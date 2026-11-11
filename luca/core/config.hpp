@@ -52,6 +52,10 @@ struct SimConfig {
     float temp_lapse         = 0.4f;   // °C lost per unit of height
     float temp_latitude_drop = 20.0f;  // °C lost from y = 0 edge to far edge
 
+    // Gene transfer: each tick that a body is draining another, the chance
+    // that it takes up the blueprint of one of that body's parts. 0 = never.
+    float gene_transfer_chance = 0.0001f;
+
     // Population
     int   initial_population = 200;
     float initial_energy     = 300.0f;   // half of what a LUCA needs to divide

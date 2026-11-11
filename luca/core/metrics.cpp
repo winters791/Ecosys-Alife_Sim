@@ -24,6 +24,9 @@ void IntervalTotals::add(const TickStats& s) {
     eaten_living += s.eaten_living;
     eaten_dead   += s.eaten_dead;
     births       += s.births;
+    gene_transfers       += s.gene_transfers;
+    gene_transfers_cross += s.gene_transfers_cross;
+    gene_transfers_novel += s.gene_transfers_novel;
     deaths       += s.deaths;
     total_ms     += s.tick_ms;
     ticks        += 1;
@@ -39,7 +42,7 @@ bool MetricsWriter::open(const std::string& path) {
             "ms_per_tick,"
             "out_transfer,out_decay,out_waste,eaten_living,eaten_dead,"
             "producers,hunters,scavengers,mixed,movers,sighted,armoured,"
-            "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison\n";
+            "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison,gene_transfers,gene_transfers_cross,gene_transfers_novel\n";
     return true;
 }
 
@@ -113,7 +116,8 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
          << sum_bite * inv << ',' << sum_digest * inv << ','
          << brains << ',' << (brains ? sum_neurons / static_cast<double>(brains) : 0.0) << ','
          << (brains ? sum_links / static_cast<double>(brains) : 0.0) << ',' << max_neurons << ','
-         << sum_dormancy * inv << ',' << asleep << ',' << k.poisonous << ',' << t.out_poison << '\n';
+         << sum_dormancy * inv << ',' << asleep << ',' << k.poisonous << ',' << t.out_poison << ','
+         << t.gene_transfers << ',' << t.gene_transfers_cross << ',' << t.gene_transfers_novel << '\n';
     out_.flush();
     return audit;
 }

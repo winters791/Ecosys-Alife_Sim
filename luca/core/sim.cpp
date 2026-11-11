@@ -344,6 +344,28 @@ void Simulation::step() {
         intake_[k.taker] += amount;
         // A poisonous body costs its eater energy for every unit taken.
         poisoned_[k.taker] += amount * c_.pheno[k.giver].toxicity;
+
+        // Gene transfer: now and then, something of the body being drained is
+        // taken up as a blueprint. It goes into the taker's genome only: its
+        // own body is already built and does not change, but its children
+        // are built from the new plan (and pay for the extra part).
+        if (amount > 0.0f && cfg_.gene_transfer_chance > 0.0f && rng_.chance(cfg_.gene_transfer_chance)) {
+            float before[static_cast<int>(PartType::Count)] = {};
+            for (const Part& part : c_.genome[k.taker].parts) before[static_cast<int>(part.type)] += part.size;
+            PartType copied = PartType::Photo;
+            if (transfer_part(c_.genome[k.giver], c_.genome[k.taker], rng_, copied)) {
+                const bool cross = c_.species[k.taker] != c_.species[k.giver];
+                const bool novel = before[static_cast<int>(copied)] <= 0.0f;
+                ++stats_.gene_transfers;
+                stats_.gene_transfers_cross += cross ? 1 : 0;
+                stats_.gene_transfers_novel += novel ? 1 : 0;
+                if (cross && novel && !transfer_logged_) {
+                    transfer_logged_ = true;
+                    chronicle_.add(tick_, "A borrowed blueprint: " + species_.get(c_.species[k.taker]).name + " takes up the plan for " +
+                                              part_noun(copied) + " from " + species_.get(c_.species[k.giver]).name + ", which it feeds on.");
+                }
+            }
+        }
     }
 
     // --- Phase 2b: apply ------------------------------------------------------
