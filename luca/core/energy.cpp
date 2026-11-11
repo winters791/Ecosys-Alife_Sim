@@ -122,20 +122,21 @@ float thermal_cost(const Phenotype& p, float body_temp) {
 }
 
 float movement_cost(const Phenotype& p, float distance, float height_gain) {
-    return p.mass * (TRANSPORT_COST * distance + MOVE_COST * distance * distance + CLIMB_COST * std::max(0.0f, height_gain));
+    // A long body slips through more easily; a boxy one drags (body.hpp). Climbing is the same for all.
+    return p.mass * (p.drag * (TRANSPORT_COST * distance + MOVE_COST * distance * distance) + CLIMB_COST * std::max(0.0f, height_gain));
 }
 
 float throw_cost(float child_mass, float distance) {
     return THROW_COST * child_mass * distance * distance;
 }
 
-float contact_flow(const Phenotype& taker, const Phenotype& giver) {
+float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, float membrane) {
     // pull^2 / (pull + membrane): smooth, so a tiny absorber still leaks a
     // little out of a big host, and armour never makes anything immune.
-    const float a = taker.absorb;
+    const float a = pull;
     if (a <= 0.0f) return 0.0f;
     const float edge = std::min(std::pow(taker.radius / giver.radius, SIZE_POWER), SIZE_EDGE_MAX);
-    return CONTACT_RATE * taker.bite * edge * a * a / (a + giver.membrane);
+    return CONTACT_RATE * taker.bite * edge * a * a / (a + membrane);
 }
 
 float fouling_cost(const Phenotype& p, float waste_here) {

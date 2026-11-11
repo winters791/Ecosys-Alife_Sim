@@ -232,12 +232,10 @@ PackedFloat32Array LucaWorld::get_instance_buffer(int capacity) const {
         const luca::Phenotype& p = c.pheno[i];
 
         // Rows of the 3x4 transform; see the header for what sits where.
-        f[0] = g.core_radius;                    f[1] = part(p, luca::PartType::Legs);
-        f[2] = part(p, luca::PartType::Storage); f[3] = c.x[i];
-        f[4] = part(p, luca::PartType::Absorber); f[5] = part(p, luca::PartType::Sensor);
-        f[6] = c.hx[i];                          f[7] = species_hue(c.species[i]);
-        f[8] = part(p, luca::PartType::Flagellum); f[9] = part(p, luca::PartType::Armour);
-        f[10] = c.hy[i];                         f[11] = c.y[i];
+        // (Row-major: f[0], f[4], f[8] are basis x; f[1], f[5], f[9] basis y ...)
+        f[0] = g.core_radius;   f[1] = part(p, luca::PartType::Storage);         f[2] = 0.0f;     f[3] = c.x[i];
+        f[4] = g.elongation;    f[5] = c.sleep[i];                               f[6] = c.hx[i];  f[7] = species_hue(c.species[i]);
+        f[8] = g.squareness;    f[9] = static_cast<float>(g.parts.size());       f[10] = c.hy[i]; f[11] = c.y[i];
 
         // Colour channel: raw traits. The shader decides how they look.
         f[12] = std::clamp(g.pigment, 0.0f, 1.0f);
@@ -252,6 +250,95 @@ PackedFloat32Array LucaWorld::get_instance_buffer(int capacity) const {
         f[19] = part(p, luca::PartType::Poison);
     }
     return out;
+}
+
+PackedFloat32Array LucaWorld::get_part_buffer(int capacity) const {
+    PackedFloat32Array out;
+    capacity = std::max(capacity, 0);
+    const int64_t texels = static_cast<int64_t>(capacity) * PARTS_PER_CREATURE;
+    const int64_t rows = std::max<int64_t>(1, (texels + PART_TEX_WIDTH - 1) / PART_TEX_WIDTH);
+    out.resize(rows * PART_TEX_WIDTH * 4);  // zero-filled: type 0 = no part
+    if (!sim_) return out;
+    const luca::Creatures& c = sim_->creatures();
+    const std::size_t n = std::min(c.size(), static_cast<std::size_t>(capacity));
+    float* f = out.ptrw();
+    for (std::size_t i = 0; i < n; ++i) {
+        float* t = f + static_cast<int64_t>(i) * PARTS_PER_CREATURE * 4;
+        const auto& parts = c.genome[i].parts;
+        const std::size_t k_max = std::min(parts.size(), static_cast<std::size_t>(PARTS_PER_CREATURE));
+        for (std::size_t k = 0; k < k_max; ++k, t += 4) {
+            t[0] = static_cast<float>(static_cast<int>(parts[k].type) + 1);
+            t[1] = parts[k].size;
+            t[2] = parts[k].theta;
+            t[3] = parts[k].stalk;
+        }
+    }
+    return out;
+}
+
+int LucaWorld::spawn_parade(double x, double z) {
+    if (!sim_) return 0;
+    using luca::PartType;
+    constexpr float PI = 3.14159265f;
+    auto part = [](PartType t, float size, float theta, float stalk = 0.0f) { return luca::Part{t, size, theta, 0.0f, stalk}; };
+    auto wander = [](luca::Genome& g, float throttle) {
+        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_WANDER), 1.0f);
+        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_INERTIA), 2.0f);
+        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_THROTTLE), throttle);
+    };
+    std::vector<luca::Genome> cast;
+    cast.push_back(luca::make_luca());                                   // a plain sitter
+    {   luca::Genome g = luca::make_luca();                              // a long swimmer: tail behind, mouth and eyes in front
+        g.elongation = 0.8f;
+        g.parts.push_back(part(PartType::Flagellum, 1.2f, PI));
+        g.parts.push_back(part(PartType::Absorber, 0.5f, 0.0f));
+        g.parts.push_back(part(PartType::Sensor, 0.6f, 0.0f));
+        wander(g, -0.3f);
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // an armoured box: plates all round but the mouth and tail
+        g.elongation = 0.4f;
+        g.squareness = 1.0f;
+        g.parts[0].size = 0.4f;
+        g.parts.push_back(part(PartType::Armour, 0.75f, PI * 0.5f));
+        g.parts.push_back(part(PartType::Armour, 0.75f, -PI * 0.5f));
+        g.parts.push_back(part(PartType::Absorber, 0.9f, 0.0f));
+        g.parts.push_back(part(PartType::Flagellum, 1.0f, PI));
+        g.parts.push_back(part(PartType::Sensor, 0.3f, 0.3f));
+        g.bite = 1.0f;
+        wander(g, -0.35f);
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // a tentacle monster: mouths out on stalks, armoured body
+        g.core_radius = 1.3f;
+        g.parts[0].size = 0.3f;
+        for (int k = 0; k < 5; ++k) g.parts.push_back(part(PartType::Absorber, 0.4f, -PI * 0.8f + PI * 0.4f * k, 0.8f));
+        g.parts.push_back(part(PartType::Armour, 2.0f, 0.0f));
+        g.parts.push_back(part(PartType::Sensor, 0.8f, 0.0f));
+        g.pigment = 0.6f;
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // a frond: sun patches held up on stalks
+        g.parts[0].stalk = 0.7f;
+        g.parts.push_back(part(PartType::Photo, 0.8f, PI * 0.66f, 0.9f));
+        g.parts.push_back(part(PartType::Photo, 0.8f, -PI * 0.66f, 0.5f));
+        g.pigment = 0.15f;
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // a walker with legs along both sides
+        g.elongation = 0.5f;
+        g.parts.push_back(part(PartType::Legs, 1.0f, PI * 0.35f));
+        g.parts.push_back(part(PartType::Legs, 1.0f, PI * 0.7f));
+        g.parts.push_back(part(PartType::Sensor, 1.0f, 0.0f));
+        g.parts.push_back(part(PartType::Absorber, 0.4f, 0.0f));
+        wander(g, -0.42f);
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // fat and poisonous on one side
+        g.parts.push_back(part(PartType::Poison, 1.0f, PI));
+        g.parts.push_back(part(PartType::Storage, 1.5f, 0.0f));
+        g.pigment = 0.7f;
+        g.squareness = 0.5f;
+        cast.push_back(g); }
+    for (std::size_t k = 0; k < cast.size(); ++k)
+        sim_->add_creature(static_cast<float>(x) + 3.2f * static_cast<float>(k), static_cast<float>(z),
+                          0.8f * cast[k].repro_threshold, cast[k]);   // well fed, but not yet ready to divide
+    return static_cast<int>(cast.size());
 }
 
 double LucaWorld::height_at(double x, double z) const {
@@ -401,10 +488,18 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["cell_light"] = w.light(cell);
     d["cell_temperature"] = w.temperature(cell);
     d["cell_nutrient"] = sim_->soil().nutrient[cell];
+    // Where each part sits, in words: eight directions from the front.
+    static const char* const SIDES[8] = { "front", "front-left", "left", "back-left", "back", "back-right", "right", "front-right" };
     PackedStringArray parts;
-    for (const luca::Part& part : g.parts)
-        parts.push_back(String(luca::part_name(part.type)) + " " + String::num(part.size, 2));
+    for (const luca::Part& part : g.parts) {
+        const int octant = static_cast<int>(std::lround(part.theta / (3.14159265f / 4.0f))) & 7;
+        String line = String(luca::part_name(part.type)) + " " + String::num(part.size, 2) + " " + SIDES[octant];
+        if (part.stalk > 0.0f) line += " on a " + String::num(part.stalk, 2) + " stalk";
+        parts.push_back(line);
+    }
     d["parts"] = parts;
+    d["elongation"] = g.elongation;
+    d["squareness"] = g.squareness;
     return d;
 }
 
@@ -433,6 +528,10 @@ void LucaWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_height_revision"), &LucaWorld::get_height_revision);
     ClassDB::bind_method(D_METHOD("get_climate_revision"), &LucaWorld::get_climate_revision);
     ClassDB::bind_method(D_METHOD("get_instance_buffer", "capacity"), &LucaWorld::get_instance_buffer);
+    ClassDB::bind_method(D_METHOD("get_part_buffer", "capacity"), &LucaWorld::get_part_buffer);
+    ClassDB::bind_method(D_METHOD("get_part_tex_width"), &LucaWorld::get_part_tex_width);
+    ClassDB::bind_method(D_METHOD("get_parts_per_creature"), &LucaWorld::get_parts_per_creature);
+    ClassDB::bind_method(D_METHOD("spawn_parade", "x", "z"), &LucaWorld::spawn_parade);
     ClassDB::bind_method(D_METHOD("get_daylight"), &LucaWorld::get_daylight);
     ClassDB::bind_method(D_METHOD("get_day_phase"), &LucaWorld::get_day_phase);
     ClassDB::bind_method(D_METHOD("get_day_length"), &LucaWorld::get_day_length);

@@ -3,11 +3,13 @@
 // creature. The tick streams through the hot arrays (x, y, energy, pheno)
 // in order; the genome array is only touched at birth.
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
+#include "body.hpp"
 #include "genome.hpp"
 #include "phenotype.hpp"
 
@@ -39,6 +41,8 @@ struct Creatures {
     // The brain, ready to run, and what it remembers. Only movers touch these.
     std::vector<BrainPlan>  brain;
     std::vector<BrainState> brain_state;
+    // Where its mouths and plates point (body.hpp). Only contact reads it.
+    std::vector<BodyPlan>   body;
 
     std::size_t size() const { return x.size(); }
 
@@ -47,16 +51,20 @@ struct Creatures {
         energy.reserve(n); age.reserve(n); pheno.reserve(n);
         fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n); fed_waste.reserve(n);
         id.reserve(n); lineage.reserve(n); species.reserve(n); generation.reserve(n); genome.reserve(n);
-        brain.reserve(n); brain_state.reserve(n);
+        brain.reserve(n); brain_state.reserve(n); body.reserve(n);
     }
 
     void add(float px, float py, float e, float temp, uint64_t uid, uint32_t lin, uint32_t sp, uint32_t gen, Genome g, const Phenotype& p) {
         x.push_back(px);
         y.push_back(py);
-        hx.push_back(0.0f);
-        hy.push_back(1.0f);
+        // A body faces somewhere from birth: the way it starts to wander.
+        // Sessile bodies keep this facing for life (it decides where their
+        // mouths and plates point); movers turn to face the way they go.
+        const float facing = initial_wander(uid);
+        hx.push_back(std::cos(facing));
+        hy.push_back(std::sin(facing));
         moved.push_back(0.0f);
-        wander.push_back(initial_wander(uid));
+        wander.push_back(facing);
         sleep.push_back(0.0f);
         body_temp.push_back(temp);
         fed_light.push_back(0.0f);
@@ -72,6 +80,7 @@ struct Creatures {
         generation.push_back(gen);
         brain.push_back(p.has_brain ? compile_brain(g) : BrainPlan{});
         brain_state.emplace_back();
+        body.push_back(p.absorb > 0.0f || p.part_total[static_cast<int>(PartType::Armour)] > 0.0f ? compile_body(g) : BodyPlan{});
         genome.push_back(std::move(g));
     }
 
@@ -82,10 +91,9 @@ struct Creatures {
         swap_pop(energy, i); swap_pop(age, i);
         swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(id, i);
         swap_pop(pheno, i); swap_pop(lineage, i); swap_pop(species, i); swap_pop(generation, i); swap_pop(genome, i);
-        swap_pop(brain, i); swap_pop(brain_state, i);
+        swap_pop(brain, i); swap_pop(brain_state, i); swap_pop(body, i);
     }
 
-private:
     // A starting wander angle from the id alone (a splitmix64 hash), so births
     // draw nothing from the sim Rng and every lineage doesn't set off one way.
     static float initial_wander(uint64_t uid) {
@@ -95,6 +103,8 @@ private:
         z ^= z >> 31;
         return static_cast<float>(z >> 40) * (6.28318531f / 16777216.0f);
     }
+
+private:
 
     template <class T>
     static void swap_pop(std::vector<T>& v, std::size_t i) {

@@ -113,14 +113,17 @@ Genome mutate(const Genome& parent, Rng& rng) {
     if (rng.chance(P_GENE)) nudge_optional(g.digestion, 0.05f, rng);
     if (rng.chance(P_GENE)) nudge_optional(g.dormancy, 0.08f, rng);
     if (rng.chance(P_GENE)) nudge_optional(g.detox, 0.08f, rng);
+    if (rng.chance(P_GENE)) g.elongation += rng.normal() * 0.06f;
+    if (rng.chance(P_GENE)) g.squareness += rng.normal() * 0.06f;
     for (float& s : g.shape)
         if (rng.chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
     for (Part& p : g.parts)
         if (rng.chance(P_GENE)) {
             scale(p.size, 0.10f, rng);
             p.theta += rng.normal() * 0.2f;
-            p.phi   += rng.normal() * 0.2f;
         }
+    for (Part& p : g.parts)
+        if (can_have_stalk(p.type) && rng.chance(P_GENE * 0.5f)) nudge_optional(p.stalk, 0.08f, rng);
 
     // --- Structure --------------------------------------------------------------
     if (rng.chance(P_DELETE) && !g.parts.empty())
@@ -138,7 +141,6 @@ Genome mutate(const Genome& parent, Rng& rng) {
         p.type  = static_cast<PartType>(rng.below(NUM_TYPES));
         p.size  = rng.uniform(0.15f, 0.5f);
         p.theta = rng.uniform(0.0f, 6.2831853f);
-        p.phi   = rng.uniform(0.0f, 3.1415927f);
         g.parts.push_back(p);
     }
 

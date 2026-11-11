@@ -316,15 +316,38 @@ void Simulation::step() {
             const int cx = cell_of_[i] % wn, cy = cell_of_[i] / wn;
             const int x0 = std::max(cx - 1, 0), x1 = std::min(cx + 1, wn - 1);
             const float px = c_.x[i], py = c_.y[i];
+            const float hx = c_.hx[i], hy = c_.hy[i];
+            const BodyPlan& mine = c_.body[i];
             for (int yy = std::max(cy - 1, 0); yy <= std::min(cy + 1, wn - 1); ++yy) {
                 // Cells in a row are neighbours in slot order too: one strip per row.
                 const uint32_t stop = grid_.end(yy * wn + x1);
                 for (uint32_t slot = grid_.begin(yy * wn + x0); slot < stop; ++slot) {
                     const Near& q = near_[slot];
                     const float ddx = q.x - px, ddy = q.y - py;
-                    const float reach = std::min(p.reach + q.reach, MAX_REACH);
-                    if (ddx * ddx + ddy * ddy > reach * reach || q.who == i) continue;
-                    const float flow = contact_flow(p, c_.pheno[q.who]) * (1.0f - c_.sleep[i]);
+                    const float touch = std::min(p.reach + q.reach, MAX_REACH);
+                    const float reach = std::min(p.reach + mine.longest_stalk + q.reach, MAX_REACH);
+                    const float d2 = ddx * ddx + ddy * ddy;
+                    if (d2 > reach * reach || q.who == i) continue;
+                    // Which of its mouths face the other body, and which of the
+                    // other's plates face back (body.hpp). Beyond touching, only
+                    // mouths out on stalks long enough reach it.
+                    float pull;
+                    if (mine.even_mouth) pull = mine.mouth[0];
+                    else {
+                        const int dir = body_dir(ddx * hx + ddy * hy, hx * ddy - hy * ddx);
+                        if (d2 <= touch * touch) pull = mine.mouth[dir];
+                        else {
+                            const float far = std::min(p.reach + mine.stalk[dir] + q.reach, MAX_REACH);
+                            pull = d2 <= far * far ? mine.far_mouth[dir] : 0.0f;
+                        }
+                    }
+                    const BodyPlan& theirs = c_.body[q.who];
+                    float membrane = MEMBRANE_BASE;
+                    if (theirs.any_armour) {
+                        const float gx = c_.hx[q.who], gy = c_.hy[q.who];
+                        membrane += ARMOUR_RESIST * theirs.armour[body_dir(-ddx * gx - ddy * gy, -gx * ddy + gy * ddx)];
+                    }
+                    const float flow = contact_flow(p, pull, c_.pheno[q.who], membrane) * (1.0f - c_.sleep[i]);
                     if (flow <= 0.0f) continue;
                     contacts_.push_back({static_cast<uint32_t>(i), q.who, flow});
                     drain_want_[q.who] += flow;
@@ -581,7 +604,7 @@ void Simulation::share_light_by_canopy() {
         if (grid_.creature_at(grid_.begin(cell)) != i) continue;
 
         canopy_.clear();
-        for (uint32_t j : grid_.in_cell(cell)) canopy_.push_back({c_.pheno[j].radius, j});
+        for (uint32_t j : grid_.in_cell(cell)) canopy_.push_back({c_.pheno[j].canopy, j});   // core radius plus stalks
         std::sort(canopy_.begin(), canopy_.end(), [](const Tall& a, const Tall& b) {
             return a.radius != b.radius ? a.radius > b.radius : a.who < b.who;
         });

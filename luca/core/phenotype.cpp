@@ -1,5 +1,6 @@
 #include "phenotype.hpp"
 
+#include "body.hpp"
 #include "energy.hpp"
 
 #include <algorithm>
@@ -28,10 +29,8 @@ constexpr float FLAGELLUM_THRUST = 0.125f; // world units per tick, per unit siz
 constexpr float LEGS_THRUST      = 0.10f;
 constexpr float MAX_SPEED        = 0.5f;   // hard physical ceiling (a law, not a population cap)
 
-// Contact.
-constexpr float MEMBRANE_BASE   = 0.3f;  // every body resists a little
-constexpr float ARMOUR_RESIST   = 2.0f;  // resistance per unit of armour
-constexpr float ARMOUR_CLOGS    = 0.5f;  // armour also slows the wearer's own absorbing
+// Contact. MEMBRANE_BASE, ARMOUR_RESIST and ARMOUR_CLOGS are in body.hpp:
+// where a plate sits decides what it protects and what it clogs.
 constexpr float ARMOUR_SHADES   = 0.5f;  // skin under a plate catches no light
 constexpr float REACH_PER_RADIUS = 0.5f;
 // Poison: light to carry but dear to keep up (see the table above). Unlike
@@ -57,6 +56,16 @@ constexpr float TOLERANCE_COST       = 0.004f;  // upkeep per °C of tolerance: 
 // Dispersal: the means to fling a child costs upkeep whether or not it is used
 // (each throw also costs energy; see throw_cost in energy.cpp).
 constexpr float THROW_UPKEEP         = 0.015f;  // upkeep per cell of range
+
+// Shape (body.hpp): skin beyond a ball's costs upkeep to keep.
+constexpr float SKIN_UPKEEP          = 0.1f;    // upkeep per unit of extra skin (in r^2)
+
+// Stalks (mouths and sun patches only, genome.hpp): mass and upkeep per world
+// unit of length, whatever the part's size. A stalked mouth reaches further
+// and is never clogged by armour (body.hpp); stalked sun patches stand higher
+// in the canopy.
+constexpr float STALK_MASS   = 0.1f;
+constexpr float STALK_UPKEEP = 0.06f;
 
 // Feeding specialisations. Both are pure cost to a body that eats nothing.
 constexpr float BITE_UPKEEP          = 0.06f;   // upkeep per unit of bite (each unit adds the plain pull again)
@@ -122,20 +131,32 @@ Phenotype compile_phenotype(const Genome& g) {
     float photo_total     = 0.0f;
     float flagellum_total = 0.0f;
     float legs_total      = 0.0f;
+    float thrust          = 0.0f;  // motor parts, by how well placed and how bare they are
+    float pull            = 0.0f;  // mouths, by how bare they are
+    float armour_cover    = 0.0f;  // armour averaged over every direction
+    float photo_lift      = 0.0f;  // photo size x stalk, summed
+    float stalk_upkeep    = 0.0f;
 
     for (const Part& part : g.parts) {
         const int   t    = static_cast<int>(part.type);
         const float size = std::max(0.0f, part.size);  // negative parts would be free energy
-        mass        += size * MASS_PER_SIZE[t];
+        const float stalk = can_have_stalk(part.type) ? std::clamp(part.stalk, 0.0f, limits::MAX_STALK) : 0.0f;
+        mass        += size * MASS_PER_SIZE[t] + stalk * STALK_MASS;
         part_upkeep += size * COST_PER_SIZE[t];
+        stalk_upkeep += stalk * STALK_UPKEEP;
+        if (part.type == PartType::Photo) photo_lift += size * stalk;
 
         p.part_total[t] += size;
 
         if (part.type == PartType::Photo)     photo_total     += size;
         if (part.type == PartType::Flagellum) flagellum_total += size;
         if (part.type == PartType::Legs)      legs_total      += size;
+        if (part.type == PartType::Flagellum || part.type == PartType::Legs)
+            thrust += size * (part.type == PartType::Flagellum ? FLAGELLUM_THRUST : LEGS_THRUST)
+                    * thrust_facing(part.type, part.theta) * clogged(g, part);
+        if (part.type == PartType::Absorber) pull += size * clogged(g, part);
+        if (part.type == PartType::Armour)   armour_cover += size * cover_halfwidth(size) / 3.14159265f;
     }
-    const float absorber_total = p.part_total[static_cast<int>(PartType::Absorber)];
     const float sensor_total   = p.part_total[static_cast<int>(PartType::Sensor)];
     const float armour_total   = p.part_total[static_cast<int>(PartType::Armour)];
     const float storage_total  = p.part_total[static_cast<int>(PartType::Storage)];
@@ -159,10 +180,14 @@ Phenotype compile_phenotype(const Genome& g) {
 
     p.mass         = mass;
     p.radius       = r;
+    p.canopy       = r + (photo_total > 0.0f ? photo_lift / photo_total : 0.0f);   // patches held up on stalks overtop their neighbours
     p.throw_range  = seed_throw;
     p.dormancy     = dormancy;
-    p.surface_area = r * r;
+    const float skin = skin_factor(g.elongation, g.squareness);
+    p.surface_area = r * r * skin;
+    p.drag         = drag_factor(g.elongation, g.squareness);
     p.upkeep       = BASE_UPKEEP * std::pow(mass, 0.75f) + part_upkeep  // Kleiber + parts
+                   + (skin - 1.0f) * r * r * SKIN_UPKEEP + stalk_upkeep
                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
                    + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP
                    + detox * DETOX_UPKEEP;
@@ -173,9 +198,9 @@ Phenotype compile_phenotype(const Genome& g) {
     p.light_capture = std::min(photo_total, open_skin);
 
     // --- 5. Movement: thrust / mass, with a physical ceiling ----------------
-    const float thrust = flagellum_total * FLAGELLUM_THRUST + legs_total * LEGS_THRUST;
-    p.max_speed = std::min(thrust / p.mass, MAX_SPEED);
-    // LUCA + one size-1 flagellum: mass 1.25, speed 0.4.
+    // A tail pushes best from the back and legs from the sides (body.hpp).
+    p.max_speed = std::min(thrust / (p.mass * p.drag), MAX_SPEED);
+    // LUCA + one size-1 flagellum straight behind: mass 1.25, speed 0.1.
 
     // --- 6. Heat: absorbed over skin, spread over body mass ------------------
     p.heat_absorption = pigment * p.surface_area / p.mass;
@@ -189,8 +214,11 @@ Phenotype compile_phenotype(const Genome& g) {
     p.thermal_tolerance = tolerance;
 
     // --- 8. Contact: pull, resistance, reach --------------------------------
-    p.absorb   = absorber_total / (1.0f + ARMOUR_CLOGS * armour_total);
-    p.membrane = MEMBRANE_BASE + ARMOUR_RESIST * armour_total;
+    // Totals over the whole body. Contact with the living reads the
+    // per-direction tables in BodyPlan instead (body.hpp); the dead lie all
+    // round, so feeding on corpses uses the total.
+    p.absorb   = pull;
+    p.membrane = MEMBRANE_BASE + ARMOUR_RESIST * armour_cover;   // averaged over every direction
     p.reach    = REACH_PER_RADIUS * r;
     p.toxicity = std::min(TOXICITY_PER_SIZE * p.part_total[static_cast<int>(PartType::Poison)], MAX_TOXICITY);
     p.bite       = 1.0f + bite;

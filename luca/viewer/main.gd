@@ -20,6 +20,8 @@ extends Node3D
 ##   --zoom=K --at=X,Z        start zoomed in on a spot (screen pixels per sprite pixel)
 ##   --tree  or --tree=NAME   start with the tree of life open (zoomed in on a species)
 ##   --test-poison            draw every body as poisonous (to check the art)
+##   --inspect=x,z            open the inspector on the creature nearest that spot
+##   --parade                 an empty world with one hand-made creature of each body plan
 ##   --species                start with creatures coloured by species
 ##   --warmup=N               run N ticks before the first frame (skip ahead to evolved life)
 
@@ -102,7 +104,11 @@ var start_zoom := -1.0
 var start_at := Vector2(-1, -1)
 var start_tree := false
 var test_poison := false       # draw every body as poisonous, to check the art
+var parade := false            # an empty world with one hand-made creature of each body plan
+var parts_tex: ImageTexture    # every creature's parts, one texel each (see LucaWorld::get_part_buffer)
+var parts_rows := 0
 var start_tree_root := ""   # species name to zoom the tree into (testing)
+var start_inspect := Vector2(-1, -1)   # open the inspector on the creature nearest here (testing)
 
 
 func _ready() -> void:
@@ -117,18 +123,30 @@ func _ready() -> void:
 		elif arg == "--demo": demo = true
 		elif arg == "--species": by_species = true
 		elif arg == "--test-poison": test_poison = true
+		elif arg == "--parade":
+			parade = true
+			population = 0
 		elif arg == "--tree": start_tree = true
 		elif arg.begins_with("--tree="):
 			start_tree = true
 			start_tree_root = arg.get_slice("=", 1)
 		elif arg.begins_with("--warmup="): warmup = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--zoom="): start_zoom = float(arg.get_slice("=", 1))
+		elif arg.begins_with("--inspect="):
+			var at := arg.get_slice("=", 1).split(",")
+			if at.size() == 2: start_inspect = Vector2(float(at[0]), float(at[1]))
 		elif arg.begins_with("--at="):
 			var at := arg.get_slice("=", 1).split(",")
 			if at.size() == 2: start_at = Vector2(float(at[0]), float(at[1]))
 
 	world = LucaWorld.new()
 	world.setup(world_size, seed_value, population, true)
+	if parade:
+		var placed: int = world.spawn_parade(world.get_extent() * 0.5 - 9.0, 20.0)
+		if start_at.x < 0.0:
+			start_at = Vector2(world.get_extent() * 0.5 - 12.5 + 1.6 * (placed - 1), 20.0)   # a little left of centre, clear of the panel
+		if start_zoom <= 0.0:
+			start_zoom = 6.0
 	if warmup > 0:
 		world.step(warmup, 1e12)
 	world_size = world.get_world_size()
@@ -555,6 +573,17 @@ func _diet(info: Dictionary) -> String:
 	return text
 
 
+func _shape_words(info: Dictionary) -> String:
+	var e: float = info["elongation"]
+	var sq: float = info["squareness"]
+	var length := "round" if e < 0.15 else ("oval" if e < 0.5 else "long")
+	if sq >= 0.5:
+		length = "square" if e < 0.15 else ("boxy" if e < 0.5 else "a long box")
+	if e < 0.15:
+		return length
+	return "%s, %.1f times as long as wide" % [length, 1.0 + 2.0 * e]
+
+
 func _show_creature(info: Dictionary) -> void:
 	inspected_at = Vector2(info["x"], info["z"])
 	var parts: PackedStringArray = info["parts"]
@@ -565,7 +594,7 @@ func _show_creature(info: Dictionary) -> void:
 		"Age %d ticks" % info["age"],
 		"Energy %.0f of %.0f  (divides at %.0f)" % [info["energy"], info["energy_capacity"], info["repro_threshold"]],
 		"Eats: " + _diet(info),
-		"Radius %.2f   mass %.2f" % [info["radius"], info["mass"]],
+		"Radius %.2f   mass %.2f   %s" % [info["radius"], info["mass"], _shape_words(info)],
 		"Upkeep %.2f / tick   speed %.2f" % [info["upkeep"], info["max_speed"]],
 		"Young land touching it" if info["throw_range"] < 0.05 else "Flings its young up to %.1f cells" % info["throw_range"],
 		"Pull %.2f   membrane %.2f   %s" % [info["absorb"], info["membrane"], senses],
@@ -576,7 +605,7 @@ func _show_creature(info: Dictionary) -> void:
 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
 		"Body %.1f °C   comfort %.0f ± %.0f °C" % [info["body_temperature"], info["thermal_optimum"], info["thermal_tolerance"]],
 		"Here: light %.2f, %.1f °C, soil %.1f, waste %.1f" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"], info["cell_waste"]],
-		"Parts: " + (", ".join(parts) if parts.size() > 0 else "none"),
+		"Parts: " + ("\n  ".join(parts) if parts.size() > 0 else "none"),
 	])
 
 
@@ -689,6 +718,11 @@ func _process(delta: float) -> void:
 	_update_sun()
 	_update_brush_ring()
 	_update_ui()
+	if frame == 2 and start_inspect.x >= 0.0:
+		var info: Dictionary = world.inspect(start_inspect.x, start_inspect.y, 3.0)
+		if not info.is_empty():
+			inspected_id = info["id"]
+			_show_creature(info)
 
 	if shot_path != "" and frame >= shot_frames:
 		await RenderingServer.frame_post_draw
@@ -705,6 +739,17 @@ func _update_blobs() -> void:
 	multimesh.visible_instance_count = count
 	if capacity > 0:
 		multimesh.buffer = world.get_instance_buffer(capacity)
+		# The parts texture follows the same capacity; it is remade only when that grows.
+		var width: int = world.get_part_tex_width()
+		var rows: int = maxi(1, ceili(float(capacity * world.get_parts_per_creature()) / float(width)))
+		var img := Image.create_from_data(width, rows, false, Image.FORMAT_RGBAF, world.get_part_buffer(capacity).to_byte_array())
+		if parts_tex == null or rows != parts_rows:
+			parts_tex = ImageTexture.create_from_image(img)
+			parts_rows = rows
+			blob_mat.set_shader_parameter("parts_tex", parts_tex)
+			blob_mat.set_shader_parameter("parts_width", width)
+		else:
+			parts_tex.update(img)
 
 
 ## Day and night: the whole picture cools and darkens after sunset.

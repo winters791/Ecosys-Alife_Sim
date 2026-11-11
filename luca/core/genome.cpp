@@ -1,6 +1,7 @@
 #include "genome.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace luca {
 
@@ -27,7 +28,7 @@ Genome make_luca() {
     g.repro_threshold   = 600.0f;  // a child's body costs 244; this leaves both enough to last a night
     g.offspring_share   = 0.5f;
     g.seed_throw        = 0.0f;    // its children land right beside it
-    g.parts.push_back(Part{PartType::Photo, 1.0f, 0.0f, 0.0f});
+    g.parts.push_back(Part{PartType::Photo, 1.0f, 0.0f, 0.0f, 0.0f});
     return g;
 }
 
@@ -72,10 +73,14 @@ void clamp_genome(Genome& g) {
     g.digestion         = std::clamp(g.digestion, 0.0f, 1.0f);
     g.dormancy          = std::clamp(g.dormancy, 0.0f, 1.0f);
     g.detox             = std::clamp(g.detox, 0.0f, 1.0f);
+    g.elongation        = std::clamp(g.elongation, 0.0f, 1.0f);
+    g.squareness        = std::clamp(g.squareness, 0.0f, 1.0f);
     if (g.parts.size() > static_cast<std::size_t>(MAX_PARTS)) g.parts.resize(MAX_PARTS);
     for (Part& p : g.parts) {
         if (static_cast<int>(p.type) >= static_cast<int>(PartType::Count)) p.type = PartType::Photo;
         p.size = std::clamp(p.size, MIN_PART, MAX_PART);
+        p.stalk = can_have_stalk(p.type) ? std::clamp(p.stalk, 0.0f, MAX_STALK) : 0.0f;
+        p.theta = std::remainder(p.theta, 6.2831853f);  // -pi .. pi
     }
     // The brain: drop links that point at nothing or run the wrong way, and
     // keep its size within bounds.

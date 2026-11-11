@@ -30,6 +30,7 @@ endif()
 # --- core: pure C++ simulation library, no Godot dependency -----------------
 add_library(luca_core STATIC
   core/genome.cpp
+  core/body.cpp
   core/phenotype.cpp
   core/energy.cpp
   core/mutation.cpp

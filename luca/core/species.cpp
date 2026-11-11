@@ -22,22 +22,30 @@ constexpr float W_BITE      = 0.8f;   // per unit of bite
 constexpr float W_DIGESTION = 2.0f;   // none to full is 0..1
 constexpr float W_DORMANCY  = 1.5f;   // never sleeps to sleeps fully is 0..1
 constexpr float W_DETOX     = 1.5f;   // none to full is 0..1
+constexpr float W_ELONGATE  = 1.5f;   // round to three times as long is 0..1
+constexpr float W_SQUARE    = 1.0f;   // rounded to boxy is 0..1
+constexpr float W_STALK     = 0.8f;   // per world unit of stalk, summed over a kind of part
 constexpr float W_PART_KIND = 0.6f;   // one has a kind of part the other lacks entirely
 constexpr float W_PART_SIZE = 0.5f;   // per unit of total size of one kind
 constexpr float W_BRAIN     = 0.4f;   // one has a brain, the other none
 constexpr float W_WEIGHTS   = 0.06f;  // per unit of link weight that differs (a link one lacks counts in full)
 constexpr float W_NEURON    = 0.3f;   // per hidden neuron one has and the other lacks
-// Shape genes are left out: today they only change the drawing.
+// The eight lump genes (shape[]) are left out: they only change the drawing.
+// Where parts sit (theta) is left out too: it drifts within a species.
 
 constexpr int NUM_TYPES = static_cast<int>(PartType::Count);
 
 struct PartSums {
     float size[NUM_TYPES] = {};
+    float stalk[NUM_TYPES] = {};
 };
 
 PartSums sum_parts(const Genome& g) {
     PartSums s;
-    for (const Part& p : g.parts) s.size[static_cast<int>(p.type)] += p.size;
+    for (const Part& p : g.parts) {
+        s.size[static_cast<int>(p.type)] += p.size;
+        s.stalk[static_cast<int>(p.type)] += p.stalk;
+    }
     return s;
 }
 
@@ -60,10 +68,13 @@ float genome_distance(const Genome& a, const Genome& b) {
     term(W_DIGESTION, a.digestion - b.digestion);
     term(W_DORMANCY,  a.dormancy - b.dormancy);
     term(W_DETOX,     a.detox - b.detox);
+    term(W_ELONGATE,  a.elongation - b.elongation);
+    term(W_SQUARE,    a.squareness - b.squareness);
 
     const PartSums pa = sum_parts(a), pb = sum_parts(b);
     for (int t = 0; t < NUM_TYPES; ++t) {
         term(W_PART_SIZE, pa.size[t] - pb.size[t]);
+        term(W_STALK, pa.stalk[t] - pb.stalk[t]);
         if ((pa.size[t] > 0.0f) != (pb.size[t] > 0.0f)) term(W_PART_KIND, 1.0f);
     }
 

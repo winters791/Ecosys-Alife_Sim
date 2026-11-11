@@ -1,6 +1,6 @@
 # Ecosystem God Game — Design & Project Reference
 
-Owner: Uday · Last updated: 2026-11-11
+Owner: Uday · Last updated: 2026-11-12
 
 An artificial-life ecosystem simulator played as a god game. It's like Dwarf Fortress, but more *fundamental*: there are no predefined classes of creature. Simple physical laws (energy, matter, inheritance, mutation) produce producers, predators, parasites, decomposers and symbionts through selection alone. The player shapes the world and its laws, never the creatures directly, and watches life respond.
 
@@ -236,7 +236,10 @@ Creatures are soft blobs on a heightmap world with cliffs, valleys and climates.
 
 - **The sprite is drawn from the body, not stored.** Each creature is one quad; `blob.gdshader` paints its pixels from the creature's numbers (radius, shape genes, pigment, part sizes, heading, fullness). No per-creature texture or mesh, so ten thousand creatures are still one draw call and a body that evolves a new part simply starts being drawn with it.
 - **One pixel grid for everything:** 8 pixels to a cell (`PX_SIZE`), shared by the ground and the sprites, and sprites snap to it.
-- **What each part looks like:** poison = violet warts scattered over the skin; photo = green pixels over the skin; absorber = a dark red mouth on the leading edge (teeth when large); flagellum = a wiggling tail; legs = stubs that step; sensor = an eye (two when large); armour = grey plates round the rim; storage = a pale fat spot. Pigment is skin colour, fullness is body size, shape genes are lumps in the outline.
+- **The outline is drawn from the shape genes (2026-11-12):** a superellipse with the volume of the round body, up to three times as long as wide (`elongation`) and up to a box with rounded corners (`squareness`). Two lump genes add small bumps. It faces the way the creature faces (`hx`, `hy`).
+- **Every part is drawn where it sits:** at its own angle on the outline (`Part::theta`, from the front), and out on its stalk if it has one. Photo = green pixels over the arc of skin it covers, or a leaf on a stalk (a frond); absorber = a dark red mouth on the rim (teeth when large), or a toothed ring at the end of a tentacle; flagellum = a wiggling tail; legs = a mirrored pair of stubs that step; sensor = an eye towards its side (two when large); armour = grey plates over the arc of rim it covers; poison = violet warts over its arc; storage = a pale fat spot. Pigment is skin colour, fullness is body size. Arcs match `core/body.hpp`.
+- **Parts reach the shader through a data texture:** 12 texels per creature in instance order, each (type + 1, size, angle, stalk), from `LucaWorld::get_part_buffer`. Still one draw call.
+- `./view.sh --parade` opens an empty world with seven hand-made bodies (a LUCA, a long swimmer, an armoured box, a tentacle monster, a frond, a walker, a fat poisonous one) to check the art. `--inspect=x,z` opens the inspector on the creature nearest a spot.
 - **Zoom is in whole screen pixels per sprite pixel** where it can be, so the art stays crisp.
 
 ### 6.5 Architecture
@@ -311,7 +314,9 @@ Creature files export the genome only.
 | `detox` | Takes up the waste in its cell as food, 0 to 1 (LUCA: 0) | Upkeep up to 0.08, and it is only worth it where others foul the cell |
 | `dormancy` | How deeply it sleeps through dark and cold, 0 to 1 (LUCA: 0) | A little upkeep always; asleep it is helpless, and it wakes slowly, so it misses the dawn |
 | `seed_throw` | How far a child can be flung, in cells (LUCA: 0) | Upkeep per cell of range, plus energy ∝ child mass × distance² for every throw |
-| `parts` | Body modules | Each adds mass and upkeep |
+| `elongation` | Up to 3× as long as wide, same volume (0..1, LUCA: 0) | More skin (sun room, but heat loss, fouling, `SKIN_UPKEEP`); a long body moves more cheaply and faster (2026-11-12) |
+| `squareness` | Round to box (0..1, LUCA: 0) | Up to 24% more skin, and 30% more drag on the move |
+| `parts` | Body modules, each with a size, an angle on the outline (`theta`) and, for mouths and sun patches only, a stalk | Each adds mass and upkeep; a stalk adds mass and upkeep per unit of length. Where a part sits matters (10.4) |
 | `brain` | Hidden neuron count and a list of weighted links, both evolved | Empty for LUCA; every neuron, link and unit of weight costs upkeep |
 
 **Likely additions:** mutation rate as a gene (evolvable mutability), reproduction mode (asexual, or sexual with a mate-preference gene), chemistry genes (which reactions a creature catalyses).
@@ -376,6 +381,7 @@ The last universal common ancestor: a core blob with one photosynthetic patch, n
 | Path | What it is | Owner |
 | --- | --- | --- |
 | `core/genome.*` | Genome, brain weight layout, gene limits + `clamp_genome()`, `make_luca()` | Scaffolding (extend freely) |
+| `core/body.*` | Where parts sit: per-direction mouth and armour tables (`BodyPlan`), thrust by placement, skin and drag of a shape | Claude, at Uday's request (2026-11-12); Uday tunes |
 | `core/phenotype.*` | Genome → derived stats | **Uday** wrote steps 1–6; Claude added contact, storage, senses, brain (2026-11-11) |
 | `core/energy.*` | Light demand, upkeep + wear, thermal, movement, contact flow, corpse rules | Claude, at Uday's request (2026-11-11); Uday tunes |
 | `core/mutation.*` | Parent genome → child genome | Claude, at Uday's request (2026-11-11); Uday tunes |
@@ -426,7 +432,7 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
 
 ### 10.4 Rules the scaffolding enforces
 
-- **Finite light, canopy rule (2026-11-11):** each cell gets `light` energy per tick. If the bodies in it ask for more, the biggest (by core radius) takes its fill first, then the next, and smaller ones get what is left; bodies of exactly the same size share alike. A full-patch LUCA asks for the whole cell, so a smaller body under it gets nothing unless the taller one's patch is sparse. Unabsorbed light is lost. (`Simulation::share_light_by_canopy`)
+- **Finite light, canopy rule (2026-11-11):** each cell gets `light` energy per tick. If the bodies in it ask for more, the tallest (`Phenotype::canopy`: core radius, plus the stalks its sun patches stand on, since 2026-11-12) takes its fill first, then the next, and smaller ones get what is left; bodies of exactly the same size share alike. A full-patch LUCA asks for the whole cell, so a smaller body under it gets nothing unless the taller one's patch is sparse. Unabsorbed light is lost. (`Simulation::share_light_by_canopy`)
 - **Costs capped at available energy;** a creature at zero dies.
 - **Energy audit:** each metrics interval checks `stored(end) == stored(start) + in − out`. Expected error ≈ 1e-6 (float rounding). A jump means energy is being created or destroyed, and evolution will exploit it. "Stored" is energy in living creatures + energy locked in their bodies + energy left in corpses + energy in waste. "In" is light only. "Out" is upkeep (less the part given off as waste), thermal, movement, transfer loss, corpse decay, waste breaking down, fouling, poison and overflow (`out_waste`: a full body can't hold more; not the waste chemical).
 - **Matter audit:** soil nutrient + corpse matter + the mass of everything alive is constant (`Simulation::total_matter()`, column `matter_total`).
@@ -438,6 +444,13 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
 - **Day and night:** `World::set_time(tick)` runs at the start of every tick, after powers. Daylight is a pure function of the tick (no randomness), 0 at night to 2 at noon.
 - **Cold nights (2026-11-11):** the air everywhere swings by `temp_day_swing` (10 °C, peak to peak, in `config.hpp`; 0 = off) with the day, a sine an eighth of a day behind the sun: warmest mid-afternoon, coldest just before dawn, daily mean unchanged (`World::air_swing()`; `temperature()` and `env()` include it, `temperatures()` and `mean_temperature()` are daily means). No creature feels the air directly: each carries a `body_temp` that closes `heat_follow` of the gap to what it would feel (air plus sun on dark skin) each tick, where `heat_follow = 1 / (1 + HEAT_LAG × mass / skin)` (`HEAT_LAG` 120 in `phenotype.cpp`). A LUCA lags by ~130 ticks and feels about 60% of the night's chill; a radius-2 body about 30%. Thermal cost, the dormancy cold trigger and the brain's cold input all read body temperature. A child starts as warm as its parent. Not a new gene: size and fat already cost upkeep.
 - **Contact:** a body with an absorber looks at the 3×3 cells around it. For each body within reach, energy flows at `edge × pull² / (pull + membrane)`, where `edge` is (taker radius / giver radius)², at most 2 (the size rule, 2026-11-11: equal bodies are unchanged, a body half its victim's size pulls a quarter as hard, and nothing is ever immune); 70% arrives, 30% is lost as heat. If several bodies pull on one, each gets the same fraction. Reach is capped at 1.5 cells, so very large bodies don't yet touch further.
+- **Where parts sit matters (2026-11-12, `core/body.*`).** Every part has an angle on the outline. A body faces the way it last moved; one that never moves keeps the facing it was born with (from its id, like its first wander angle).
+  - **A mouth pulls only within its arc:** half-width `MOUTH_ARC_BASE` (0.5 rad) + `MOUTH_ARC_PER_SIZE` (0.8) × size, all round from size 3.3. Contact looks up the taker's pull towards the giver and the giver's armour facing the taker in two 16-direction tables built at birth (`BodyPlan`, kept in `Creatures::body`, off the hot path). Corpses lie all round, so feeding on the dead still uses the whole pull.
+  - **Armour guards only the arc it covers:** half-width `COVER_ARC` (π/2) × size, so size 1 covers half the body and size 2 all of it, at `ARMOUR_RESIST` × size where it covers (the old rule, everywhere, is the size-2 case). `Phenotype::membrane` is now the average over directions, for display.
+  - **Armour clogs only what lies under it:** a mouth or a tail under a plate works at 1 / (1 + `ARMOUR_CLOGS` × armour there). Before, every mouth was clogged by all armour.
+  - **Motors push by where they sit:** a tail gives full thrust straight behind, falling to a quarter at the front; legs full at the sides, half at front or back. New parts land at a random angle, so the first tails are badly placed and evolution moves them.
+- **Shape matters (2026-11-12):** `elongation` and `squareness` keep the volume (and so the mass) and add skin (`skin_factor`: a 3:1 spheroid has 18% more, a box 24% more). Skin is `surface_area`, so it gives more room for sun patches, faster heat loss (`heat_follow`), more sun on dark skin, and more fouling; extra skin costs `SKIN_UPKEEP` (0.1) per unit. Moving cost (not climbing) and top speed scale with `drag_factor`: 1 / cube root of the aspect, × 1.3 for a full box. So a 3:1 body moves 0.69× as dear and 1.44× as fast.
+- **Stalks (2026-11-12):** mouths and sun patches can grow on a stalk (up to `MAX_STALK` 1.0 world unit; `can_have_stalk`), at `STALK_MASS` 0.1 and `STALK_UPKEEP` 0.06 per unit of length. A mouth on a stalk reaches bodies further away in its arc (reach + stalk, still capped at 1.5) and, from `STALK_CLEARS` (0.25) up, is never clogged by armour. Sun patches on stalks raise the body's canopy height by their size-weighted stalk, so a frond overtops a plain body of the same size.
 - **Movement:** only a body with a motor part *and* a brain moves. A motor part with no brain gets a small random one at the next mutation.
 - **The brain is evolved, structure and all (2026-11-11, Uday's request).** The genome holds a number of hidden neurons (0 to `MAX_HIDDEN` = 8) and a list of links (up to `MAX_LINKS` = 48), each from an input or hidden neuron to a hidden neuron or an output, with a weight. Inputs (7): a constant, hunger, light, crowding, cold, corpse here, own speed. Outputs (11): how hard to lean towards light, the living, the dead, comfort, soil matter, kin, bigger bodies, moving bodies; wander; inertia; throttle. Hidden neurons are tanh and all update together from the inputs and last tick's hidden values, so a neuron wired to itself or to another is memory (a small discrete-time recurrent net, in place of the CTRNN of 2.4). With no hidden neurons it is a set of reflexes, which is where every brain starts.
 - **Wander drifts (2026-11-11):** the wander output pushes towards each creature's own wander angle (`Creatures::wander`), which drifts **by distance travelled, not by time**: each tick it takes a normal step of sqrt(2 × stride / `WANDER_PATH`) radians, where stride is how far the body is about to go (`WANDER_PATH` 1.0 world unit, in `sim.cpp`). So a wanderer's path stays fairly straight for about a world unit whatever its speed. A newborn's angle comes from its id, so births draw nothing from the `Rng`.
@@ -478,7 +491,8 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 
 - **One class crosses the boundary:** `LucaWorld` (a `RefCounted`). Godot asks it for fields and for one MultiMesh buffer per frame; it tells it which power was cast.
 - **Top-down, orthographic, flat.** The ground is one quad; `terrain.gdshader` draws tiles from the height, temperature, light and soil textures (nearest-filtered): height bands with ordered dither, three-step hill shading, dark cliff edges, snow where it is cold, darker rich soil, pale specks where corpses lie.
-- **Creatures** are one MultiMesh of quads, one draw call; see 6.6. A sprite needs no rotation or scale, so the nine basis slots of each instance transform carry body data, and the shader reads them back from `MODEL_MATRIX`. Layout is documented in `godot/luca_world.h`.
+- **Creatures** are one MultiMesh of quads, one draw call; see 6.6. A sprite needs no rotation or scale, so the nine basis slots of each instance transform carry body data, and the shader reads them back from `MODEL_MATRIX`; the parts come from a float texture (`parts_tex`). Layout is documented in `godot/luca_world.h`.
+- **Inspector** lists each part with its size, where it sits (front, left, back-right, ...) and its stalk, and says whether the body is round, oval, long or boxy.
 - **Day and night** tint the whole picture. When days pass faster than about one a second, the tint holds a steady dusk instead of strobing.
 - **Stats panel:** day and clock, population, the census (sun-fed, hunters, scavengers, cleaners, mixed diet, able to move), and the six most numerous species with their colours.
 - **Colour by species** (checkbox or `C`, `--species` on the command line): skin is painted in the species colour instead of the pigment. The hue rides in the unused height slot of each instance's origin.
@@ -493,7 +507,19 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 
 ### 10.7 Baseline numbers (default settings, 128×128, seed 42, measured 2026-11-11)
 
-**After moving costs per distance (`TRANSPORT_COST` 2) and cheap senses (sensor upkeep 0.05) (current):**
+**After body plans: placement, shape and stalks (2026-11-12, current):**
+- `--ticks 5000`: 701 creatures, 0.033 ms/tick, audit error ≈ 2e-7.
+- `--light uniform --seed 7 --ticks 60000`: 6,209 creatures (3,832 before), 0.61 ms/tick.
+- Six seeds (42 / 7 / 99 / 1 / 2 / 3), 100,000 ticks, mean of the last fifth: 4,980 / 3,670 / 4,190 / 3,530 / 2,030 / 4,240 creatures (mean 3,770); 72 / 58 / 64 / 56 / 25 / 60 established species (mean 56, about twice before); hunters 24 / 39 / 28 / 11 / 16 / 24 (mean 24, against 50 to 75 before); mixed feeders mean 91; movers 3 / 55 / 519 / 3 / 28 / 44. Audit error under 2e-7 throughout.
+- **Fronds everywhere:** by tick 100,000, 85 to 98% of bodies hold their sun patches up on stalks (mean lift 0.32 to 0.47). The canopy gives a cell's light to the tallest first, so any lift wins the cell; it is an arms race, as the canopy rule predicted ("expect tall things"), paid for at about 8% of a LUCA's upkeep.
+- **Tentacles evolve:** 4 to 31% of bodies with a mouth carry it on a stalk (17 to 31% in five seeds of six).
+- **Tails move to the back:** a new tail lands at a random angle (mean thrust 0.625 of full). In the seeds with most tailed movers they sit at 0.94 (90 movers, seed 3), 0.70 (21, seed 99) and 0.80 (3, seed 7).
+- Movers are a little longer than the rest in two seeds (elongation 0.21 and 0.30 against a world mean of 0.09 and 0.10); everywhere else shape stays near round (mean elongation and squareness about 0.1).
+- **Wider mouths tried** (`MOUTH_ARC_BASE` 1.0 against 0.5, same six seeds): 3,370 creatures, 52 species, 32 hunters, 130 mixed feeders. Hunters recover only part of the way. Kept at 0.5; Uday's call.
+- Stage 2 alone (arcs and placement, no shape or stalk physics; seeds 42 / 7 / 99): 4,270 / 4,570 / 3,930 creatures, 33 / 33 / 51 species, hunters 13 / 18 / 20.
+- **Cost per creature grows with crowding, in the old build too.** The previous commit's build at `--light uniform --seed 7` holds 3,840 creatures at 60 ns each a tick, but with `--sun 1.6` 4,940 at 165 ns; the new build holds 6,900 at 160 ns. So the body plans are not slower, but the world is denser and something in the tick scales worse than linearly with density (7.1). Not yet profiled.
+
+**After moving costs per distance (`TRANSPORT_COST` 2) and cheap senses (sensor upkeep 0.05):**
 - `--ticks 5000`: 750 creatures, 0.031 ms/tick, audit error ≈ 1e-7.
 - `--light uniform --seed 7 --ticks 60000`: 3,832 creatures, 0.19 ms/tick.
 - Seeds 42 / 7 / 99, 100,000 ticks, last fifth: 2,950 / 3,380 / 3,000 creatures; 29 / 35 / 30 established species; movers 67 / 38 / 8; hunters 75 / 71 / 50; bodies with a sensor 168 / 294 / 316. Seeds 1 to 4: 3,700 / 3,150 / 2,300 / 2,090 creatures, 46 / 26 / 25 / 31 species.
@@ -609,6 +635,8 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - `config.hpp`: `day_length`, `nutrient_mean`, `nutrient_patchiness`, `gradient_min`, `birth_max_step`, `slope_shade`, `wash_rate`, `gene_transfer_chance`.
 - `world.cpp`: `FACING_LOSS`, `VALLEY_LOSS`, `HORIZON`, `STEEP_DROP` (shade and drainage).
 - Dispersal: `THROW_COST` (`energy.cpp`), `THROW_UPKEEP` (`phenotype.cpp`), `limits::MAX_THROW`.
+- Body plans (`body.hpp`): `MOUTH_ARC_BASE`, `MOUTH_ARC_PER_SIZE`, `COVER_ARC`, `MEMBRANE_BASE`, `ARMOUR_RESIST`, `ARMOUR_CLOGS` (moved here from `phenotype.cpp`), `STALK_CLEARS`, `BOX_SKIN`, `BOX_DRAG`; `thrust_facing` in `body.cpp`. Keep the arc constants in step with `viewer/blob.gdshader`.
+- Shape and stalks (`phenotype.cpp`): `SKIN_UPKEEP`, `STALK_MASS`, `STALK_UPKEEP`; `limits::MAX_STALK`.
 
 ### Known weak spots
 
@@ -632,6 +660,10 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - Kin are eaten like anyone else; there is no self-recognition.
 - **Movers are drifting plants, not animals.** A probe of every mover over 300 ticks (seeds 7, 42, 99) finds top speeds of 0.01 to 0.03 a tick, almost none with a sensor, and brains that are a single fixed wander urge. Moving pays only as slow drift to new ground. Cost per distance and cheap senses (built since) moved this a little: movers now get about a third of their food from the living, a third carry a sensor, and they are still slow (0.03 to 0.06 a tick). Still open: prey worth chasing, and anything that makes speed itself pay.
 - **Waste can't be sensed.** Movers have no brain input for it, so nothing can learn to leave a fouled cell; they are only selected against it. Detox is mostly carried by plants as a side income (see 10.7) rather than making a separate cleaner niche: 5 to 15 true cleaners at a time.
+- **Hunters are thinner since mouths have arcs (2026-11-12):** a sessile mouth now reaches only the neighbours in front of it, so hunters fell from 50 to 75 to about 24 across six seeds. Levers: `MOUTH_ARC_BASE`, `MOUTH_ARC_PER_SIZE` (`body.hpp`, and the shader); evolution's own answers are more mouths, bigger ones, and tentacles.
+- **Every plant is a frond:** stalked sun patches win the canopy so reliably that 85 to 98% of bodies grow them. Levers: `STALK_UPKEEP`, `STALK_MASS`. A cell still goes to the single tallest body first; nothing yet makes being under the canopy livable (shade-tolerant photosynthesis would).
+- Shape barely evolves (mean elongation and squareness about 0.1). Extra skin only pays where sun patches outgrow the skin, and streamlining only for the few fast movers.
+- The creature snapshot (`creatures.csv`) has five new columns: elongation, squareness, mouth_stalk, canopy_lift, tail_facing.
 - `tools/plot.py` gained two panels (ways of life, energy flows) that have not been run: matplotlib isn't installed on this machine.
 
 ### What the game is lacking (assessed 2026-11-11, in order of importance)

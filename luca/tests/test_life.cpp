@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "body.hpp"
 #include "energy.hpp"
 #include "mutation.hpp"
 #include "sim.hpp"
@@ -43,8 +44,22 @@ std::size_t find(const luca::Simulation& sim, uint64_t id) {
 luca::Genome with_part(luca::PartType type, float size) {
     luca::Genome g = luca::make_luca();
     g.parts.clear();
-    g.parts.push_back({type, size, 0.0f, 0.0f});
+    g.parts.push_back({type, size, type == luca::PartType::Flagellum ? 3.14159265f : 0.0f, 0.0f});   // a tail at the back
     return g;
+}
+
+// Turn a genome's mouths so that, born next in `sim`, they face east (+x),
+// where the tests put the prey. A body faces a direction set by its id.
+luca::Genome aim_east(const luca::Simulation& sim, luca::Genome g) {
+    const float facing = luca::Creatures::initial_wander(sim.next_id());
+    for (luca::Part& p : g.parts)
+        if (p.type == luca::PartType::Absorber) p.theta += -facing;
+    return g;
+}
+
+// Contact between two bodies using their whole-body totals.
+float flow(const luca::Phenotype& taker, const luca::Phenotype& giver) {
+    return luca::contact_flow(taker, taker.absorb, giver, giver.membrane);
 }
 
 void test_day_and_night() {
@@ -193,12 +208,12 @@ void test_costs() {
         const Phenotype q = compile_phenotype(g);
         CHECK(q.upkeep > p.upkeep && q.mass > p.mass);
     }
-    // Armour resists a pull; a body with no absorber pulls nothing.
+    // Armour all round resists a pull; a body with no absorber pulls nothing.
     Genome armoured = make_luca();
-    armoured.parts.push_back({PartType::Armour, 1.0f, 0.0f, 0.0f});
+    armoured.parts.push_back({PartType::Armour, 2.0f, 0.0f, 0.0f});
     const Phenotype hunter = compile_phenotype(with_part(PartType::Absorber, 1.0f));
-    CHECK(contact_flow(hunter, compile_phenotype(armoured)) < contact_flow(hunter, p) * 0.5f);
-    CHECK(contact_flow(p, hunter) == 0.0f);
+    CHECK(flow(hunter, compile_phenotype(armoured)) < flow(hunter, p) * 0.5f);
+    CHECK(flow(p, hunter) == 0.0f);
 
     // Size at the mouth: the same mouth pulls harder on a smaller body and
     // can only sip from a bigger one, and the edge of being big has a ceiling.
@@ -209,10 +224,10 @@ void test_costs() {
     huge_g.core_radius = 4.0f;
     const Phenotype mid = compile_phenotype(mouth_g), tiny = compile_phenotype(small_g);
     const Phenotype big = compile_phenotype(big_g), huge = compile_phenotype(huge_g);
-    CHECK(contact_flow(tiny, mid) < contact_flow(mid, mid) * 0.3f);
-    CHECK(contact_flow(big, mid) > contact_flow(mid, mid) * 1.5f);
-    CHECK(contact_flow(huge, mid) == contact_flow(big, mid));
-    CHECK(contact_flow(tiny, mid) > 0.0f);            // a parasite's sip, never nothing
+    CHECK(flow(tiny, mid) < flow(mid, mid) * 0.3f);
+    CHECK(flow(big, mid) > flow(mid, mid) * 1.5f);
+    CHECK(flow(huge, mid) == flow(big, mid));
+    CHECK(flow(tiny, mid) > 0.0f);            // a parasite's sip, never nothing
 
     // A body is worth eating: a LUCA's corpse holds about 244.
     CHECK(std::abs(compile_phenotype(make_luca()).body_energy - 244.0f) < 2.0f);
@@ -223,7 +238,7 @@ void test_movement() {
     Simulation sim(small_config());
 
     Genome swimmer = make_luca();
-    swimmer.parts.push_back({PartType::Flagellum, 1.0f, 0.0f, 0.0f});
+    swimmer.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
     swimmer.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
     swimmer.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.5f);   // always on the move
 
@@ -277,7 +292,7 @@ void test_contact_and_corpses() {
     Simulation sim(cfg);
 
     // A mouth with no patch, touching a LUCA. Far away, a second LUCA alone.
-    const uint64_t hunter = sim.add_creature(24.2f, 6.0f, 100.0f, with_part(PartType::Absorber, 1.5f));
+    const uint64_t hunter = sim.add_creature(24.2f, 6.0f, 100.0f, aim_east(sim, with_part(PartType::Absorber, 1.5f)));
     const uint64_t prey   = sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
     const uint64_t loner  = sim.add_creature(40.5f, 6.0f, 300.0f, make_luca());
     const double matter0 = sim.total_matter();
@@ -559,7 +574,7 @@ void test_feeding_genes_and_kin_sense() {
     Genome biter_g = with_part(PartType::Absorber, 1.0f);
     biter_g.bite = 1.0f;
     const Phenotype biter = compile_phenotype(biter_g);
-    CHECK(std::abs(contact_flow(biter, prey) - 2.0f * contact_flow(plain, prey)) < 1e-5f);
+    CHECK(std::abs(flow(biter, prey) - 2.0f * flow(plain, prey)) < 1e-5f);
     CHECK(corpse_demand(biter) == corpse_demand(plain));          // it is no help with the dead
     CHECK(biter.upkeep > plain.upkeep);
     Genome idle = make_luca();
@@ -576,7 +591,7 @@ void test_feeding_genes_and_kin_sense() {
     cfg.nutrient_mean = 0.0f;   // nobody breeds
     {
         Simulation sim(cfg);
-        sim.add_creature(24.2f, 6.0f, 100.0f, gut_g);
+        sim.add_creature(24.2f, 6.0f, 100.0f, aim_east(sim, gut_g));
         sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
         double eaten = 0.0, lost = 0.0;
         for (int t = 0; t < 40; ++t) {
@@ -592,7 +607,7 @@ void test_feeding_genes_and_kin_sense() {
     // with one body a cell and a half to its east. Returns how far east it went.
     auto drift = [&](BrainOutput urge, float value, const Genome& neighbour, bool& same_species) {
         Genome g = make_luca();
-        g.parts.push_back({PartType::Flagellum, 1.0f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
         g.parts.push_back({PartType::Sensor, 1.0f, 0.0f, 0.0f});
         g.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.5f);
         g.brain.connect(input_node(IN_BIAS), output_node(urge), value);
@@ -625,7 +640,7 @@ void test_feeding_genes_and_kin_sense() {
 void test_evolving_brain() {
     using namespace luca;
     Genome body = make_luca();
-    body.parts.push_back({PartType::Flagellum, 1.0f, 0.0f, 0.0f});
+    body.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
 
     // Thinking is never free: a link, a stronger link and a neuron each add upkeep.
     Genome reflex = body;
@@ -728,7 +743,7 @@ void test_moving_costs_sunlight() {
     cfg.slope_shade = 0.0f;
     cfg.nutrient_mean = 0.0f;   // nobody breeds
     Genome roamer = make_luca();
-    roamer.parts.push_back({PartType::Flagellum, 1.0f, 0.0f, 0.0f});
+    roamer.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
     roamer.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
     roamer.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.5f);
     Genome sitter = roamer;
@@ -806,7 +821,7 @@ void test_dormancy() {
     Genome mouth = with_part(PartType::Absorber, 1.5f);
     mouth.dormancy = 1.0f;
     Simulation dark(cfg);
-    dark.add_creature(24.2f, 6.0f, 200.0f, mouth);
+    dark.add_creature(24.2f, 6.0f, 200.0f, aim_east(dark, mouth));
     dark.add_creature(24.6f, 6.0f, 300.0f, make_luca());
     for (int t = 0; t < dusk + 60; ++t) dark.step();
     double eaten = 0.0;
@@ -837,7 +852,7 @@ void test_poison() {
     const Genome hunter_g = with_part(PartType::Absorber, 1.5f);
     auto feed = [&](const Genome& prey, double& poison_paid, double& worst) {
         Simulation sim(cfg);
-        const uint64_t h = sim.add_creature(24.2f, 6.0f, 200.0f, hunter_g);
+        const uint64_t h = sim.add_creature(24.2f, 6.0f, 200.0f, aim_east(sim, hunter_g));
         sim.add_creature(24.6f, 6.0f, 300.0f, prey);
         double start = sim.stored_energy(), in = 0, out = 0;
         poison_paid = 0.0;
@@ -886,7 +901,7 @@ void test_gene_transfer() {
         cfg.day_length = 0;
         cfg.gene_transfer_chance = chance;
         Simulation sim(cfg);
-        const uint64_t h = sim.add_creature(24.2f, 6.0f, 200.0f, with_part(PartType::Absorber, 1.5f));
+        const uint64_t h = sim.add_creature(24.2f, 6.0f, 200.0f, aim_east(sim, with_part(PartType::Absorber, 1.5f)));
         sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
         const float mass0 = sim.creatures().pheno[find(sim, h)].mass;
         const double matter0 = sim.total_matter();
@@ -1085,6 +1100,142 @@ void test_wander_turns_by_distance() {
     CHECK(turn_fast > 2.0 * turn_slow);               // the faster one turns more per tick
 }
 
+// Where a part sits matters: a mouth only drains what lies in its arc, armour
+// only guards the side it covers and clogs what lies under it, and a tail
+// pushes best from behind (body.hpp).
+void test_part_placement() {
+    using namespace luca;
+    constexpr float PI = 3.14159265f;
+    CHECK(body_dir(1.0f, 0.0f) == 0 && body_dir(-1.0f, 0.0f) == BODY_DIRS / 2 && body_dir(0.0f, 1.0f) == BODY_DIRS / 4);
+
+    Genome g = with_part(PartType::Absorber, 1.0f);              // a mouth at the front
+    g.parts.push_back({PartType::Armour, 1.0f, PI * 0.5f, 0.0f});  // a plate over the left side
+    BodyPlan b = compile_body(g);
+    CHECK(std::abs(b.mouth[0] - 1.0f) < 1e-5f && b.mouth[BODY_DIRS / 2] == 0.0f && !b.even_mouth);
+    CHECK(b.any_armour && b.armour[BODY_DIRS / 4] == 1.0f && b.armour[3 * BODY_DIRS / 4] == 0.0f);
+    CHECK(clogged(g, g.parts[0]) == 1.0f);                       // the plate does not reach the mouth
+    g.parts[0].theta = PI * 0.5f;                                 // move the mouth under the plate
+    CHECK(clogged(g, g.parts[0]) < 0.7f);
+    CHECK(compile_phenotype(g).absorb < 0.7f);
+    Genome round = make_luca();
+    round.parts.push_back({PartType::Absorber, 4.0f, 0.0f, 0.0f});   // a big enough mouth reaches all round
+    CHECK(compile_body(round).even_mouth);
+
+    // A tail behind is four times a tail in front; legs push best from the sides.
+    auto speed = [](PartType t, float theta) {
+        Genome m = make_luca();
+        m.parts.push_back({t, 1.0f, theta, 0.0f});
+        return compile_phenotype(m).max_speed;
+    };
+    CHECK(std::abs(speed(PartType::Flagellum, PI) - 4.0f * speed(PartType::Flagellum, 0.0f)) < 1e-5f);
+    CHECK(speed(PartType::Legs, PI * 0.5f) > 1.9f * speed(PartType::Legs, 0.0f));
+
+    // In the world: the same hunter, its mouth towards the prey or away from it.
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;   // nobody breeds
+    cfg.day_length = 0;
+    auto drained = [&](float turn, float prey_plate) {
+        Simulation sim(cfg);
+        Genome h = aim_east(sim, with_part(PartType::Absorber, 1.0f));
+        for (Part& p : h.parts) p.theta += turn;
+        sim.add_creature(24.2f, 6.0f, 200.0f, h);
+        Genome prey = make_luca();
+        if (prey_plate >= 0.0f)   // a plate facing west (towards the hunter) or east
+            prey.parts.push_back({PartType::Armour, 0.6f, prey_plate - Creatures::initial_wander(sim.next_id()), 0.0f});
+        sim.add_creature(24.6f, 6.0f, 300.0f, prey);
+        double eaten = 0.0;
+        for (int t = 0; t < 20; ++t) {
+            sim.step();
+            eaten += sim.last_stats().eaten_living;
+        }
+        return eaten;
+    };
+    const double facing = drained(0.0f, -1.0f), away = drained(PI, -1.0f);
+    CHECK(facing > 0.0 && away < 0.01 * facing);
+    const double plate_towards = drained(0.0f, PI), plate_away = drained(0.0f, 0.0f);
+    CHECK(plate_towards < 0.6 * plate_away);   // membrane 1.5 against 0.3: about half
+    CHECK(std::abs(plate_away - facing) < 0.02 * facing);       // a plate on the far side is no help
+}
+
+// Shape matters: a long or boxy body has more skin than a round one of the
+// same volume (room for sun patches, faster heat loss, more fouling, upkeep),
+// a long one moves more cheaply and a boxy one drags (body.hpp).
+void test_body_shape() {
+    using namespace luca;
+    CHECK(skin_factor(0.0f, 0.0f) == 1.0f && drag_factor(0.0f, 0.0f) == 1.0f);
+    CHECK(std::abs(skin_factor(1.0f, 0.0f) - 1.182f) < 0.005f);      // a 3:1 spheroid
+    CHECK(std::abs(skin_factor(0.0f, 1.0f) - 1.24f) < 0.005f);       // about a cube
+    CHECK(drag_factor(1.0f, 0.0f) < 0.75f && drag_factor(0.0f, 1.0f) > 1.25f);
+
+    Genome round = make_luca();
+    round.parts[0].size = 1.5f;                                       // more patch than a round body has room for
+    round.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
+    Genome long_g = round, box_g = round;
+    long_g.elongation = 1.0f;
+    box_g.squareness = 1.0f;
+    const Phenotype r = compile_phenotype(round), l = compile_phenotype(long_g), b = compile_phenotype(box_g);
+    CHECK(std::abs(l.mass - r.mass) < 1e-6f);                         // same volume, same mass
+    CHECK(l.light_capture > r.light_capture * 1.15f);                 // more room for sun
+    CHECK(l.heat_follow > r.heat_follow);                             // feels the night more
+    CHECK(fouling_cost(l, 10.0f) > fouling_cost(r, 10.0f));           // and its waste
+    CHECK(l.upkeep > r.upkeep && b.upkeep > l.upkeep);                // skin is kept up
+    CHECK(l.max_speed > 1.3f * r.max_speed && b.max_speed < r.max_speed);
+    CHECK(movement_cost(l, 0.05f, 0.0f) < 0.75f * movement_cost(r, 0.05f, 0.0f));
+    CHECK(movement_cost(b, 0.05f, 0.0f) > movement_cost(r, 0.05f, 0.0f));
+    CHECK(movement_cost(l, 0.0f, 1.0f) == movement_cost(r, 0.0f, 1.0f));   // climbing is the same
+}
+
+// Stalks: a mouth on a tentacle reaches bodies its skin does not touch and
+// clears its own armour; sun patches on stalks stand over their neighbours.
+// Each costs mass and upkeep by length; parts that gain nothing grow none.
+void test_stalks() {
+    using namespace luca;
+    Genome g = with_part(PartType::Absorber, 1.0f);
+    g.parts.push_back({PartType::Armour, 2.0f, 0.0f, 0.0f});         // plates all round, over the mouth
+    Genome t = g;
+    t.parts[0].stalk = 0.6f;
+    CHECK(clogged(g, g.parts[0]) < 0.6f && clogged(t, t.parts[0]) == 1.0f);
+    const Phenotype pg = compile_phenotype(g), pt = compile_phenotype(t);
+    CHECK(pt.absorb > pg.absorb && pt.mass > pg.mass && pt.upkeep > pg.upkeep);
+    const BodyPlan bt = compile_body(t);
+    CHECK(bt.longest_stalk == 0.6f && bt.stalk[0] == 0.6f && bt.stalk[BODY_DIRS / 2] == 0.0f && !bt.even_mouth);
+
+    Genome odd = make_luca();
+    odd.parts.push_back({PartType::Armour, 1.0f, 0.0f, 0.0f, 0.5f});
+    clamp_genome(odd);
+    CHECK(odd.parts[1].stalk == 0.0f);                              // armour can't grow a stalk
+
+    Genome frond = make_luca();
+    frond.parts[0].stalk = 0.5f;
+    CHECK(compile_phenotype(frond).canopy > compile_phenotype(make_luca()).canopy + 0.4f);
+
+    // In the world: prey 1.5 apart is out of a bare mouth's touch, but within a tentacle's.
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;
+    cfg.day_length = 0;
+    auto drained = [&](float stalk) {
+        Simulation sim(cfg);
+        Genome h = with_part(PartType::Absorber, 1.0f);
+        h.parts[0].stalk = stalk;
+        sim.add_creature(23.6f, 6.0f, 200.0f, aim_east(sim, h));
+        sim.add_creature(24.85f, 6.0f, 300.0f, make_luca());
+        double eaten = 0.0;
+        for (int k = 0; k < 20; ++k) {
+            sim.step();
+            eaten += sim.last_stats().eaten_living;
+        }
+        return eaten;
+    };
+    CHECK(drained(0.0f) == 0.0 && drained(0.5f) > 0.0);
+
+    // In the canopy: a frond overtops a plain LUCA of the same size in the same cell.
+    Simulation sim(cfg);
+    const uint64_t plain = sim.add_creature(20.3f, 20.5f, 300.0f, make_luca());
+    const uint64_t tall = sim.add_creature(20.7f, 20.5f, 300.0f, frond);
+    for (int k = 0; k < 30; ++k) sim.step();
+    CHECK(sim.creatures().fed_light[find(sim, tall)] > 2.0f * sim.creatures().fed_light[find(sim, plain)]);
+}
+
 int main() {
     test_day_and_night();
     test_cold_nights();
@@ -1106,6 +1257,9 @@ int main() {
     test_waste();
     test_gene_transfer();
     test_species();
+    test_part_placement();
+    test_body_shape();
+    test_stalks();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;
 }

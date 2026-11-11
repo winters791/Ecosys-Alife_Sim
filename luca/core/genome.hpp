@@ -22,11 +22,16 @@ enum class PartType : uint8_t {
 
 const char* part_name(PartType t);
 
+// Only mouths (tentacles) and sun patches (fronds) grow on stalks; on any
+// other part a stalk would do nothing, so the genome never holds one.
+inline bool can_have_stalk(PartType t) { return t == PartType::Absorber || t == PartType::Photo; }
+
 struct Part {
     PartType type = PartType::Photo;
     float size  = 1.0f;
-    float theta = 0.0f;  // position on blob surface (azimuth, radians)
-    float phi   = 0.0f;  // position on blob surface (polar, radians)
+    float theta = 0.0f;  // where on the outline it sits: radians from the body's front, 0 front, pi back
+    float phi   = 0.0f;  // unused (left over from a 3D surface position); kept so old genomes load
+    float stalk = 0.0f;  // how far out on a stalk it sits, in world units; 0 = on the skin
 };
 
 // --- The brain ---------------------------------------------------------------
@@ -116,6 +121,9 @@ struct Genome {
     float dormancy          = 0.0f;   // 0..1: how deeply it sleeps through dark and cold
     float seed_throw        = 0.0f;   // how far it can fling a child, in cells; 0 = the child lands touching it
     float detox             = 0.0f;   // 0..1: takes up the waste in its cell as food
+    // Body outline (2026-11-11). A LUCA is round: both 0.
+    float elongation        = 0.0f;   // 0 round .. 1 three times as long as it is wide
+    float squareness        = 0.0f;   // 0 rounded .. 1 a box with rounded corners
     std::vector<Part>  parts;
     Brain brain;                 // empty = no behaviour; see above
 };
@@ -131,6 +139,7 @@ constexpr float MIN_SHARE = 0.05f,  MAX_SHARE = 0.95f;
 constexpr float MAX_WEIGHT = 3.0f;
 constexpr float MAX_THROW  = 6.0f;   // cells
 constexpr float MAX_BITE   = 3.0f;   // at most four times the plain pull
+constexpr float MAX_STALK  = 1.0f;   // world units: a part can sit at most this far out
 }  // namespace limits
 
 // Pull every gene back inside its range. Called after mutation and on import.

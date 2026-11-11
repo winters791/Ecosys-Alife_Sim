@@ -80,7 +80,10 @@ float throw_cost(float child_mass, float distance);
 // to the other at a rate set by the taker's pull against the giver's
 // membrane. A strong pull on a weak membrane looks like predation; a weak
 // pull on a big host looks like parasitism. Called once per direction.
-float contact_flow(const Phenotype& taker, const Phenotype& giver);
+// `pull` is the taker's pull towards the giver and `membrane` the giver's
+// resistance on the side it is touched from: both depend on where mouths and
+// plates sit (BodyPlan, body.hpp).
+float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, float membrane);
 
 // Energy per tick this creature tries to pull out of dead matter in its cell.
 float corpse_demand(const Phenotype& p);

@@ -73,6 +73,7 @@ public:
     // matter and energy arriving from outside, so do this between audits.
     // Returns the creature's id.
     uint64_t add_creature(float x, float y, float energy, const Genome& genome);
+    uint64_t next_id() const { return next_id_; }   // the id the next creature will get (it decides its birth facing)
 
     // Advance one tick.
     void step();
@@ -176,7 +177,7 @@ private:
     struct Near { float x, y, reach; uint32_t who; };  // one creature, in cell order
     std::vector<Near> near_;
     std::vector<uint32_t> dead_;
-    struct Tall { float radius; uint32_t who; };
+    struct Tall { float radius; uint32_t who; };   // radius here is canopy height (Phenotype::canopy)
     std::vector<Tall> canopy_;               // one crowded cell's bodies, tallest first
     std::vector<Birth> births_;
 };

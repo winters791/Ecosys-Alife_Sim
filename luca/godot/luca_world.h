@@ -79,13 +79,27 @@ public:
     // `capacity` instances. A sprite needs no rotation or scale, so the nine
     // basis slots of the transform carry body data instead (blob.gdshader
     // reads them back out of MODEL_MATRIX):
-    //   basis x = (core radius, absorber, flagellum)
-    //   basis y = (legs, sensor, armour)
-    //   basis z = (storage, heading x, heading z)
+    //   basis x = (core radius, elongation, squareness)
+    //   basis y = (storage, sleep, number of parts)
+    //   basis z = (unused, heading x, heading z)
     //   origin  = (x, species hue 0..1, z)   the shader ignores height, so y is free
     //   colour  = (pigment, photo cover, energy fullness, speed)
-    //   custom  = (phase, shape gene 0, shape gene 1, poison)
+    //   custom  = (phase, lump gene 0, lump gene 1, poison)
     godot::PackedFloat32Array get_instance_buffer(int capacity) const;
+
+    // Every creature's parts, for the sprite shader to draw each one where it
+    // sits: PARTS_PER_CREATURE texels per creature (in the same order as the
+    // instance buffer), laid out in rows PART_TEX_WIDTH texels wide, RGBA float:
+    //   (part type + 1, or 0 for no part; size; angle from the front; stalk length)
+    static constexpr int PARTS_PER_CREATURE = 12;   // = luca::limits::MAX_PARTS
+    static constexpr int PART_TEX_WIDTH = 1024;
+    godot::PackedFloat32Array get_part_buffer(int capacity) const;
+    int get_part_tex_width() const { return PART_TEX_WIDTH; }
+    int get_parts_per_creature() const { return PARTS_PER_CREATURE; }
+
+    // An empty patch of world filled with one hand-made creature of each body
+    // plan, for checking the art. Returns how many it placed.
+    int spawn_parade(double x, double z);
 
     // Terrain height under a ground position, smoothly interpolated.
     double height_at(double x, double z) const;

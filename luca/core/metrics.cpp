@@ -1,5 +1,7 @@
 #include "metrics.hpp"
 
+#include "body.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
@@ -132,11 +134,28 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     return audit;
 }
 
+namespace {
+// Body plan columns for the snapshot: summed mouth stalk, and how well its
+// tails sit (thrust_facing, size-weighted; 0 with no tail).
+float mouth_stalk(const Genome& g) {
+    float s = 0.0f;
+    for (const Part& p : g.parts) if (p.type == PartType::Absorber) s += p.stalk;
+    return s;
+}
+float tail_facing(const Genome& g) {
+    float w = 0.0f, s = 0.0f;
+    for (const Part& p : g.parts)
+        if (p.type == PartType::Flagellum) { w += p.size; s += p.size * thrust_facing(p.type, p.theta); }
+    return w > 0.0f ? s / w : 0.0f;
+}
+}  // namespace
+
 bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
     std::ofstream f(path);
     if (!f) return false;
     f << "x,y,energy,age,lineage,generation,core_radius,photo,parts,pigment,"
-         "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy,detox,fed_waste\n";
+         "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy,detox,fed_waste,"
+         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing\n";
     const Creatures& c = sim.creatures();
     for (std::size_t i = 0; i < c.size(); ++i) {
         const Genome& g = c.genome[i];
@@ -146,7 +165,8 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
           << g.pigment;
         for (int t = 1; t < static_cast<int>(PartType::Count); ++t) f << ',' << c.pheno[i].part_total[t];
         f << ',' << c.pheno[i].max_speed << ',' << c.fed_light[i] << ',' << c.fed_living[i] << ',' << c.fed_dead[i] << ',' << c.species[i] << ',' << g.seed_throw << ',' << g.bite << ',' << g.digestion << ','
-          << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << g.detox << ',' << c.fed_waste[i] << '\n';
+          << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << g.detox << ',' << c.fed_waste[i] << ','
+          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << '\n';
     }
     return true;
 }
