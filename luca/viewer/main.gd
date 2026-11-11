@@ -10,7 +10,6 @@ extends Node3D
 ##   Left mouse           use the selected tool (inspect / paint)
 ##   Right or middle drag move the map             (also W A S D / arrows / two-finger scroll)
 ##   Mouse wheel / pinch  zoom                     (also - and =)
-##   Q / E                turn the camera
 ##   Space                pause / resume           1-5: speed
 ##   Tab                  next overlay             [ ]: brush size
 ##   C                    colour creatures by species      T: tree of life
@@ -21,22 +20,18 @@ extends Node3D
 ##   --zoom=K --at=X,Z        start zoomed in on a spot (screen pixels per sprite pixel)
 ##   --tree  or --tree=NAME   start with the tree of life open (zoomed in on a species)
 ##   --test-poison            draw every body as poisonous (to check the art)
-##   --parade                 an empty world with one hand-made creature of each body plan
 ##   --species                start with creatures coloured by species
 ##   --warmup=N               run N ticks before the first frame (skip ahead to evolved life)
 
-const HEIGHT_SCALE := 0.35        # the view's hills are gentler than the sim's (which run 0 to 40)
-const CAM_PITCH := deg_to_rad(40.0)   # how steeply the camera looks down
-const CAM_NEAR_FAR := Vector2(4.0, 260.0)   # closest and furthest the camera may sit from what it looks at
-# Every piece of a creature is one MultiMesh, filled by LucaWorld.get_creature_meshes().
-const PIECES := ["shadow", "body", "eye", "leg", "tail", "leaf", "mouth", "horn"]
+const PX_SIZE := 0.125            # world units per sprite pixel: 8 pixels to a cell
+const ZOOMS := [0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]  # screen pixels per sprite pixel
 const FRAME_BUDGET_MS := 10.0     # sim time allowed per frame; beyond it the world just runs slower
 const SPEED_TICKS := [0, 1, 4, 16, 100000]
 const SPEED_NAMES := ["Pause", "1x", "4x", "16x", "Max"]
 const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead"]
 const GRADUAL_TICKS := 1000       # how long a power takes in Gradual mode
-const DAY_SKY := Color(0.62, 0.83, 0.93)
-const NIGHT_SKY := Color(0.20, 0.25, 0.42)
+const NIGHT_GROUND := Vector3(0.30, 0.34, 0.58)
+const NIGHT_BLOBS := Vector3(0.58, 0.62, 0.82)
 
 enum Tool { LOOK, RAISE, LOWER, WARM, COOL }
 const TOOL_NAMES := ["Look", "Raise land", "Lower land", "Warm spot", "Cold spot"]
@@ -48,25 +43,22 @@ var extent := 128.0
 
 # Scene
 var terrain_mat: ShaderMaterial
-var piece_mats := {}          # piece name -> ShaderMaterial
-var piece_meshes := {}        # piece name -> MultiMesh
-var piece_capacity := {}      # piece name -> instances allocated
-var sun_light: DirectionalLight3D
-var environment: Environment
+var blob_mat: ShaderMaterial
 var height_tex: ImageTexture
 var temp_tex: ImageTexture
 var light_tex: ImageTexture
 var soil_tex: ImageTexture
 var height_rev := -1
 var climate_rev := -1
+var multimesh: MultiMesh
+var capacity := 0
 var shown_daylight := 1.0
 
 # Camera: straight down, no perspective. Zoom is a whole number of screen
 # pixels per sprite pixel where it can be, so the art stays crisp.
 var cam: Camera3D
 var cam_target := Vector3.ZERO
-var cam_distance := 150.0
-var cam_yaw := 0.0             # radians; 0 looks north, towards the sunny edge
+var zoom_index := 2
 var dragging := false
 
 # Player state
@@ -109,7 +101,6 @@ var warmup := 0
 var start_zoom := -1.0
 var start_at := Vector2(-1, -1)
 var start_tree := false
-var parade := false            # an empty world with one hand-made creature of each body plan
 var test_poison := false       # draw every body as poisonous, to check the art
 var start_tree_root := ""   # species name to zoom the tree into (testing)
 
@@ -126,9 +117,6 @@ func _ready() -> void:
 		elif arg == "--demo": demo = true
 		elif arg == "--species": by_species = true
 		elif arg == "--test-poison": test_poison = true
-		elif arg == "--parade":
-			parade = true
-			population = 0
 		elif arg == "--tree": start_tree = true
 		elif arg.begins_with("--tree="):
 			start_tree = true
@@ -141,11 +129,6 @@ func _ready() -> void:
 
 	world = LucaWorld.new()
 	world.setup(world_size, seed_value, population, true)
-	if parade:
-		world.spawn_parade(world.get_extent() * 0.5 - 8.0, 20.0)
-		start_at = Vector2(world.get_extent() * 0.5 - 3.0, 20.0)   # a little left, clear of the side panel
-		if start_zoom <= 0.0:
-			start_zoom = 11.0
 	if warmup > 0:
 		world.step(warmup, 1e12)
 	world_size = world.get_world_size()
@@ -153,14 +136,16 @@ func _ready() -> void:
 	cam_target = Vector3(extent * 0.5, 0.0, extent * 0.5)
 	if start_at.x >= 0.0:
 		cam_target = Vector3(start_at.x, 0.0, start_at.y)
-	# Start far enough back to take in most of the map; --zoom=K moves in (bigger = closer).
-	cam_distance = clampf(extent * 1.25, CAM_NEAR_FAR.x, CAM_NEAR_FAR.y)
-	if start_zoom > 0.0:
-		cam_distance = clampf(160.0 / start_zoom, CAM_NEAR_FAR.x, CAM_NEAR_FAR.y)
+	# Start at the closest zoom that still shows the whole map.
+	zoom_index = 0
+	for i in ZOOMS.size():
+		var fits: bool = extent * ZOOMS[i] / PX_SIZE <= float(get_window().size.y)
+		if (start_zoom > 0.0 and ZOOMS[i] <= start_zoom) or (start_zoom <= 0.0 and fits):
+			zoom_index = i
 
-	_build_sky()
+	RenderingServer.set_default_clear_color(Color(0.05, 0.06, 0.09))
 	_build_terrain()
-	_build_creatures()
+	_build_blobs()
 	_build_camera()
 	_build_ui()
 	_set_speed(1 if not demo else 3)
@@ -168,7 +153,7 @@ func _ready() -> void:
 	if by_species:
 		(find_child("SpeciesCheck", true, false) as CheckBox).button_pressed = true
 	if test_poison:
-		piece_mats["body"].set_shader_parameter("poison_test", 0.6)
+		blob_mat.set_shader_parameter("poison_test", 0.6)
 	if start_tree:
 		_toggle_tree()
 		for i in tree_view.species.size():
@@ -179,62 +164,21 @@ func _ready() -> void:
 
 # --- Scene construction --------------------------------------------------------
 
-func _build_sky() -> void:
-	# A plain soft sky, a low sun, and haze that melts the far ground into it.
-	environment = Environment.new()
-	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = DAY_SKY
-	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color(0.86, 0.92, 1.0)
-	environment.ambient_light_energy = 0.5
-	environment.fog_enabled = true
-	environment.fog_light_color = DAY_SKY.lightened(0.2)
-	environment.fog_density = 0.0006
-	environment.fog_sky_affect = 0.0
-	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
-	var holder := WorldEnvironment.new()
-	holder.environment = environment
-	add_child(holder)
-
-	sun_light = DirectionalLight3D.new()
-	sun_light.rotation = Vector3(deg_to_rad(-52.0), deg_to_rad(155.0), 0.0)   # from the south, where the sim's sun stands
-	sun_light.light_color = Color(1.0, 0.97, 0.90)
-	sun_light.shadow_enabled = false   # every creature carries its own soft shadow instead
-	add_child(sun_light)
-
-
 func _build_terrain() -> void:
-	# A grid with one vertex per cell corner; the shader lifts it into hills.
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(extent, extent)
 	plane.center_offset = Vector3(extent * 0.5, 0.0, extent * 0.5)
-	plane.subdivide_width = world_size - 1
-	plane.subdivide_depth = world_size - 1
 
 	terrain_mat = ShaderMaterial.new()
-	terrain_mat.shader = load("res://ground.gdshader")
+	terrain_mat.shader = load("res://terrain.gdshader")
 	terrain_mat.set_shader_parameter("extent", extent)
 	terrain_mat.set_shader_parameter("cells", float(world_size))
-	terrain_mat.set_shader_parameter("height_scale", HEIGHT_SCALE)
+	terrain_mat.set_shader_parameter("px_size", PX_SIZE)
 	plane.material = terrain_mat
 
 	var terrain := MeshInstance3D.new()
 	terrain.mesh = plane
-	terrain.custom_aabb = AABB(Vector3(0, -4, 0), Vector3(extent, 60, extent))
 	add_child(terrain)
-
-	# Beyond the edge of the world: a wide pale plain for the haze to swallow.
-	var far := PlaneMesh.new()
-	far.size = Vector2(extent * 12.0, extent * 12.0)
-	far.center_offset = Vector3(extent * 0.5, -3.0, extent * 0.5)
-	var far_mat := StandardMaterial3D.new()
-	far_mat.albedo_color = Color(0.80, 0.88, 0.74)
-	far_mat.roughness = 1.0
-	far.material = far_mat
-	var far_node := MeshInstance3D.new()
-	far_node.mesh = far
-	add_child(far_node)
-
 	_upload_fields()
 	_upload_soil()
 
@@ -278,108 +222,60 @@ func _upload_soil() -> void:
 		soil_tex.update(img)
 
 
-func _piece_mesh(piece: String) -> Mesh:
-	match piece:
-		"shadow":
-			var disc := PlaneMesh.new()
-			disc.size = Vector2(2.0, 2.0)
-			return disc
-		"leg", "tail":
-			var limb := CylinderMesh.new()   # one unit long; the shaders taper and bend it
-			limb.top_radius = 1.0
-			limb.bottom_radius = 1.0
-			limb.height = 1.0
-			limb.radial_segments = 10
-			limb.rings = 6
-			return limb
-		"horn":
-			var cone := CylinderMesh.new()
-			cone.top_radius = 0.0
-			cone.bottom_radius = 1.0
-			cone.height = 1.0
-			cone.radial_segments = 8
-			cone.rings = 1
-			return cone
-		"leaf":
-			var blade := SphereMesh.new()    # squeezed into a blade by the shader
-			blade.radius = 0.5
-			blade.height = 1.0
-			blade.radial_segments = 8
-			blade.rings = 6
-			return blade
-	var ball := SphereMesh.new()             # body, eye, mouth
-	ball.radius = 1.0
-	ball.height = 2.0
-	ball.radial_segments = 24 if piece == "body" else 12
-	ball.rings = 12 if piece == "body" else 6
-	return ball
+func _build_blobs() -> void:
+	# One flat 1x1 quad; the shader sizes it per creature and paints the sprite.
+	var quad := PlaneMesh.new()
+	quad.size = Vector2(1.0, 1.0)
+	blob_mat = ShaderMaterial.new()
+	blob_mat.shader = load("res://blob.gdshader")
+	blob_mat.set_shader_parameter("px_size", PX_SIZE)
+	blob_mat.set_shader_parameter("extent", extent)
+	quad.material = blob_mat
 
+	multimesh = MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.use_colors = true
+	multimesh.use_custom_data = true
+	multimesh.mesh = quad
+	# Instances are placed by the shader, so the automatic bounds would be wrong.
+	multimesh.custom_aabb = AABB(Vector3(-8, -1, -8), Vector3(extent + 16, 4, extent + 16))
 
-func _build_creatures() -> void:
-	for piece: String in PIECES:
-		var mat := ShaderMaterial.new()
-		var shader_name: String = piece if piece in ["shadow", "body", "eye", "leg", "tail", "leaf"] else "solid"
-		mat.shader = load("res://%s.gdshader" % shader_name)
-		if piece == "mouth":
-			mat.set_shader_parameter("base_color", Color(0.45, 0.10, 0.16))
-			mat.set_shader_parameter("tip_color", Color(0.70, 0.20, 0.26))
-			mat.set_shader_parameter("shine", 0.5)
-		elif piece == "horn":
-			mat.set_shader_parameter("base_color", Color(0.72, 0.70, 0.66))
-			mat.set_shader_parameter("tip_color", Color(0.98, 0.96, 0.90))
-			mat.set_shader_parameter("pivot", 0.5)
-			mat.set_shader_parameter("sink", 0.44)
-		if piece == "shadow":
-			mat.render_priority = -1
-		var mesh := _piece_mesh(piece)
-		mesh.surface_set_material(0, mat)
-
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.use_colors = true
-		mm.use_custom_data = true
-		mm.mesh = mesh
-		# Instances move in the shaders, so give generous fixed bounds.
-		mm.custom_aabb = AABB(Vector3(-8, -4, -8), Vector3(extent + 16, 70, extent + 16))
-		var node := MultiMeshInstance3D.new()
-		node.multimesh = mm
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(node)
-		piece_mats[piece] = mat
-		piece_meshes[piece] = mm
-		piece_capacity[piece] = 0
+	var node := MultiMeshInstance3D.new()
+	node.multimesh = multimesh
+	add_child(node)
 
 
 func _build_camera() -> void:
 	cam = Camera3D.new()
-	cam.fov = 38.0
-	cam.near = 0.3
-	cam.far = 2500.0
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	cam.near = 1.0
+	cam.far = 400.0
 	add_child(cam)
 	_place_camera()
 
 
-## World units that one screen pixel covers at the point the camera looks at.
-func _unit_per_pixel() -> float:
-	return 2.0 * cam_distance * tan(deg_to_rad(cam.fov) * 0.5) / float(get_window().size.y)
+## Screen pixels per world unit at the current zoom.
+func _scale() -> float:
+	return ZOOMS[zoom_index] / PX_SIZE
 
 
 func _place_camera() -> void:
 	cam_target.x = clampf(cam_target.x, 0.0, extent)
 	cam_target.z = clampf(cam_target.z, 0.0, extent)
-	cam_target.y = world.height_at(cam_target.x, cam_target.z) * HEIGHT_SCALE
-	# Sit back and above the target, looking down at it.
-	var back := Vector3(sin(cam_yaw), 0.0, cos(cam_yaw))
-	var eye := cam_target + (back * cos(CAM_PITCH) + Vector3.UP * sin(CAM_PITCH)) * cam_distance
-	cam.look_at_from_position(eye, cam_target, Vector3.UP)
+	cam.size = float(get_window().size.y) / _scale()
+	# Sit on whole screen pixels so the picture doesn't shimmer while panning.
+	var k := _scale()
+	var eye := Vector3(roundf(cam_target.x * k) / k, 200.0, roundf(cam_target.z * k) / k)
+	# Looking straight down with north (the sunny edge, z = 0) at the top.
+	cam.look_at_from_position(eye, eye + Vector3.DOWN, Vector3(0, 0, -1))
 
 
 func _zoom(steps: int, around: Vector3) -> void:
-	var before := cam_distance
-	cam_distance = clampf(cam_distance * pow(0.85, steps), CAM_NEAR_FAR.x, CAM_NEAR_FAR.y)
-	# Drift towards the point under the mouse as we go in.
-	if around.y > -1e8 and steps > 0:
-		cam_target += (Vector3(around.x, cam_target.y, around.z) - cam_target) * (1.0 - cam_distance / before)
+	var before := _scale()
+	zoom_index = clampi(zoom_index + steps, 0, ZOOMS.size() - 1)
+	# Keep the point under the mouse where it is.
+	if around.y > -1e8:
+		cam_target += (around - cam_target) * (1.0 - before / _scale())
 
 
 # --- UI ------------------------------------------------------------------------
@@ -593,8 +489,7 @@ func _update_tree() -> void:
 
 func _set_by_species(on: bool) -> void:
 	by_species = on
-	for piece: String in PIECES:
-		piece_mats[piece].set_shader_parameter("vivid", on)
+	blob_mat.set_shader_parameter("by_species", on)
 
 
 ## Matches the species colour in blob.gdshader.
@@ -734,12 +629,9 @@ func _input(event: InputEvent) -> void:
 			dragging = false
 
 
+## Move the map by a number of screen pixels.
 func _pan(right: float, down: float) -> void:
-	# Screen pixels -> ground, along the camera's own right and forward.
-	var k := _unit_per_pixel()
-	var side := Vector3(cos(cam_yaw), 0.0, -sin(cam_yaw))
-	var toward := Vector3(sin(cam_yaw), 0.0, cos(cam_yaw))
-	cam_target += side * right * k + toward * down * k / sin(CAM_PITCH)
+	cam_target += Vector3(right, 0.0, down) / _scale()
 
 
 # --- Every frame -------------------------------------------------------------------
@@ -769,17 +661,13 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S): move.y -= 1.0
 	if move != Vector2.ZERO:
 		_pan(move.x * delta * 700.0, -move.y * delta * 700.0)
-	if Input.is_key_pressed(KEY_Q): cam_yaw += delta * 1.2
-	if Input.is_key_pressed(KEY_E): cam_yaw -= delta * 1.2
 	_place_camera()
 
-	# 3. Where is the mouse on the ground? Cast the camera's ray at the hills
-	#    (in the sim's own heights, which the view squashes by HEIGHT_SCALE).
-	var mouse := get_viewport().get_mouse_position()
-	var from := cam.project_ray_origin(mouse)
-	var dir := cam.project_ray_normal(mouse)
-	var hit: Vector3 = world.raycast(Vector3(from.x, from.y / HEIGHT_SCALE, from.z), Vector3(dir.x, dir.y / HEIGHT_SCALE, dir.z))
-	hover = Vector3(hit.x, 0.0, hit.z) if hit.y > -1e8 else Vector3(0, -1e9, 0)
+	# 3. Where is the mouse on the ground? The camera looks straight down, so
+	#    it is simply the point under the cursor.
+	var under := cam.project_ray_origin(get_viewport().get_mouse_position())
+	var on_map := under.x >= 0.0 and under.x <= extent and under.z >= 0.0 and under.z <= extent
+	hover = Vector3(under.x, 0.0, under.z) if on_map else Vector3(0, -1e9, 0)
 
 	# 4. Painting.
 	if painting:
@@ -792,7 +680,7 @@ func _process(delta: float) -> void:
 	_upload_fields()
 	if frame % 12 == 0:
 		_upload_soil()
-	_update_creatures()
+	_update_blobs()
 	_update_sun()
 	_update_brush_ring()
 	_update_ui()
@@ -803,25 +691,18 @@ func _process(delta: float) -> void:
 		get_tree().quit()
 
 
-func _update_creatures() -> void:
-	var meshes: Dictionary = world.get_creature_meshes(HEIGHT_SCALE)
-	for piece: String in PIECES:
-		var buffer: PackedFloat32Array = meshes[piece]
-		var count := buffer.size() / 20
-		var mm: MultiMesh = piece_meshes[piece]
-		if count > piece_capacity[piece]:
-			# Grow in big steps so the buffer isn't reallocated every frame.
-			piece_capacity[piece] = maxi(256, nearest_po2(count + 1))
-			mm.instance_count = piece_capacity[piece]
-		mm.visible_instance_count = count
-		if piece_capacity[piece] > 0:
-			buffer.resize(piece_capacity[piece] * 20)
-			mm.buffer = buffer
-		# Hold still while the world is paused.
-		piece_mats[piece].set_shader_parameter("motion", 0.0 if SPEED_TICKS[speed] == 0 else 1.0)
+func _update_blobs() -> void:
+	var count := world.get_population()
+	if count > capacity:
+		# Grow in big steps so the buffer isn't reallocated every frame.
+		capacity = maxi(1024, nearest_po2(count + 1))
+		multimesh.instance_count = capacity
+	multimesh.visible_instance_count = count
+	if capacity > 0:
+		multimesh.buffer = world.get_instance_buffer(capacity)
 
 
-## Day and night: the sun dims and the sky and air turn blue after sunset.
+## Day and night: the whole picture cools and darkens after sunset.
 func _update_sun() -> void:
 	var target := float(world.get_daylight())
 	# When days fly past faster than the eye can follow, hold a steady dusk
@@ -829,14 +710,10 @@ func _update_sun() -> void:
 	var day_length := world.get_day_length()
 	if day_length > 0 and ticks_per_second > day_length:
 		target = 0.8
-	shown_daylight = lerpf(shown_daylight, clampf(target, 0.0, 1.0), 0.2)
+	shown_daylight = lerpf(shown_daylight, target, 0.2)
 	var dim := clampf(0.25 + 0.75 * float(world.get_sun_scale()), 0.2, 1.3)  # the sun power dims it too
-	sun_light.light_energy = 0.85 * shown_daylight * dim
-	var sky := NIGHT_SKY.lerp(DAY_SKY, shown_daylight * clampf(dim, 0.0, 1.0))
-	environment.background_color = sky
-	environment.fog_light_color = sky.lightened(0.2)
-	environment.ambient_light_color = Color(0.62, 0.70, 1.0).lerp(Color(0.86, 0.92, 1.0), shown_daylight)
-	environment.ambient_light_energy = lerpf(0.62, 0.5, shown_daylight) * lerpf(1.0, dim, 0.4)
+	terrain_mat.set_shader_parameter("tint", NIGHT_GROUND.lerp(Vector3.ONE, shown_daylight) * dim)
+	blob_mat.set_shader_parameter("tint", NIGHT_BLOBS.lerp(Vector3.ONE, shown_daylight) * lerpf(1.0, dim, 0.5))
 
 
 func _update_brush_ring() -> void:

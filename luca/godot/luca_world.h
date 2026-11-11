@@ -87,32 +87,6 @@ public:
     //   custom  = (phase, shape gene 0, shape gene 1, poison)
     godot::PackedFloat32Array get_instance_buffer(int capacity) const;
 
-    // --- The 3D view ---------------------------------------------------------
-    // Everything needed to draw every creature as a soft 3D body with its
-    // parts, as MultiMesh buffers (20 floats an instance: a 3x4 transform,
-    // a colour, four custom values). One call a frame. Keys:
-    //   "body", "shadow", "eye", "leg", "tail", "leaf", "mouth", "horn"
-    //       -> PackedFloat32Array, exactly 20 x the number of instances
-    // What is drawn comes straight from the body (bar one liberty: a blind body
-    // still gets two small dot eyes, so it has a face): eyes are sensors, legs are
-    // legs, the tail is the flagellum, leaves are photo patches, the mouth is
-    // the absorber, horns are armour. Layout of each instance:
-    //   transform  where the piece sits (the shaders add the motion)
-    //   colour     (species hue 0..1, pigment 0..1, a per-piece value, sleep 0..1)
-    //                the per-piece value: body = energy fullness, leg = which
-    //                foot leads (0 or 1), leaf = photo cover, others = size
-    //   custom     (phase 0..1, how fast it is going 0..1, lift off the ground,
-    //                body radius), except for the body, whose fourth is poison
-    // `height_scale` squashes terrain height for the view (the sim's hills are
-    // steeper than looks good).
-    godot::Dictionary get_creature_meshes(double height_scale) const;
-
-    // Drop a row of hand-made creatures (one of each body plan: sitter,
-    // walker, hopper, armoured, poisonous, a big hunter, a sleeper) starting at
-    // a ground position. For checking the art and the motion; they are
-    // ordinary creatures from then on. Returns how many were added.
-    int spawn_parade(double x, double z);
-
     // Terrain height under a ground position, smoothly interpolated.
     double height_at(double x, double z) const;
 
