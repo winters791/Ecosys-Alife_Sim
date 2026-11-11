@@ -18,6 +18,7 @@ struct Creatures {
     std::vector<float>     x, y;
     std::vector<float>     hx, hy;      // unit heading (which way it last moved)
     std::vector<float>     moved;       // distance covered last tick (others can sense this)
+    std::vector<float>     sleep;       // 0 awake .. 1 fully dormant (see energy.hpp)
     std::vector<float>     energy;
     std::vector<uint32_t>  age;
     std::vector<Phenotype> pheno;
@@ -40,7 +41,7 @@ struct Creatures {
     std::size_t size() const { return x.size(); }
 
     void reserve(std::size_t n) {
-        x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n);
+        x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n); sleep.reserve(n);
         energy.reserve(n); age.reserve(n); pheno.reserve(n);
         fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n);
         id.reserve(n); lineage.reserve(n); species.reserve(n); generation.reserve(n); genome.reserve(n);
@@ -53,6 +54,7 @@ struct Creatures {
         hx.push_back(0.0f);
         hy.push_back(1.0f);
         moved.push_back(0.0f);
+        sleep.push_back(0.0f);
         fed_light.push_back(0.0f);
         fed_living.push_back(0.0f);
         fed_dead.push_back(0.0f);
@@ -71,7 +73,7 @@ struct Creatures {
     // O(1) removal: move the last creature into slot i. Changes order, but
     // deterministically, so replays still match.
     void remove_swap(std::size_t i) {
-        swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i);
+        swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i); swap_pop(sleep, i);
         swap_pop(energy, i); swap_pop(age, i);
         swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(id, i);
         swap_pop(pheno, i); swap_pop(lineage, i); swap_pop(species, i); swap_pop(generation, i); swap_pop(genome, i);

@@ -647,6 +647,153 @@ void test_evolving_brain() {
     CHECK(b.links[1].from == hidden_node(0) && b.links[1].weight == 3.0f);
 }
 
+// Sunbathing and moving conflict: a body on the move catches less light.
+void test_moving_costs_sunlight() {
+    using namespace luca;
+    CHECK(light_while_moving(0.0f) == 1.0f);
+    CHECK(light_while_moving(0.02f) < 1.0f && light_while_moving(0.02f) > light_while_moving(0.05f));
+    CHECK(light_while_moving(10.0f) > 0.0f && light_while_moving(10.0f) == light_while_moving(1.0f));   // a floor, not zero
+
+    // The same green swimmer twice, alone under a steady sun: one always on
+    // the move, one that never sets off. The sitter takes in more light.
+    SimConfig cfg = small_config();
+    cfg.day_length = 0;
+    cfg.light_mode = LightMode::Uniform;
+    cfg.slope_shade = 0.0f;
+    cfg.nutrient_mean = 0.0f;   // nobody breeds
+    Genome roamer = make_luca();
+    roamer.parts.push_back({PartType::Flagellum, 1.0f, 0.0f, 0.0f});
+    roamer.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
+    roamer.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.5f);
+    Genome sitter = roamer;
+    sitter.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), -1.0f);
+    Simulation sim(cfg);
+    const uint64_t a = sim.add_creature(12.5f, 24.5f, 100.0f, roamer);
+    const uint64_t b = sim.add_creature(36.5f, 24.5f, 100.0f, sitter);
+    const double worst = run_audited(sim, 100);
+    const std::size_t ia = find(sim, a), ib = find(sim, b);
+    CHECK(ia < sim.creatures().size() && ib < sim.creatures().size());
+    if (ia < sim.creatures().size() && ib < sim.creatures().size()) {
+        CHECK(sim.creatures().x[ib] == 36.5f);                                    // it really sat still
+        CHECK(sim.creatures().fed_light[ia] < 0.5f * sim.creatures().fed_light[ib]);
+        CHECK(sim.creatures().fed_light[ia] > 0.0f);
+    }
+    CHECK(worst < 1e-4);
+}
+
+// Dormancy: sleeping through the dark saves upkeep, at the price of being
+// helpless and slow to wake.
+void test_dormancy() {
+    using namespace luca;
+    Genome sleeper_g = make_luca();
+    sleeper_g.dormancy = 1.0f;
+    const Phenotype plain = compile_phenotype(make_luca()), sleeper = compile_phenotype(sleeper_g);
+    CHECK(sleeper.upkeep > plain.upkeep);                       // the gene has a price even awake
+
+    LocalEnv night{0.0f, 20.0f, 0.0f}, day{1.0f, 20.0f, 0.0f}, frost{1.0f, -5.0f, 0.0f};
+    CHECK(next_sleep(plain, night, 0.0f) == 0.0f);              // without the gene, never
+    float s = 0.0f;
+    for (int t = 0; t < 30; ++t) s = next_sleep(sleeper, night, s);
+    CHECK(s == 1.0f);                                           // asleep within half an hour of dusk
+    int waking = 0;
+    for (; s > 0.0f && waking < 1000; ++waking) s = next_sleep(sleeper, day, s);
+    CHECK(waking > 60);                                         // and slow to wake
+    CHECK(next_sleep(sleeper, frost, 0.0f) > 0.0f);             // cold sends it under too, even by day
+    Genome dozer_g = make_luca();
+    dozer_g.dormancy = 0.4f;
+    s = 0.0f;
+    for (int t = 0; t < 100; ++t) s = next_sleep(compile_phenotype(dozer_g), night, s);
+    CHECK(std::abs(s - 0.4f) < 1e-6f);                          // never deeper than its gene allows
+    CHECK(cost_while_asleep(0.0f) == 1.0f && cost_while_asleep(1.0f) < 0.2f);
+
+    // Two bodies through one night and morning. Nobody breeds (no soil matter).
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;
+    cfg.light_mode = LightMode::Uniform;
+    cfg.slope_shade = 0.0f;
+    Simulation sim(cfg);
+    const uint64_t a = sim.add_creature(12.5f, 24.5f, 300.0f, sleeper_g);
+    const uint64_t b = sim.add_creature(36.5f, 24.5f, 300.0f, make_luca());
+    const int dusk = cfg.day_length / 2, dawn = cfg.day_length;
+    double worst = 0.0;
+    for (int t = 0; t < dusk + 60; ++t) sim.step();             // into the night
+    std::size_t ia = find(sim, a), ib = find(sim, b);
+    CHECK(sim.creatures().sleep[ia] == 1.0f && sim.creatures().sleep[ib] == 0.0f);
+    const float ea = sim.creatures().energy[ia], eb = sim.creatures().energy[ib];
+    const uint32_t age_a = sim.creatures().age[ia], age_b = sim.creatures().age[ib];
+    worst = run_audited(sim, 150);                              // deep night
+    ia = find(sim, a); ib = find(sim, b);
+    const float spent_a = ea - sim.creatures().energy[ia], spent_b = eb - sim.creatures().energy[ib];
+    CHECK(spent_a > 0.0f && spent_a < 0.25f * spent_b);         // the sleeper burned far less
+    CHECK(sim.creatures().age[ia] - age_a < (sim.creatures().age[ib] - age_b) / 4);   // and barely aged
+    CHECK(worst < 1e-4);
+    // The first stretch of morning: the sleeper is still coming round and catches less light.
+    while (sim.tick() < static_cast<uint64_t>(dawn)) sim.step();
+    ia = find(sim, a); ib = find(sim, b);
+    const float la = sim.creatures().fed_light[ia], lb = sim.creatures().fed_light[ib];
+    for (int t = 0; t < 70; ++t) sim.step();
+    ia = find(sim, a); ib = find(sim, b);
+    CHECK(sim.creatures().fed_light[ib] - lb > 0.0f);
+    CHECK(sim.creatures().fed_light[ia] - la < 0.6f * (sim.creatures().fed_light[ib] - lb));
+
+    // Helpless: a sleeping mouth pulls nothing from the body it touches.
+    Genome mouth = with_part(PartType::Absorber, 1.5f);
+    mouth.dormancy = 1.0f;
+    Simulation dark(cfg);
+    dark.add_creature(24.2f, 6.0f, 200.0f, mouth);
+    dark.add_creature(24.6f, 6.0f, 300.0f, make_luca());
+    for (int t = 0; t < dusk + 60; ++t) dark.step();
+    double eaten = 0.0;
+    for (int t = 0; t < 100; ++t) {
+        dark.step();
+        eaten += dark.last_stats().eaten_living;
+    }
+    CHECK(eaten == 0.0);
+}
+
+// Poison: a body that costs its eater energy for every unit drained.
+void test_poison() {
+    using namespace luca;
+    Genome toxic_g = make_luca();
+    toxic_g.parts.push_back({PartType::Poison, 1.0f, 0.0f, 0.0f});
+    const Phenotype plain = compile_phenotype(make_luca()), toxic = compile_phenotype(toxic_g);
+    CHECK(plain.toxicity == 0.0f && toxic.toxicity > 0.7f);     // dearer to eat than a meal is worth
+    CHECK(toxic.upkeep > plain.upkeep + 0.1f);                  // and dear to carry
+    CHECK(toxic.membrane == plain.membrane);                    // it does not stop the bite, unlike armour
+    Genome reeking = toxic_g;
+    reeking.parts[1].size = 4.0f;
+    CHECK(compile_phenotype(reeking).toxicity == 2.0f);         // capped
+
+    // The same hunter beside a plain LUCA and beside a poisonous one.
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;   // nobody breeds
+    cfg.day_length = 0;
+    const Genome hunter_g = with_part(PartType::Absorber, 1.5f);
+    auto feed = [&](const Genome& prey, double& poison_paid, double& worst) {
+        Simulation sim(cfg);
+        const uint64_t h = sim.add_creature(24.2f, 6.0f, 200.0f, hunter_g);
+        sim.add_creature(24.6f, 6.0f, 300.0f, prey);
+        double start = sim.stored_energy(), in = 0, out = 0;
+        poison_paid = 0.0;
+        for (int t = 0; t < 40; ++t) {
+            sim.step();
+            poison_paid += sim.last_stats().out_poison;
+            in += sim.last_stats().energy_in;
+            out += sim.last_stats().energy_out;
+        }
+        worst = std::abs(sim.stored_energy() - (start + in - out)) / sim.stored_energy();
+        const std::size_t i = find(sim, h);
+        return i < sim.creatures().size() ? sim.creatures().energy[i] : 0.0f;
+    };
+    double paid_plain = 0, paid_toxic = 0, audit_plain = 0, audit_toxic = 0;
+    const float fed = feed(make_luca(), paid_plain, audit_plain);
+    const float sick = feed(toxic_g, paid_toxic, audit_toxic);
+    CHECK(paid_plain == 0.0 && paid_toxic > 0.0);
+    CHECK(fed > 200.0f);                 // an ordinary meal leaves the hunter richer
+    CHECK(sick < 200.0f && sick < fed);  // a poisonous one leaves it poorer than not eating at all
+    CHECK(audit_plain < 1e-5 && audit_toxic < 1e-5);   // and the burned energy is on the books
+}
+
 void test_species() {
     using namespace luca;
 
@@ -741,6 +888,9 @@ int main() {
     test_terrain_shade_and_wash();
     test_feeding_genes_and_kin_sense();
     test_evolving_brain();
+    test_moving_costs_sunlight();
+    test_dormancy();
+    test_poison();
     test_species();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;

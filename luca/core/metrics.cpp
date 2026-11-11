@@ -20,6 +20,7 @@ void IntervalTotals::add(const TickStats& s) {
     out_transfer += s.out_transfer;
     out_decay    += s.out_decay;
     out_waste    += s.out_waste;
+    out_poison   += s.out_poison;
     eaten_living += s.eaten_living;
     eaten_dead   += s.eaten_dead;
     births       += s.births;
@@ -38,7 +39,7 @@ bool MetricsWriter::open(const std::string& path) {
             "ms_per_tick,"
             "out_transfer,out_decay,out_waste,eaten_living,eaten_dead,"
             "producers,hunters,scavengers,mixed,movers,sighted,armoured,"
-            "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons\n";
+            "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison\n";
     return true;
 }
 
@@ -51,6 +52,8 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     double photo_b = 0, photo_d = 0, sum_speed = 0, sum_absorb = 0, sum_armour = 0, sum_throw = 0, sum_bite = 0, sum_digest = 0, sum_neurons = 0, sum_links = 0;
     std::size_t brains = 0;
     int max_neurons = 0;
+    double sum_dormancy = 0;
+    std::size_t asleep = 0;
     std::size_t nb = 0, nd = 0;
     uint32_t max_gen = 0;
     std::unordered_set<uint32_t> lineages;
@@ -67,6 +70,8 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
         sum_throw += c.pheno[i].throw_range;
         sum_bite += c.genome[i].bite;
         sum_digest += c.genome[i].digestion;
+        sum_dormancy += c.genome[i].dormancy;
+        asleep += c.sleep[i] >= DEEP_SLEEP ? 1 : 0;
         if (c.pheno[i].has_brain) {   // brains that are actually running
             ++brains;
             sum_neurons += c.brain[i].hidden;
@@ -107,7 +112,8 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
          << sim.species().living() << ',' << sim.species().living_established() << ',' << sum_throw * inv << ','
          << sum_bite * inv << ',' << sum_digest * inv << ','
          << brains << ',' << (brains ? sum_neurons / static_cast<double>(brains) : 0.0) << ','
-         << (brains ? sum_links / static_cast<double>(brains) : 0.0) << ',' << max_neurons << '\n';
+         << (brains ? sum_links / static_cast<double>(brains) : 0.0) << ',' << max_neurons << ','
+         << sum_dormancy * inv << ',' << asleep << ',' << k.poisonous << ',' << t.out_poison << '\n';
     out_.flush();
     return audit;
 }
@@ -116,7 +122,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
     std::ofstream f(path);
     if (!f) return false;
     f << "x,y,energy,age,lineage,generation,core_radius,photo,parts,pigment,"
-         "absorber,flagellum,legs,sensor,armour,storage,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links\n";
+         "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy\n";
     const Creatures& c = sim.creatures();
     for (std::size_t i = 0; i < c.size(); ++i) {
         const Genome& g = c.genome[i];
@@ -126,7 +132,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
           << g.pigment;
         for (int t = 1; t < static_cast<int>(PartType::Count); ++t) f << ',' << c.pheno[i].part_total[t];
         f << ',' << c.pheno[i].max_speed << ',' << c.fed_light[i] << ',' << c.fed_living[i] << ',' << c.fed_dead[i] << ',' << c.species[i] << ',' << g.seed_throw << ',' << g.bite << ',' << g.digestion << ','
-          << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << '\n';
+          << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << '\n';
     }
     return true;
 }
@@ -135,7 +141,7 @@ bool write_species_table(const Simulation& sim, const std::string& path) {
     std::ofstream f(path);
     if (!f) return false;
     f << "id,name,parent,born_tick,extinct_tick,population,peak,established,"
-         "core_radius,photo,absorber,flagellum,legs,sensor,armour,storage,brain\n";
+         "core_radius,photo,absorber,flagellum,legs,sensor,armour,storage,poison,brain\n";
     for (const Species& s : sim.species().all()) {
         f << s.id << ',' << s.name << ',';
         if (s.parent != NO_SPECIES) f << s.parent;

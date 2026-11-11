@@ -20,6 +20,7 @@ constexpr float W_SHARE     = 1.0f;
 constexpr float W_THROW     = 0.4f;   // per cell of seed-throwing range
 constexpr float W_BITE      = 0.8f;   // per unit of bite
 constexpr float W_DIGESTION = 2.0f;   // none to full is 0..1
+constexpr float W_DORMANCY  = 1.5f;   // never sleeps to sleeps fully is 0..1
 constexpr float W_PART_KIND = 0.6f;   // one has a kind of part the other lacks entirely
 constexpr float W_PART_SIZE = 0.5f;   // per unit of total size of one kind
 constexpr float W_BRAIN     = 0.4f;   // one has a brain, the other none
@@ -56,6 +57,7 @@ float genome_distance(const Genome& a, const Genome& b) {
     term(W_THROW,     a.seed_throw - b.seed_throw);
     term(W_BITE,      a.bite - b.bite);
     term(W_DIGESTION, a.digestion - b.digestion);
+    term(W_DORMANCY,  a.dormancy - b.dormancy);
 
     const PartSums pa = sum_parts(a), pb = sum_parts(b);
     for (int t = 0; t < NUM_TYPES; ++t) {
@@ -191,9 +193,9 @@ std::string species_name(uint32_t id) {
 
 std::string describe_difference(const Genome& child, const Genome& parent) {
     static const char* const noun[NUM_TYPES] = {"a sun patch", "a mouth", "a tail", "legs",
-                                                "an eye", "armour", "a fat store"};
+                                                "an eye", "armour", "a fat store", "poison"};
     static const char* const lost[NUM_TYPES] = {"its sun patch", "its mouth", "its tail", "its legs",
-                                                "its eyes", "its armour", "its fat store"};
+                                                "its eyes", "its armour", "its fat store", "its poison"};
     const PartSums c = sum_parts(child), p = sum_parts(parent);
     for (int t = 0; t < NUM_TYPES; ++t)
         if (c.size[t] > 0.0f && p.size[t] <= 0.0f) return std::string("has grown ") + noun[t];

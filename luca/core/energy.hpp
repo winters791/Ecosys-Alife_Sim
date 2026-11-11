@@ -29,6 +29,27 @@ struct LocalEnv {
 // Light energy this creature tries to absorb this tick (before sharing).
 float light_demand(const Phenotype& p, const LocalEnv& env);
 
+// Sunbathing and moving conflict: the fraction of its light a body still
+// catches after covering `moved` world units last tick. 1 when it sat still.
+float light_while_moving(float moved);
+
+// --- Dormancy --------------------------------------------------------------------
+// A body with the dormancy gene shuts down when it is dark, or colder than it
+// can bear. `sleep` runs from 0 (awake) up to the depth its gene allows.
+// Asleep it burns far less, but it is helpless in proportion: it catches no
+// light, cannot pull on anything, cannot move or breed, and it ages slowly.
+// Falling asleep is quick and waking is slow, so a sleeper misses the dawn.
+// Its membrane is unchanged: anything with a mouth can still drain it.
+
+// How asleep the body is after this tick, given how asleep it was.
+float next_sleep(const Phenotype& p, const LocalEnv& env, float sleep);
+// Fraction of its upkeep and thermal cost a body still pays at this depth.
+float cost_while_asleep(float sleep);
+// Below this a body counts as awake: it may move and breed.
+constexpr float AWAKE = 0.1f;
+// Deeper than this it ages at an eighth of the usual pace.
+constexpr float DEEP_SLEEP = 0.5f;
+
 // Cost of existing. Bodies wear out, so it creeps up with age.
 float upkeep_cost(const Phenotype& p, uint32_t age);
 

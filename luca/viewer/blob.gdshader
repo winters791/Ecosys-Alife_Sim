@@ -10,7 +10,7 @@
 //   MODEL_MATRIX[2].xyz = (storage, heading x, heading z)
 //   MODEL_MATRIX[3].xyz = position (x, z); y carries the species hue, 0..1
 //   COLOR               = (pigment, photo cover, energy fullness, speed)
-//   INSTANCE_CUSTOM     = (phase, shape gene 0, shape gene 1, shape gene 2)
+//   INSTANCE_CUSTOM     = (phase, shape gene 0, shape gene 1, poison)
 //
 // What each part looks like:
 //   photo      green pixels spreading over the skin
@@ -20,6 +20,7 @@
 //   sensor     an eye (two when the sensor is large)
 //   armour     thick grey plates around the rim
 //   storage    a pale yellow fat spot in the middle
+//   poison     bright violet warts scattered over the skin
 shader_type spatial;
 render_mode unshaded, skip_vertex_transform, cull_disabled;
 
@@ -27,13 +28,15 @@ uniform float px_size = 0.125;       // world units per sprite pixel (shared wit
 uniform float px_per_radius = 4.5;   // sprite pixels per unit of core radius
 uniform float extent = 128.0;
 uniform vec3 tint = vec3(1.0);       // day / night
+uniform float poison_test = 0.0;      // testing only: draw every body as if it carried this much poison
 uniform bool by_species = false;     // paint skin in the species colour instead of the pigment
 
 varying vec2 px;                     // this fragment, in sprite pixels from the centre
 varying flat vec4 traits;            // pigment, photo, fullness, speed
 varying flat vec4 body;              // radius in pixels, absorber, flagellum, legs
 varying flat vec4 extra;             // sensor, armour, storage, phase
-varying flat vec3 shape;
+varying flat vec2 shape;
+varying flat float poison;
 varying flat vec2 heading;
 varying flat float species_hue;
 
@@ -49,7 +52,8 @@ void vertex() {
 
 	traits = COLOR;
 	species_hue = origin.y;
-	shape = clamp(INSTANCE_CUSTOM.yzw, -1.0, 1.0);
+	shape = clamp(INSTANCE_CUSTOM.yz, -1.0, 1.0);
+	poison = INSTANCE_CUSTOM.w + poison_test;
 	// Fat is visible: a full blob is plump, a starving one has shrunk.
 	float radius = max(a.x, 0.05) * px_per_radius * mix(0.85, 1.1, traits.b);
 	body = vec4(radius, a.y, a.z, b.x);
@@ -80,8 +84,7 @@ void fragment() {
 	// Body outline: a disc with lumps from the shape genes, breathing a little.
 	float ang = atan(p.y, p.x);
 	float lump = 1.0 + 0.16 * shape.x * cos(2.0 * ang + phase)
-	                 + 0.12 * shape.y * cos(3.0 * ang + phase * 1.7)
-	                 + 0.08 * shape.z * cos(5.0 * ang);
+	                 + 0.12 * shape.y * cos(3.0 * ang + phase * 1.7);
 	float rad = body.x * lump + 0.3 * sin(TIME * 1.6 + phase);
 	float d = length(p);
 
@@ -128,6 +131,14 @@ void fragment() {
 		// so the body still reads as one colour from a distance.
 		if (hash(p + floor(phase * 10.0)) < traits.g * 0.95)
 			col = by_species ? skin * 0.78 : mix(vec3(0.16, 0.45, 0.16), vec3(0.36, 0.72, 0.22), traits.b);
+
+		// Poison: violet warts, a few even on a faintly poisonous body. They sit
+		// on a coarse grid so they read as spots, not noise, and never flicker.
+		if (poison > 0.0) {
+			vec2 wart = floor(p * 0.5);
+			if (hash(wart + floor(phase * 7.0) + 31.0) < 0.10 + min(poison, 2.0) * 0.16)
+				col = mod(wart.x + wart.y, 2.0) < 1.0 ? vec3(0.78, 0.30, 0.95) : vec3(0.52, 0.16, 0.72);
+		}
 
 		// Rim, or armour plates if it has them.
 		float plate = extra.y > 0.0 ? 1.0 + min(extra.y * 2.5, 2.0) : 0.0;

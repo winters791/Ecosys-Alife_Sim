@@ -13,6 +13,7 @@ const char* part_name(PartType t) {
         case PartType::Sensor:    return "sensor";
         case PartType::Armour:    return "armour";
         case PartType::Storage:   return "storage";
+        case PartType::Poison:    return "poison";
         default:                  return "unknown";
     }
 }
@@ -69,6 +70,7 @@ void clamp_genome(Genome& g) {
     g.seed_throw        = std::clamp(g.seed_throw, 0.0f, MAX_THROW);
     g.bite              = std::clamp(g.bite, 0.0f, MAX_BITE);
     g.digestion         = std::clamp(g.digestion, 0.0f, 1.0f);
+    g.dormancy          = std::clamp(g.dormancy, 0.0f, 1.0f);
     if (g.parts.size() > static_cast<std::size_t>(MAX_PARTS)) g.parts.resize(MAX_PARTS);
     for (Part& p : g.parts) {
         if (static_cast<int>(p.type) >= static_cast<int>(PartType::Count)) p.type = PartType::Photo;

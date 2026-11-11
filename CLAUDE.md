@@ -210,6 +210,7 @@ Creatures are soft blobs on a heightmap world with cliffs, valleys and climates.
 | Eyespot / sensor | Sensing range | Dark dots; bigger = longer range | Cliffs and ridges block line of sight |
 | Armour | Resists absorption | Darker matte plates | Adds weight; climbing costs more |
 | Storage | Fat reserves | Blob visibly swells | Survives winters and scarcity |
+| Poison | Costs whatever drains the body energy | Violet warts on the skin | — |
 | Pigment | Heat absorption | Skin colour, light to dark | Dark: good in cold, bad in hot |
 
 - **Colour is a real trait.** Dark lineages should emerge in cold highlands and pale ones in hot lowlands, so colours mean something and the world is readable from a distance.
@@ -235,7 +236,7 @@ Creatures are soft blobs on a heightmap world with cliffs, valleys and climates.
 
 - **The sprite is drawn from the body, not stored.** Each creature is one quad; `blob.gdshader` paints its pixels from the creature's numbers (radius, shape genes, pigment, part sizes, heading, fullness). No per-creature texture or mesh, so ten thousand creatures are still one draw call and a body that evolves a new part simply starts being drawn with it.
 - **One pixel grid for everything:** 8 pixels to a cell (`PX_SIZE`), shared by the ground and the sprites, and sprites snap to it.
-- **What each part looks like:** photo = green pixels over the skin; absorber = a dark red mouth on the leading edge (teeth when large); flagellum = a wiggling tail; legs = stubs that step; sensor = an eye (two when large); armour = grey plates round the rim; storage = a pale fat spot. Pigment is skin colour, fullness is body size, shape genes are lumps in the outline.
+- **What each part looks like:** poison = violet warts scattered over the skin; photo = green pixels over the skin; absorber = a dark red mouth on the leading edge (teeth when large); flagellum = a wiggling tail; legs = stubs that step; sensor = an eye (two when large); armour = grey plates round the rim; storage = a pale fat spot. Pigment is skin colour, fullness is body size, shape genes are lumps in the outline.
 - **Zoom is in whole screen pixels per sprite pixel** where it can be, so the art stays crisp.
 
 ### 6.5 Architecture
@@ -307,6 +308,7 @@ Creature files export the genome only.
 | `offspring_share` | Energy fraction given to child | Same r/K trade-off from the parent's side |
 | `bite` | Drains the living faster: pull × (1 + bite), up to ×4 (LUCA: 0) | Upkeep 0.06 per unit, paid whether or not there is anything to bite |
 | `digestion` | Keeps more of a meal, living or dead: 70% up to 95% (LUCA: 0) | Upkeep up to 0.10 |
+| `dormancy` | How deeply it sleeps through dark and cold, 0 to 1 (LUCA: 0) | A little upkeep always; asleep it is helpless, and it wakes slowly, so it misses the dawn |
 | `seed_throw` | How far a child can be flung, in cells (LUCA: 0) | Upkeep per cell of range, plus energy ∝ child mass × distance² for every throw |
 | `parts` | Body modules | Each adds mass and upkeep |
 | `brain` | Hidden neuron count and a list of weighted links, both evolved | Empty for LUCA; every neuron, link and unit of weight costs upkeep |
@@ -441,6 +443,9 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
   - **Layout:** `compile_brain()` turns the genome into a fixed-size `BrainPlan`; `think()` runs it. Plans and hidden state live in their own arrays in `Creatures`, off the hot path; only movers read them.
 - **Danger / kin sense (2026-11-11):** three brain outputs, felt only with a sensor. Each body within two cells pulls or pushes the creature by `OUT_KIN` if it is the same species, `OUT_BIGGER` × how much bigger it is (negative when smaller), and `OUT_MOVING` × how fast it moved last tick; nearer and heavier bodies count for more. Nothing says which bodies are enemies: the weights start as noise and evolve. It walks the spatial grid, so the cost is bounded by local crowding. **This is the one rule that reads species ids**, so `SPECIES_THRESHOLD` and the distance weights now touch behaviour.
 - **Optional traits (`seed_throw`, `bite`, `digestion`)** stay at exactly 0 until a rarer mutation switches them on (`P_NEW_TRAIT`), and are lost again below a sliver. A plain nudge bounced off zero and left every lineage paying upkeep for a little of each.
+- **Sunbathing and moving conflict (2026-11-11):** a body's light demand is multiplied by `light_while_moving(moved)`: 1 if it sat still last tick, falling in proportion to 0.2 at a stride of 0.08 world units or more (`MOVING_SHADE` 0.8, `FULL_STRIDE`, in `energy.cpp`). It applies before the canopy shares light out.
+- **Dormancy (2026-11-11):** each creature has a `sleep` level, 0 awake to 1. With the `dormancy` gene it climbs by 1/20 a tick, up to the gene's value, whenever its cell is dark or colder than its comfort range, and drops by 1/90 a tick otherwise (quick to sleep, slow to wake). At sleep `s` a body pays (1 − 0.9 s) of its upkeep and thermal cost, catches (1 − s) of its light and pulls (1 − s) as hard on the living and the dead. Above 0.1 it cannot move or breed; at 0.5 or more it ages at an eighth of the usual pace. Its membrane is unchanged, so it can be eaten in its sleep. Rules are `next_sleep` and `cost_while_asleep` in `energy.cpp`; `dormancy` is an optional trait like `bite`.
+- **Poison (2026-11-11):** a new part type. A body's `toxicity` is its total poison size, capped at 2. Whatever drains it loses `toxicity` × the energy drained, as heat (`out_poison` in `TickStats`), paid out of what it holds, so a poisonous meal can cost more than it gives (a meal returns 70%). Poison is light (0.1 mass per unit) but dear to keep (0.12 upkeep per unit), and unlike armour does not slow the bite. It works on living bodies only: a poisonous body's corpse is safe to eat. Nothing can sense it yet, so eaters cannot learn to avoid it; they are only selected against.
 - **Wear:** upkeep is multiplied by `1 + (age / 5000)²`. Nothing dies of old age as such; an old body costs more than it earns.
 - **Observation only:** `fed_light / fed_living / fed_dead` per creature and `Simulation::census()` count ways of life from real energy flows. Sim logic never reads them.
 - **Species** (`core/species.*`, section 9.3 steps 1 and 2) are labels the game works out; only the kin sense reads them. Every creature carries a species id. A newborn keeps its parent's species unless its genome is further than `SPECIES_THRESHOLD` (1.0) from that species' founder; then it joins a living daughter species that is close enough, or founds a new one. The distance is Euclidean over weighted gene differences (a plain sum made every small drift a species: 164 at once instead of ~27). Shape genes are left out. No randomness is used.
@@ -456,7 +461,7 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
 - **Chronicle detectors so far:** population milestones (1,000, 10,000, ...), a great dying (population halves from its peak), recovery (back to 90%), total extinction.
 - **Felt now (2026-11-11):** `thermal_cost` and `movement_cost` are real, so terrain, heat and climate all reach life: cold or hot ground costs upkeep, and climbing costs energy.
 - **Species in the chronicle:** a new species is logged when 10 are alive at once (*"A new species: Vuman branches from Luca. It is smaller."*), and its extinction if it ever got that far. Names are procedural and unique per id.
-- **Chronicle detectors added 2026-11-11:** first movers, senses, armour, hunters and scavengers (each needs 10 alive at once). A great dying is now judged on each day's peak population, because numbers breathe with day and night.
+- **Chronicle detectors added 2026-11-11:** first movers, senses, armour, poison, hunters and scavengers (each needs 10 alive at once). A great dying is now judged on each day's peak population, because numbers breathe with day and night.
 
 ### 10.6 Viewer (built 2026-11-11, rebuilt as pixel art the same day)
 
@@ -479,7 +484,25 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 
 ### 10.7 Baseline numbers (default settings, 128×128, seed 42, measured 2026-11-11)
 
-**After retuning (`METABOLIC_RATE` 0.75, `AGE_SCALE` 10000) and the evolvable brain (current):**
+**After poison (current):**
+- `--ticks 5000`: 807 creatures, 0.022 ms/tick, audit error ≈ 2e-7.
+- `--ticks 200000`, seeds 42 / 7 / 99: 3,880 / 3,664 / 2,287 creatures; 83 / 88 / 57 established species; 289 / 157 / 74 poisonous; 62 to 92 hunters and 280 to 410 mixed feeders; movers 121 / 150 / 262; mean dormancy 0.35 to 0.41; about 0.13 ms/tick; audit error ≈ 3e-7.
+- First poison in the chronicle at about tick 7,450 (seed 42).
+- `--light uniform --seed 7 --ticks 60000`: 3,826 creatures, 0.186 ms/tick.
+
+**After dormancy, before poison:**
+- `--ticks 5000`: 735 creatures, 0.023 ms/tick, audit error ≈ 2e-7.
+- `--ticks 200000`, seeds 42 / 7 / 99: 1,962 / 2,784 / 3,201 creatures, 14 / 67 / 76 established species, mean dormancy 0.82 / 0.26 / 0.37; about 0.13 ms/tick; audit error ≈ 3e-7.
+- Seed bank check (seed 7, sun −0.35 and climate −12 °C from tick 150,000 to 160,000): 3,080 creatures fell to 43 and 10 species came through; mean dormancy among the living rose from 0.17 before the winter to 0.38 at its end and 0.51 as they recovered.
+- `--light uniform --seed 7 --ticks 60000`: 4,513 creatures, 0.168 ms/tick.
+
+**After the sunbathing-versus-moving rule, before dormancy:**
+- `--ticks 5000`: 876 creatures, 0.020 ms/tick, audit error ≈ 2e-7.
+- `--ticks 200000` (seed 42): holds near 3,000 from tick 40,000 on and ends at 3,191 with 47 established species, about 200 mixed feeders, 20 to 90 hunters, 30 to 70 movers; 0.10 ms/tick; audit error ≈ 3e-7. Mean radius 0.77, mean bite 0.12.
+- Three seeds, last fifth of 200,000 ticks: 3,077 / 2,553 / 1,795 creatures, 45 / 37 / 31 species, 12% of cells occupied. With the rule switched off: 405 / 480 / 1,560 and 9 / 6 / 24. At `MOVING_SHADE` 0.5: 698 / 2,456 / 574. At 1.0: about the same as 0.8, with fewer movers (14 to 20).
+- `--light uniform --seed 7 --ticks 60000`: 4,713 creatures, 0.135 ms/tick.
+
+**After retuning (`METABOLIC_RATE` 0.75, `AGE_SCALE` 10000) and the evolvable brain, before that rule:**
 - `--ticks 5000`: 846 creatures, 0.022 ms/tick, audit error ≈ 2e-7.
 - `--ticks 200000`, seeds 42 / 7 / 99: peaks of 3,000 to 3,500 near tick 40,000; ends at about 400 / 400 / 2,000 creatures with 8 / 4 / 29 established species; 370 to 410 running brains in each; 0.04 to 0.15 ms/tick; audit error ≈ 4e-7.
 - `--light uniform --seed 7 --ticks 60000`: 3,853 creatures, 0.157 ms/tick.
@@ -527,7 +550,7 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 
 ### Good places for Uday to tune (all are single constants)
 
-- `energy.cpp`: `METABOLIC_RATE` (0.75 since the retune), `AGE_SCALE` (10000), `MOVE_COST`, `CLIMB_COST`, `CONTACT_RATE`, `CORPSE_RATE`, `THERMAL_SCALE`; `energy.hpp`: `TRANSFER_EFFICIENCY`, `CORPSE_WEATHERING`.
+- `energy.cpp`: `METABOLIC_RATE` (0.75 since the retune), `AGE_SCALE` (10000), `MOVING_SHADE`, `FULL_STRIDE`, `MOVE_COST`, `CLIMB_COST`, `CONTACT_RATE`, `CORPSE_RATE`, `THERMAL_SCALE`; `energy.hpp`: `TRANSFER_EFFICIENCY`, `CORPSE_WEATHERING`.
 - `phenotype.cpp`: thrust, membrane and armour numbers, capacity, `BODY_ENERGY_PER_MASS`, `BRAIN_COST`, `TOLERANCE_COST`.
 - `energy.cpp`: `SIZE_POWER`, `SIZE_EDGE_MAX` (the size rule at the mouth).
 - `mutation.cpp`: the `P_*` rates, including `P_NEW_TRAIT` and the brain's `P_ADD_LINK`, `P_DEL_LINK`, `P_ADD_NEURON`, `P_DEL_NEURON`.
@@ -544,8 +567,13 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - The world is much emptier since dispersal has to be paid for: about 1,700 creatures at tick 60,000 where there were 4,100, growing in clumps around each founder. A sessile parent also drains its own cell of matter after one child (the body is built from the parent's cell even when the child is flung).
 - **Everything is several times slower since bodies cost 244.** A child costs its parent about twice the sunlight it used to, so generations are slower, the map fills more slowly and evolution takes longer: one established species at tick 60,000, 49 by tick 300,000. This makes "the first ten minutes are slow" worse. Levers, all Uday's: `BODY_ENERGY_PER_MASS`, `METABOLIC_RATE`, `initial_population`.
 - **Washing makes the world poorer, not just patchier.** A parent needs a whole body's worth of free matter in its own cell, so soil that drains off a slope leaves it barren while the hollows hold more than one body per cell can use. At `wash_rate` 0.005 life fell to a quarter; at the current 0.001 a 300,000-tick run holds about 650 creatures and 15 species where it held 2,300 and 49 without the terrain rules. Nothing yet carries matter back uphill (a volcano power, or creatures that carry, would).
+- **Poison holds as a minority defence**: 74 to 289 poisonous bodies (3 to 8% of the world) at tick 200,000 across three seeds, more than armour in two of them. About 1 to 2% of what hunters drain is burned by it.
+- A shape gene's slot in the sprite data now carries poison, so the five-lobed lump from `shape[2]` is no longer drawn.
+- **Dormancy may be too good.** It is selected in every run: by tick 200,000 the mean gene is 0.26 to 0.82 across three seeds, and in one of them nearly every creature sleeps deeply. Little hunts at night yet, so being helpless costs almost nothing. Levers: `DORMANT_SAVING`, `WAKE_UP`, `FALL_ASLEEP` (`energy.cpp`), `DORMANCY_UPKEEP` (`phenotype.cpp`).
+- **Movers took over again in one seed of three** once they could sleep (1,915 of 1,962 creatures at tick 200,000, species down from 26 to 14); the other two seeds reached 67 and 76 species, the most so far.
+- Sleeping bodies look the same as waking ones in the viewer; only the inspector says.
 - **Brains stay small.** Across three 200,000-tick runs hundreds of creatures carry a brain, with about 5 links each, but hidden neurons are rare: usually under 1 brain in 10 has one, the most seen in any brain is 2, and they come and go (one run reached about half of brains with a neuron, then lost them). Thinking costs upkeep and so far a few reflexes are enough. The costs and the structural mutation rates are the levers; so is giving brains more to think about (prey that flees, a day worth planning around).
-- **Movers can take over and thin the world.** With the cheaper metabolism, populations peak near 3,000 to 3,500 around tick 40,000, then fall as movers spread; two of three seeds ended near 400 creatures, almost all of them movers. Moving does not yet cost any sunlight, which is the next TODO (sunbathing and moving conflict) and the likely cure.
+- **Movers no longer take over** (they did before moving cost sunlight: two of three seeds ended near 400 creatures, almost all movers). With the rule, three 200,000-tick runs end at 1,800 to 3,100 creatures and 31 to 45 established species, with movers a steady minority of 30 to 80. At the end of one run the 27 movers carried far more bite (0.42 against a world mean of 0.12) and digestion (0.18 against 0.04) than the rest; a small sample, but the first sign those genes are used. Movers still carry large sun patches, so the plant/animal split is not clean yet.
 - **Bite, digestion and the kin sense have not visibly paid off yet.** (Measured before the retune and the new brain; not re-measured.) After 300,000 ticks mean bite is under 0.1 and digestion under 0.07, hunters number 0 to 5 and movers 0 to 2, so there is almost nobody to use them. Whether anything actually flees or herds has not been measured.
 - **Runs differ a lot by seed**: 310, 451 and 527 creatures at tick 300,000 for seeds 42, 7 and 99. Judge a tuning change on several seeds, not one.
 - Most corpse energy still weathers away uneaten (about 70% in the last 50,000 ticks of a 300,000-tick run), because eaters must be in the same cell and few bodies move.
@@ -597,9 +625,9 @@ These answer points 2 and 3 above. None is built yet. Each is one physical rule 
 
 **More rules (second batch, picked by Uday 2026-11-11)**
 
-- [ ] **Sunbathing and moving conflict.** Light capture drops while a body is moving (section 2.2 always said this; it was never built). Pushes lineages to commit to staying put or to moving: the plant/animal split.
-- [ ] **Dormancy.** A trait that drops upkeep to near zero when it is dark or cold, at the cost of being helpless and slow to wake. A second answer to night and winter besides storing more, and a seed bank after a catastrophe.
-- [ ] **Poison.** A part that makes a body costly to eat: whoever drains it loses energy. Costs upkeep to carry. A different defence from armour; opens the door to warning colours and bluffing once pigment can be sensed.
+- [x] **Sunbathing and moving conflict.** *(built 2026-11-11)* Light capture drops while a body is moving (section 2.2 always said this; it was never built). Pushes lineages to commit to staying put or to moving: the plant/animal split.
+- [x] **Dormancy.** *(built 2026-11-11)* A trait that drops upkeep to near zero when it is dark or cold, at the cost of being helpless and slow to wake. A second answer to night and winter besides storing more, and a seed bank after a catastrophe.
+- [x] **Poison.** *(built 2026-11-11 as a body part)* A part that makes a body costly to eat: whoever drains it loses energy. Costs upkeep to carry. A different defence from armour; opens the door to warning colours and bluffing once pigment can be sensed.
 - [ ] **Gene transfer on contact.** When two bodies touch, a small chance that one part's blueprint is copied across. Reuses the contact rule; lets an invention spread between lineages. A stand-in until sexual reproduction exists. Must use the sim `Rng`.
 - [ ] **Waste.** Living produces a waste chemical in the cell that slowly poisons whatever made it, unless something else absorbs it as food. A second cost of crowding and a niche for cleaners. The smallest useful piece of the chemistry layer (2.1).
 - [ ] **Growing up.** Children are born small and grow by taking in matter, instead of appearing full-size. Young are vulnerable, and many-small versus few-large offspring becomes a real choice. The largest item: it touches the phenotype compiler and the matter books. Best judged once species are visible.

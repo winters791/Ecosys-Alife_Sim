@@ -84,7 +84,7 @@ public:
     //   basis z = (storage, heading x, heading z)
     //   origin  = (x, species hue 0..1, z)   the shader ignores height, so y is free
     //   colour  = (pigment, photo cover, energy fullness, speed)
-    //   custom  = (phase, shape gene 0, shape gene 1, shape gene 2)
+    //   custom  = (phase, shape gene 0, shape gene 1, poison)
     godot::PackedFloat32Array get_instance_buffer(int capacity) const;
 
     // Terrain height under a ground position, smoothly interpolated.

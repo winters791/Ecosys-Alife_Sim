@@ -17,6 +17,7 @@ struct Phenotype {
     float max_speed     = 0.0f;  // world units per tick; 0 = cannot move
     float repro_threshold   = 0.0f;
     float offspring_share   = 0.0f;
+    float dormancy          = 0.0f;  // how deeply it can sleep, 0..1 (see energy.hpp)
     float throw_range       = 0.0f;  // furthest it can fling a child beyond touching, world units
     float thermal_optimum   = 0.0f;
     float thermal_tolerance = 0.0f;
@@ -25,6 +26,7 @@ struct Phenotype {
     // Contact (the one interaction primitive, see energy.hpp)
     float absorb   = 0.0f;   // how hard it pulls energy across a membrane it touches
     float membrane = 0.0f;   // how well its own membrane resists being pulled from
+    float toxicity   = 0.0f; // energy an eater loses per unit of energy it drains from this body
     float bite       = 1.0f; // multiplies its pull on living bodies (1 = plain)
     float efficiency = 0.0f; // fraction of what it pulls, from the living or the dead, that it keeps
 

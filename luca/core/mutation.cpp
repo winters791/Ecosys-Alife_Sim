@@ -111,6 +111,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
     if (rng.chance(P_GENE)) nudge_optional(g.seed_throw, 0.15f, rng);
     if (rng.chance(P_GENE)) nudge_optional(g.bite, 0.10f, rng);
     if (rng.chance(P_GENE)) nudge_optional(g.digestion, 0.05f, rng);
+    if (rng.chance(P_GENE)) nudge_optional(g.dormancy, 0.08f, rng);
     for (float& s : g.shape)
         if (rng.chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
     for (Part& p : g.parts)

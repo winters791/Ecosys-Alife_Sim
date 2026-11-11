@@ -103,6 +103,7 @@ Dictionary LucaWorld::get_census() const {
     d["movers"]     = static_cast<int64_t>(k.movers);
     d["sighted"]    = static_cast<int64_t>(k.sighted);
     d["armoured"]   = static_cast<int64_t>(k.armoured);
+    d["poisonous"]  = static_cast<int64_t>(k.poisonous);
     return d;
 }
 
@@ -246,7 +247,7 @@ PackedFloat32Array LucaWorld::get_instance_buffer(int capacity) const {
         f[16] = hash01(c.id[i]);
         f[17] = g.shape[0];
         f[18] = g.shape[1];
-        f[19] = g.shape[2];
+        f[19] = part(p, luca::PartType::Poison);
     }
     return out;
 }
@@ -376,6 +377,9 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["max_speed"] = p.has_brain ? p.max_speed : 0.0f;
     d["throw_range"] = p.throw_range;
     d["bite"] = p.bite;
+    d["toxicity"] = p.toxicity;
+    d["dormancy"] = p.dormancy;
+    d["sleep"] = c.sleep[who];
     d["brain_neurons"] = p.has_brain ? static_cast<int64_t>(c.brain[who].hidden) : static_cast<int64_t>(-1);
     d["brain_links"] = static_cast<int64_t>(c.brain[who].links);
     d["efficiency"] = p.efficiency;

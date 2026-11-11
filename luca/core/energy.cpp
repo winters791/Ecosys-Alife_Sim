@@ -24,6 +24,20 @@ constexpr float METABOLIC_RATE = 0.75f;  // was 1.0; tuned 2026-11-11 for a full
 // Energy gained per unit of light capture under full sun.
 constexpr float PHOTO_EFFICIENCY = 1.0f;
 
+// A patch only works spread out and held still. A body that covered
+// FULL_STRIDE or more last tick catches just (1 - MOVING_SHADE) of its light;
+// in between it is proportional. This is what makes a lineage choose between
+// staying put in the sun and going to find food.
+constexpr float MOVING_SHADE = 0.8f;
+constexpr float FULL_STRIDE  = 0.08f;  // world units per tick
+
+// Dormancy. A night is about 240 ticks of a 600-tick day, so at full depth a
+// sleeper saves most of a night's upkeep and loses roughly the first hour and
+// a half of morning light while it wakes.
+constexpr float DORMANT_SAVING = 0.9f;        // fraction of upkeep saved at full depth
+constexpr float FALL_ASLEEP    = 1.0f / 20.0f;  // sleep gained per tick while it is dark or too cold
+constexpr float WAKE_UP        = 1.0f / 90.0f;  // sleep lost per tick once it is light and warm enough
+
 // Wear: upkeep is multiplied by 1 + (age / AGE_SCALE)^2. Nothing dies "of old
 // age"; an old body just costs more than it can earn, and its matter is freed.
 constexpr float AGE_SCALE = 10000.0f;  // was 5000: a body now costs 244 to build, so it should last
@@ -56,6 +70,20 @@ constexpr float SIZE_EDGE_MAX = 2.0f;
 
 float light_demand(const Phenotype& p, const LocalEnv& env) {
     return PHOTO_EFFICIENCY * p.light_capture * env.light;
+}
+
+float light_while_moving(float moved) {
+    return 1.0f - MOVING_SHADE * std::min(moved * (1.0f / FULL_STRIDE), 1.0f);
+}
+
+float next_sleep(const Phenotype& p, const LocalEnv& env, float sleep) {
+    if (p.dormancy <= 0.0f) return 0.0f;
+    const bool shut_down = env.light <= 0.0f || env.temperature < p.thermal_optimum - p.thermal_tolerance;
+    return shut_down ? std::min(sleep + FALL_ASLEEP, p.dormancy) : std::max(sleep - WAKE_UP, 0.0f);
+}
+
+float cost_while_asleep(float sleep) {
+    return 1.0f - DORMANT_SAVING * sleep;
 }
 
 float upkeep_cost(const Phenotype& p, uint32_t age) {

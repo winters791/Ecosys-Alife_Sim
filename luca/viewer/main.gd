@@ -19,6 +19,7 @@ extends Node3D
 ##   --demo                   cast a few powers by itself (used for testing)
 ##   --zoom=K --at=X,Z        start zoomed in on a spot (screen pixels per sprite pixel)
 ##   --tree  or --tree=NAME   start with the tree of life open (zoomed in on a species)
+##   --test-poison            draw every body as poisonous (to check the art)
 ##   --species                start with creatures coloured by species
 ##   --warmup=N               run N ticks before the first frame (skip ahead to evolved life)
 
@@ -100,6 +101,7 @@ var warmup := 0
 var start_zoom := -1.0
 var start_at := Vector2(-1, -1)
 var start_tree := false
+var test_poison := false       # draw every body as poisonous, to check the art
 var start_tree_root := ""   # species name to zoom the tree into (testing)
 
 
@@ -114,6 +116,7 @@ func _ready() -> void:
 		elif arg.begins_with("--frames="): shot_frames = int(arg.get_slice("=", 1))
 		elif arg == "--demo": demo = true
 		elif arg == "--species": by_species = true
+		elif arg == "--test-poison": test_poison = true
 		elif arg == "--tree": start_tree = true
 		elif arg.begins_with("--tree="):
 			start_tree = true
@@ -149,6 +152,8 @@ func _ready() -> void:
 	_set_tool(Tool.LOOK)
 	if by_species:
 		(find_child("SpeciesCheck", true, false) as CheckBox).button_pressed = true
+	if test_poison:
+		blob_mat.set_shader_parameter("poison_test", 0.6)
 	if start_tree:
 		_toggle_tree()
 		for i in tree_view.species.size():
@@ -561,7 +566,9 @@ func _show_creature(info: Dictionary) -> void:
 		"Young land touching it" if info["throw_range"] < 0.05 else "Flings its young up to %.1f cells" % info["throw_range"],
 		"Pull %.2f   membrane %.2f   %s" % [info["absorb"], info["membrane"], senses],
 		"No brain" if info["brain_neurons"] < 0 else "Brain: %d hidden neurons, %d links" % [info["brain_neurons"], info["brain_links"]],
+		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
+		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
 		"Comfort %.0f ± %.0f °C" % [info["thermal_optimum"], info["thermal_tolerance"]],
 		"Here: light %.2f, %.1f °C, soil %.1f" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"]],
 		"Parts: " + (", ".join(parts) if parts.size() > 0 else "none"),

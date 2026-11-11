@@ -12,9 +12,9 @@ namespace {  // only visible inside this file
 constexpr int NUM_PARTS = static_cast<int>(PartType::Count);
 
 // Order MUST match the PartType enum in genome.hpp:
-//                                           Photo  Absorber Flagellum Legs  Sensor Armour Storage
-constexpr float MASS_PER_SIZE[NUM_PARTS] = { 0.1f,  0.2f,    0.15f,    0.3f, 0.05f, 0.6f,  0.4f };
-constexpr float COST_PER_SIZE[NUM_PARTS] = { 0.1f,  0.15f,   0.2f,     0.2f, 0.3f,  0.05f, 0.02f };
+//                                           Photo  Absorber Flagellum Legs  Sensor Armour Storage Poison
+constexpr float MASS_PER_SIZE[NUM_PARTS] = { 0.1f,  0.2f,    0.15f,    0.3f, 0.05f, 0.6f,  0.4f,   0.1f };
+constexpr float COST_PER_SIZE[NUM_PARTS] = { 0.1f,  0.15f,   0.2f,     0.2f, 0.3f,  0.05f, 0.02f,  0.12f };
 
 constexpr float BASE_UPKEEP    = 0.3f;
 constexpr float PHOTO_PER_AREA = 1.0f;   // max photo patch size per unit of skin
@@ -31,6 +31,10 @@ constexpr float ARMOUR_RESIST   = 2.0f;  // resistance per unit of armour
 constexpr float ARMOUR_CLOGS    = 0.5f;  // armour also slows the wearer's own absorbing
 constexpr float ARMOUR_SHADES   = 0.5f;  // skin under a plate catches no light
 constexpr float REACH_PER_RADIUS = 0.5f;
+// Poison: light to carry but dear to keep up (see the table above). Unlike
+// armour it does not slow the eater down; it makes the meal cost more than it gives.
+constexpr float TOXICITY_PER_SIZE = 1.0f;  // energy lost per unit drained, per unit of poison part
+constexpr float MAX_TOXICITY      = 2.0f;
 
 // Storage and building.
 constexpr float CAPACITY_PER_VOLUME = 650.0f;   // energy a core blob of radius 1 can hold (450 before bodies cost 244 to build)
@@ -55,6 +59,10 @@ constexpr float THROW_UPKEEP         = 0.015f;  // upkeep per cell of range
 constexpr float BITE_UPKEEP          = 0.06f;   // upkeep per unit of bite (each unit adds the plain pull again)
 constexpr float DIGEST_GAIN          = 0.25f;   // efficiency added at full digestion: 0.70 -> 0.95
 constexpr float DIGEST_UPKEEP        = 0.10f;   // upkeep at full digestion
+
+// Dormancy: the machinery for shutting down costs a little all the time.
+// Its real price is paid in energy.cpp: a sleeper is helpless and slow to wake.
+constexpr float DORMANCY_UPKEEP      = 0.02f;   // upkeep at full depth
 
 // Gene ranges live in genome.hpp (limits::); mutation enforces them through
 // clamp_genome(). The clamps below are a second line of defence for genomes
@@ -122,6 +130,7 @@ Phenotype compile_phenotype(const Genome& g) {
     const float seed_throw     = std::clamp(g.seed_throw, 0.0f, limits::MAX_THROW);
     const float bite           = std::clamp(g.bite, 0.0f, limits::MAX_BITE);
     const float digestion      = std::clamp(g.digestion, 0.0f, 1.0f);
+    const float dormancy       = std::clamp(g.dormancy, 0.0f, 1.0f);
 
     // A brain only exists if there is something for it to drive.
     // Its price grows with its size: neurons, links and the strength of the links.
@@ -137,10 +146,11 @@ Phenotype compile_phenotype(const Genome& g) {
     p.mass         = mass;
     p.radius       = r;
     p.throw_range  = seed_throw;
+    p.dormancy     = dormancy;
     p.surface_area = r * r;
     p.upkeep       = BASE_UPKEEP * std::pow(mass, 0.75f) + part_upkeep  // Kleiber + parts
                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
-                   + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP;
+                   + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP;
     // LUCA (r = 1, one photo patch of size 1): mass 1.1, upkeep ≈ 0.42 + 0.04 for its ±10 °C.
 
     // --- 4. Light capture: patches need skin to sit on, and plates cover skin
@@ -165,6 +175,7 @@ Phenotype compile_phenotype(const Genome& g) {
     p.absorb   = absorber_total / (1.0f + ARMOUR_CLOGS * armour_total);
     p.membrane = MEMBRANE_BASE + ARMOUR_RESIST * armour_total;
     p.reach    = REACH_PER_RADIUS * r;
+    p.toxicity = std::min(TOXICITY_PER_SIZE * p.part_total[static_cast<int>(PartType::Poison)], MAX_TOXICITY);
     p.bite       = 1.0f + bite;
     p.efficiency = TRANSFER_EFFICIENCY + DIGEST_GAIN * digestion;
 

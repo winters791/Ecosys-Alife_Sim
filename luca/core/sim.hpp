@@ -30,6 +30,7 @@ struct TickStats {
     double out_transfer    = 0.0;  // lost crossing membranes (1 - TRANSFER_EFFICIENCY)
     double out_decay       = 0.0;  // corpses weathering away uneaten
     double out_waste       = 0.0;  // taken in by a body already full
+    double out_poison      = 0.0;  // burned by eaters dealing with a poisonous meal
     // Energy that changed hands inside the world (not part of in/out):
     double eaten_living    = 0.0;  // arrived from living bodies
     double eaten_dead      = 0.0;  // arrived from corpses
@@ -47,6 +48,7 @@ struct Census {
     std::size_t movers = 0;       // can move
     std::size_t sighted = 0;      // has a sensor
     std::size_t armoured = 0;
+    std::size_t poisonous = 0;
 };
 
 class Simulation {
@@ -141,7 +143,7 @@ private:
     uint64_t    day_seen_ = 0;
     bool        extinct_logged_ = false;
     bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false;
-    bool        sighted_logged_ = false, armoured_logged_ = false;
+    bool        sighted_logged_ = false, armoured_logged_ = false, poisonous_logged_ = false;
 
     // Scratch buffers, reused every tick to avoid allocation.
     std::vector<int>   cell_of_;
@@ -154,7 +156,7 @@ private:
     std::vector<float> wash_;                // per cell: matter on its way downhill
     std::vector<float> cell_corpse_demand_;  // per cell
     std::vector<float> corpse_want_, corpse_gain_;
-    std::vector<float> drain_want_, drained_, intake_;
+    std::vector<float> drain_want_, drained_, intake_, poisoned_;
     struct Contact { uint32_t taker, giver; float flow; };
     std::vector<Contact> contacts_;
     struct Near { float x, y, reach; uint32_t who; };  // one creature, in cell order

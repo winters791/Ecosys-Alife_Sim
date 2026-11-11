@@ -245,6 +245,7 @@ void Simulation::step() {
     drain_want_.assign(n, 0.0f);
     drained_.assign(n, 0.0f);
     intake_.assign(n, 0.0f);
+    poisoned_.assign(n, 0.0f);
 
     // --- Phase 0: bin creatures into cells; living mass per cell --------------
     std::fill(biomass_.begin(), biomass_.end(), 0.0f);
@@ -261,10 +262,11 @@ void Simulation::step() {
     for (std::size_t i = 0; i < n; ++i) {
         const Phenotype& p = c_.pheno[i];
         const int cell = cell_of_[i];
-        demand_[i] = dark ? 0.0f : std::max(0.0f, light_demand(p, world_.env(cell)));
+        // A body on the move catches less light (it moved last tick; see energy.cpp).
+        demand_[i] = dark ? 0.0f : std::max(0.0f, light_demand(p, world_.env(cell)) * light_while_moving(c_.moved[i]) * (1.0f - c_.sleep[i]));
         gain_[i] = demand_[i];
         cell_demand_[cell] += demand_[i];
-        corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) : 0.0f;
+        corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
         cell_corpse_demand_[cell] += corpse_want_[i];
     }
 
@@ -297,7 +299,7 @@ void Simulation::step() {
                     const float ddx = q.x - px, ddy = q.y - py;
                     const float reach = std::min(p.reach + q.reach, MAX_REACH);
                     if (ddx * ddx + ddy * ddy > reach * reach || q.who == i) continue;
-                    const float flow = contact_flow(p, c_.pheno[q.who]);
+                    const float flow = contact_flow(p, c_.pheno[q.who]) * (1.0f - c_.sleep[i]);
                     if (flow <= 0.0f) continue;
                     contacts_.push_back({static_cast<uint32_t>(i), q.who, flow});
                     drain_want_[q.who] += flow;
@@ -319,15 +321,17 @@ void Simulation::step() {
             corpse_gain_[i] = corpse_want_[i] * (want > have ? have / want : 1.0f);
         }
 
-        cost_upkeep_[i]  = std::max(0.0f, upkeep_cost(p, c_.age[i]));
-        cost_thermal_[i] = std::max(0.0f, thermal_cost(p, env));
+        // A dormant body burns less, whatever the weather.
+        const float burning = cost_while_asleep(c_.sleep[i]);
+        cost_upkeep_[i]  = std::max(0.0f, upkeep_cost(p, c_.age[i]) * burning);
+        cost_thermal_[i] = std::max(0.0f, thermal_cost(p, env) * burning);
 
         new_x_[i] = c_.x[i];
         new_y_[i] = c_.y[i];
         new_hx_[i] = c_.hx[i];
         new_hy_[i] = c_.hy[i];
         cost_move_[i] = 0.0f;
-        if (p.has_brain && p.max_speed > 0.0f) decide_movement(i, cell, env);
+        if (p.has_brain && p.max_speed > 0.0f && c_.sleep[i] < AWAKE) decide_movement(i, cell, env);
     }
 
     // --- Phase 2a: flows between touching bodies ------------------------------
@@ -338,6 +342,8 @@ void Simulation::step() {
         const float amount = want > have ? k.flow * (have / want) : k.flow;
         drained_[k.giver] += amount;
         intake_[k.taker] += amount;
+        // A poisonous body costs its eater energy for every unit taken.
+        poisoned_[k.taker] += amount * c_.pheno[k.giver].toxicity;
     }
 
     // --- Phase 2b: apply ------------------------------------------------------
@@ -347,6 +353,7 @@ void Simulation::step() {
         const Phenotype& p = c_.pheno[i];
         const int cell = cell_of_[i];
         float e = std::max(0.0f, c_.energy[i] - drained_[i]);
+        const LocalEnv env_here = world_.env(cell);
 
         // In: light, the living, the dead.
         const float from_living = intake_[i] * p.efficiency;
@@ -375,6 +382,14 @@ void Simulation::step() {
         c_.fed_living[i] += from_living;
         c_.fed_dead[i] += from_dead;
 
+        // Poison: paid out of whatever it now holds; it can cost more than the meal gave.
+        if (poisoned_[i] > 0.0f) {
+            const float burned = std::min(poisoned_[i], e);
+            e -= burned;
+            stats_.out_poison += burned;
+            stats_.energy_out += burned;
+        }
+
         // A full body can't hold more; the surplus is lost as heat.
         if (e > p.energy_capacity) {
             const float waste = e - p.energy_capacity;
@@ -400,7 +415,10 @@ void Simulation::step() {
         c_.y[i] = new_y_[i];
         c_.hx[i] = new_hx_[i];
         c_.hy[i] = new_hy_[i];
-        c_.age[i] += 1;
+        // A deep sleeper ages at an eighth of the usual pace; then sleep deepens
+        // or lifts for the next tick.
+        if (c_.sleep[i] < DEEP_SLEEP || (tick_ & 7u) == 0) c_.age[i] += 1;
+        c_.sleep[i] = next_sleep(p, env_here, c_.sleep[i]);
 
         if (e <= 0.0f) {
             // Death: the body stays where it fell, as matter and as food.
@@ -417,7 +435,7 @@ void Simulation::step() {
         // A body tries once every 8 ticks: when the soil is nearly bare a
         // failed try (mutate, compile, find the child too heavy) would
         // otherwise be repeated by every ready parent on every tick.
-        if (e >= p.repro_threshold && (c_.age[i] & 7u) == 0 && soil_.nutrient[cell] >= p.mass * 0.75f) {
+        if (e >= p.repro_threshold && (c_.age[i] & 7u) == 0 && c_.sleep[i] < AWAKE && soil_.nutrient[cell] >= p.mass * 0.75f) {
             Genome g = mutate(c_.genome[i], rng_);
             const Phenotype cp = compile_phenotype(g);
             // Dispersal is paid for: a child lands touching its parent, unless
@@ -558,6 +576,7 @@ void Simulation::take_census() {
         if (p.has_brain && p.max_speed > 0.0f) ++k.movers;
         if (p.sense_cells > 0) ++k.sighted;
         if (p.part_total[static_cast<int>(PartType::Armour)] > 0.0f) ++k.armoured;
+        if (p.toxicity > 0.0f) ++k.poisonous;
         const float l = c_.fed_light[i], v = c_.fed_living[i], d = c_.fed_dead[i];
         const float total = l + v + d;
         if (total < 20.0f)           ++k.young;
@@ -592,6 +611,7 @@ void Simulation::detect_events() {
     first(movers_logged_, census_.movers, "Something stirs: creatures have begun to move.");
     first(sighted_logged_, census_.sighted, "The first senses: some creatures can now feel what lies around them.");
     first(armoured_logged_, census_.armoured, "The first armour: some bodies have grown plates.");
+    first(poisonous_logged_, census_.poisonous, "The first poison: some bodies now sicken whatever feeds on them.");
     first(hunters_logged_, census_.hunters, "The first hunters: some creatures now live mostly by draining the living.");
     first(scavengers_logged_, census_.scavengers, "The first scavengers: some creatures now live mostly on the dead.");
 
