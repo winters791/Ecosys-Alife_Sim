@@ -29,6 +29,7 @@ constexpr float P_ADD       = 0.030f;
 constexpr float P_DELETE    = 0.020f;
 constexpr float P_DUPLICATE = 0.020f;
 constexpr float P_RETYPE    = 0.005f;
+constexpr float P_MOUTH_FRONT = 0.3f;  // a new mouth lands within this many radians of the front
 constexpr float P_WEIGHT    = 0.15f;   // chance each brain weight is nudged
 constexpr float P_ADD_LINK   = 0.06f;  // a new connection between two nodes
 constexpr float P_DEL_LINK   = 0.04f;  // a connection is lost
@@ -141,6 +142,11 @@ Genome mutate(const Genome& parent, Rng& rng) {
         p.type  = static_cast<PartType>(rng.below(NUM_TYPES));
         p.size  = rng.uniform(0.15f, 0.5f);
         p.theta = rng.uniform(0.0f, 6.2831853f);
+        // A new mouth buds near the front (within P_MOUTH_FRONT radians), so a
+        // mover's first mouth faces where it goes. Anywhere else, a small new
+        // mouth rarely touched anything and hunting was slow to start (CLAUDE.md
+        // 10.7). Copies and nudges still move mouths anywhere.
+        if (p.type == PartType::Absorber) p.theta = P_MOUTH_FRONT * (p.theta - 3.14159265f) / 3.14159265f;
         g.parts.push_back(p);
     }
 

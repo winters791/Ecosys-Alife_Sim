@@ -1117,6 +1117,19 @@ void test_part_placement() {
     g.parts[0].theta = PI * 0.5f;                                 // move the mouth under the plate
     CHECK(clogged(g, g.parts[0]) < 0.7f);
     CHECK(compile_phenotype(g).absorb < 0.7f);
+    // A new mouth buds near the front; other new parts land anywhere.
+    Rng rng(11);
+    int mouths = 0, front = 0, others = 0, behind = 0;
+    for (int k = 0; k < 20000; ++k) {
+        const Genome child = mutate(make_luca(), rng);
+        for (std::size_t j = 1; j < child.parts.size(); ++j) {
+            const bool fwd = std::abs(child.parts[j].theta) <= 0.35f;
+            if (child.parts[j].type == PartType::Absorber) { ++mouths; front += fwd; }
+            else if (child.parts[j].type != PartType::Photo) { ++others; behind += std::abs(child.parts[j].theta) > 1.5f; }   // copies of the front patch left out
+        }
+    }
+    CHECK(mouths > 20 && front >= mouths * 0.9);
+    CHECK(others > 100 && behind > others / 3);
     Genome round = make_luca();
     round.parts.push_back({PartType::Absorber, 4.0f, 0.0f, 0.0f});   // a big enough mouth reaches all round
     CHECK(compile_body(round).even_mouth);
