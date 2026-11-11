@@ -177,8 +177,12 @@ void test_costs() {
     const float cold = thermal_cost(p, p.thermal_optimum - p.thermal_tolerance - 8.0f);
     const float colder = thermal_cost(p, p.thermal_optimum - p.thermal_tolerance - 16.0f);
     CHECK(cold > 0.0f && colder > cold * 3.0f);
-    // Moving costs with the square of speed; climbing costs extra; downhill is not a refund.
-    CHECK(movement_cost(p, 0.2f, 0.0f) > movement_cost(p, 0.1f, 0.0f) * 3.9f);
+    // Moving costs more the faster it goes, per tick and per distance; but
+    // creeping a distance is not much cheaper than walking it (100 ticks at
+    // 0.01 against 10 at 0.1). Climbing costs extra; downhill is not a refund.
+    CHECK(movement_cost(p, 0.2f, 0.0f) > movement_cost(p, 0.1f, 0.0f) * 2.0f);
+    CHECK(movement_cost(p, 0.2f, 0.0f) > movement_cost(p, 0.1f, 0.0f) * 2.0f * 1.01f);
+    CHECK(100.0f * movement_cost(p, 0.01f, 0.0f) > 0.6f * 10.0f * movement_cost(p, 0.1f, 0.0f));
     CHECK(movement_cost(p, 0.1f, 1.0f) > movement_cost(p, 0.1f, 0.0f));
     CHECK(movement_cost(p, 0.1f, -1.0f) == movement_cost(p, 0.1f, 0.0f));
 

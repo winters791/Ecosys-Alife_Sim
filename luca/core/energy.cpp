@@ -50,8 +50,14 @@ constexpr float PIGMENT_WARMTH = 8.0f;
 // Being this many °C outside the comfort range doubles upkeep; it grows as the square.
 constexpr float THERMAL_SCALE = 8.0f;
 
-// Moving costs mass x speed^2 (per tick, distance = speed), climbing costs
-// mass x height gained. Coming downhill gives nothing back.
+// Moving costs mass x (TRANSPORT_COST x distance + MOVE_COST x speed^2) a
+// tick, and climbing costs mass x height gained. Coming downhill gives
+// nothing back.
+// The distance term (added 2026-11-11) is the price of getting anywhere:
+// creeping a cell costs nearly as much as walking it. With only speed^2,
+// going a distance d at speed v cost mass x MOVE_COST x v x d, so creeping
+// was almost free and slow drifting plants out-competed real movers.
+constexpr float TRANSPORT_COST = 2.0f;  // per unit of mass per world unit
 constexpr float MOVE_COST  = 3.0f;
 constexpr float CLIMB_COST = 1.0f;
 
@@ -116,7 +122,7 @@ float thermal_cost(const Phenotype& p, float body_temp) {
 }
 
 float movement_cost(const Phenotype& p, float distance, float height_gain) {
-    return p.mass * (MOVE_COST * distance * distance + CLIMB_COST * std::max(0.0f, height_gain));
+    return p.mass * (TRANSPORT_COST * distance + MOVE_COST * distance * distance + CLIMB_COST * std::max(0.0f, height_gain));
 }
 
 float throw_cost(float child_mass, float distance) {

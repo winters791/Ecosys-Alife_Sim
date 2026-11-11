@@ -34,7 +34,7 @@ If any trait is free, one generalist takes over everything. Every trait must cos
 | Trait | Benefit | Cost |
 | --- | --- | --- |
 | Size | More storage, harder to eat, retains heat | Higher maintenance, slower, costly to move uphill |
-| Movement | Reach new resources | Cost ∝ mass × speed²; fast and big is very expensive |
+| Movement | Reach new resources | Cost ∝ mass × (distance + speed²): getting anywhere costs, and fast and big costs most |
 | Sensing | Find food, avoid threats | Range and resolution cost energy every tick |
 | Photosynthesis | Energy from light | Needs surface area; cheapest when stationary, which conflicts with moving |
 | Armour / membrane | Protection | Slows absorption, adds weight |
@@ -447,6 +447,8 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
   - **Cost:** upkeep per hidden neuron (`NEURON_COST` 0.012), per link (`LINK_COST` 0.002) and per unit of weight (`BRAIN_COST` 0.01), all in `phenotype.cpp`. A brain on a body that cannot move costs nothing and does nothing.
   - **Layout:** `compile_brain()` turns the genome into a fixed-size `BrainPlan`; `think()` runs it. Plans and hidden state live in their own arrays in `Creatures`, off the hot path; only movers read them.
 - **Danger / kin sense (2026-11-11):** three brain outputs, felt only with a sensor. Each body within two cells pulls or pushes the creature by `OUT_KIN` if it is the same species, `OUT_BIGGER` × how much bigger it is (negative when smaller), and `OUT_MOVING` × how fast it moved last tick; nearer and heavier bodies count for more. Nothing says which bodies are enemies: the weights start as noise and evolve. It walks the spatial grid, so the cost is bounded by local crowding. **This is the one rule that reads species ids**, so `SPECIES_THRESHOLD` and the distance weights now touch behaviour.
+- **Moving is paid per distance as well as per speed (2026-11-11):** `movement_cost` is mass × (`TRANSPORT_COST` 2.0 × distance + `MOVE_COST` 3.0 × distance²) a tick, plus climbing. Before, only the squared term existed, so covering a distance at speed v cost mass × 3 × v × distance: creeping was nearly free and the world's movers were slow drifting plants. Now creeping a cell costs about two-thirds as much as walking it.
+- **Senses are cheap (2026-11-11):** sensor upkeep is 0.05 per unit of size (it was 0.3, the dearest part there was; seeing one cell cost about 40% of a LUCA's upkeep, and nearly every mover was blind).
 - **Optional traits (`seed_throw`, `bite`, `digestion`)** stay at exactly 0 until a rarer mutation switches them on (`P_NEW_TRAIT`), and are lost again below a sliver. A plain nudge bounced off zero and left every lineage paying upkeep for a little of each.
 - **Sunbathing and moving conflict (2026-11-11):** a body's light demand is multiplied by `light_while_moving(moved)`: 1 if it sat still last tick, falling in proportion to 0.2 at a stride of 0.005 world units or more (`MOVING_SHADE` 0.8, `FULL_STRIDE`, in `energy.cpp`; 0.08 until wander began to drift, 0.02 until wander turned by distance, see 10.7). It applies before the canopy shares light out.
 - **Dormancy (2026-11-11):** each creature has a `sleep` level, 0 awake to 1. With the `dormancy` gene it climbs by 1/20 a tick, up to the gene's value, whenever its cell is dark or colder than its comfort range, and drops by 1/90 a tick otherwise (quick to sleep, slow to wake). At sleep `s` a body pays (1 − 0.9 s) of its upkeep and thermal cost, catches (1 − s) of its light and pulls (1 − s) as hard on the living and the dead. Above 0.1 it cannot move or breed; at 0.5 or more it ages at an eighth of the usual pace. Its membrane is unchanged, so it can be eaten in its sleep. Rules are `next_sleep` and `cost_while_asleep` in `energy.cpp`; `dormancy` is an optional trait like `bite`.
@@ -491,7 +493,14 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 
 ### 10.7 Baseline numbers (default settings, 128×128, seed 42, measured 2026-11-11)
 
-**After wander turns by distance, `FULL_STRIDE` 0.005, `WANDER_PATH` 1 (current):**
+**After moving costs per distance (`TRANSPORT_COST` 2) and cheap senses (sensor upkeep 0.05) (current):**
+- `--ticks 5000`: 750 creatures, 0.031 ms/tick, audit error ≈ 1e-7.
+- `--light uniform --seed 7 --ticks 60000`: 3,832 creatures, 0.19 ms/tick.
+- Seeds 42 / 7 / 99, 100,000 ticks, last fifth: 2,950 / 3,380 / 3,000 creatures; 29 / 35 / 30 established species; movers 67 / 38 / 8; hunters 75 / 71 / 50; bodies with a sensor 168 / 294 / 316. Seeds 1 to 4: 3,700 / 3,150 / 2,300 / 2,090 creatures, 46 / 26 / 25 / 31 species.
+- Movers at tick 100,000 over all seven seeds (467): a third of their food from the living (against about a fifth to a third with no distance cost), half from the sun; a third carry a sensor (none to 9% at sensor upkeep 0.3). Top speed 0.03 to 0.06. Probe of movers over 300 ticks: seed 7, 62% sighted, turning 8° a tick; seed 42, blind, mostly 8–9° a tick, with a few whose evolved wiring flips their direction (one reverses 73% of ticks over corpses: its "corpse here" input switches its wander urge off).
+- **Grid tried** (seeds 42 / 7 / 99; distance cost 0 / 1 / 2 against sensor upkeep 0.3 / 0.1 / 0.05): every cell held 2,500 to 3,500 creatures except a crash of seed 99 at 0 / 0.1 (1,230) and seed 1 at 1 / 0.1 (885). Movers' share of food from the living rises with distance cost; cheaper senses mostly spread sensors onto plants (up to 430 bodies, where they do nothing) and onto movers only at 0.05. Mover diet varies more between seeds than between settings: at 2 / 0.3 it was 63% from the living in three seeds and 14% in four others, because one mover lineage per world sets the number. Judge any mover tuning on at least six seeds.
+
+**After wander turns by distance, `FULL_STRIDE` 0.005, `WANDER_PATH` 1:**
 - `--ticks 5000`: 682 creatures, 0.030 ms/tick, audit error ≈ 1e-7.
 - `--light uniform --seed 7 --ticks 60000`: 2,933 creatures (4,161 before), 0.20 ms/tick.
 - Sweep, seeds 42 / 7 / 99, 100,000 ticks, mean of the last fifth: 3,020 / 2,500 / 2,560 creatures (3,200 / 3,910 / 2,910 before); 33 / 39 / 25 established species (28 / 38 / 36); movers 19 / 57 / 11; hunters 49 / 64 / 35; cleaners 7 / 5 / 8.
@@ -589,8 +598,8 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 
 ### Good places for Uday to tune (all are single constants)
 
-- `energy.cpp`: `METABOLIC_RATE` (0.75 since the retune), `AGE_SCALE` (10000), `MOVING_SHADE`, `FULL_STRIDE` (0.005), `MOVE_COST`, `CLIMB_COST`, `CONTACT_RATE`, `CORPSE_RATE`, `THERMAL_SCALE`; `energy.hpp`: `TRANSFER_EFFICIENCY`, `CORPSE_WEATHERING`.
-- `phenotype.cpp`: thrust, membrane and armour numbers, capacity, `BODY_ENERGY_PER_MASS`, `BRAIN_COST`, `TOLERANCE_COST`.
+- `energy.cpp`: `METABOLIC_RATE` (0.75 since the retune), `AGE_SCALE` (10000), `MOVING_SHADE`, `FULL_STRIDE` (0.005), `TRANSPORT_COST` (2.0), `MOVE_COST`, `CLIMB_COST`, `CONTACT_RATE`, `CORPSE_RATE`, `THERMAL_SCALE`; `energy.hpp`: `TRANSFER_EFFICIENCY`, `CORPSE_WEATHERING`.
+- `phenotype.cpp`: `COST_PER_SIZE` per part (sensor 0.05), thrust, membrane and armour numbers, capacity, `BODY_ENERGY_PER_MASS`, `BRAIN_COST`, `TOLERANCE_COST`.
 - `energy.cpp`: `SIZE_POWER`, `SIZE_EDGE_MAX` (the size rule at the mouth).
 - `mutation.cpp`: the `P_*` rates, including `P_NEW_TRAIT` and the brain's `P_ADD_LINK`, `P_DEL_LINK`, `P_ADD_NEURON`, `P_DEL_NEURON`.
 - Brain: `NEURON_COST`, `LINK_COST`, `BRAIN_COST` (`phenotype.cpp`); `MAX_HIDDEN`, `MAX_LINKS` (`genome.hpp`).
@@ -621,7 +630,7 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - Most corpse energy still weathers away uneaten (about 70% in the last 50,000 ticks of a 300,000-tick run), because eaters must be in the same cell and few bodies move.
 - The `seed_throw` gene has no drawing in `blob.gdshader` (it is a gene, not a part); the inspector shows it.
 - Kin are eaten like anyone else; there is no self-recognition.
-- **Movers are drifting plants, not animals.** A probe of every mover over 300 ticks (seeds 7, 42, 99) finds top speeds of 0.01 to 0.03 a tick, almost none with a sensor, and brains that are a single fixed wander urge. Moving pays only as slow drift to new ground. What would make real movement pay is still open: prey worth chasing, cost per distance that makes creeping no cheaper than walking, or senses that are cheaper.
+- **Movers are drifting plants, not animals.** A probe of every mover over 300 ticks (seeds 7, 42, 99) finds top speeds of 0.01 to 0.03 a tick, almost none with a sensor, and brains that are a single fixed wander urge. Moving pays only as slow drift to new ground. Cost per distance and cheap senses (built since) moved this a little: movers now get about a third of their food from the living, a third carry a sensor, and they are still slow (0.03 to 0.06 a tick). Still open: prey worth chasing, and anything that makes speed itself pay.
 - **Waste can't be sensed.** Movers have no brain input for it, so nothing can learn to leave a fouled cell; they are only selected against it. Detox is mostly carried by plants as a side income (see 10.7) rather than making a separate cleaner niche: 5 to 15 true cleaners at a time.
 - `tools/plot.py` gained two panels (ways of life, energy flows) that have not been run: matplotlib isn't installed on this machine.
 

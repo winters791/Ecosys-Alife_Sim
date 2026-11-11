@@ -14,7 +14,10 @@ constexpr int NUM_PARTS = static_cast<int>(PartType::Count);
 // Order MUST match the PartType enum in genome.hpp:
 //                                           Photo  Absorber Flagellum Legs  Sensor Armour Storage Poison
 constexpr float MASS_PER_SIZE[NUM_PARTS] = { 0.1f,  0.2f,    0.15f,    0.3f, 0.05f, 0.6f,  0.4f,   0.1f };
-constexpr float COST_PER_SIZE[NUM_PARTS] = { 0.1f,  0.15f,   0.2f,     0.2f, 0.3f,  0.05f, 0.02f,  0.12f };
+constexpr float COST_PER_SIZE[NUM_PARTS] = { 0.1f,  0.15f,   0.2f,     0.2f, 0.05f, 0.05f, 0.02f,  0.12f };
+// Sensor upkeep was 0.3 per unit of size until 2026-11-11, the dearest part
+// there is: seeing one cell cost 0.15 a tick, ~40% of a LUCA's whole upkeep,
+// so movers went blind and their brains were a fixed wander urge.
 
 constexpr float BASE_UPKEEP    = 0.3f;
 constexpr float PHOTO_PER_AREA = 1.0f;   // max photo patch size per unit of skin
