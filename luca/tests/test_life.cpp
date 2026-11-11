@@ -429,7 +429,12 @@ void test_dispersal() {
 
     Simulation sim(cfg);
     const uint32_t stay = lineage_of(sim, sim.add_creature(12.5f, 6.5f, 300.0f, make_luca()));
-    const uint32_t fling = lineage_of(sim, sim.add_creature(34.5f, 6.5f, 300.0f, thrower));
+    // Several throwers, far apart: each has only a few children alive at the
+    // end and each child is flung a random distance, so one thrower's two
+    // children can both land short by chance (about 1 run in 25).
+    const float fling_at[4][2] = {{34.5f, 6.5f}, {34.5f, 30.5f}, {12.5f, 30.5f}, {23.5f, 41.5f}};
+    uint32_t fling[4];
+    for (int k = 0; k < 4; ++k) fling[k] = lineage_of(sim, sim.add_creature(fling_at[k][0], fling_at[k][1], 300.0f, thrower));
     const double matter0 = sim.total_matter();
     double thrown = 0.0;
     double start = sim.stored_energy(), in = 0, out = 0;
@@ -440,7 +445,9 @@ void test_dispersal() {
         out += sim.last_stats().energy_out;
     }
     const std::vector<float> near = child_distances(sim, stay, 12.5f, 6.5f);
-    const std::vector<float> far = child_distances(sim, fling, 34.5f, 6.5f);
+    std::vector<float> far;
+    for (int k = 0; k < 4; ++k)
+        for (float d : child_distances(sim, fling[k], fling_at[k][0], fling_at[k][1])) far.push_back(d);
     CHECK(!near.empty() && !far.empty());
     for (float d : near) CHECK(d < 1.3f);                              // touching: about one body away
     CHECK(!far.empty() && *std::max_element(far.begin(), far.end()) > 2.0f);
@@ -706,7 +713,7 @@ void test_evolving_brain() {
 void test_moving_costs_sunlight() {
     using namespace luca;
     CHECK(light_while_moving(0.0f) == 1.0f);
-    CHECK(light_while_moving(0.005f) < 1.0f && light_while_moving(0.005f) > light_while_moving(0.01f));
+    CHECK(light_while_moving(0.002f) < 1.0f && light_while_moving(0.002f) > light_while_moving(0.004f));
     CHECK(light_while_moving(10.0f) > 0.0f && light_while_moving(10.0f) == light_while_moving(1.0f));   // a floor, not zero
 
     // The same green swimmer twice, alone under a steady sun: one always on
@@ -983,6 +990,97 @@ void test_species() {
 
 }  // namespace
 
+// Waste: living gives part of its upkeep off into the cell; it fouls whoever
+// lives there, spreads, breaks down, and feeds bodies with the detox gene.
+// The energy books still balance.
+void test_waste() {
+    using namespace luca;
+    Genome cleaner_g = make_luca();
+    cleaner_g.detox = 1.0f;
+    const Phenotype plain = compile_phenotype(make_luca()), cleaner = compile_phenotype(cleaner_g);
+    CHECK(cleaner.upkeep > plain.upkeep);                          // the gene has a price
+    CHECK(waste_demand(plain) == 0.0f && waste_demand(cleaner) > 0.0f);
+    CHECK(fouling_cost(plain, 0.0f) == 0.0f && fouling_cost(plain, 10.0f) > fouling_cost(plain, 5.0f));
+
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;  // nobody breeds
+    cfg.light_mode = LightMode::Uniform;
+    auto run = [&](int crowd, bool with_cleaner, double& fouled, double& eaten, float& waste_here, double& worst) {
+        Simulation sim(cfg);
+        for (int k = 0; k < crowd; ++k) sim.add_creature(20.2f + 0.15f * k, 20.5f, 400.0f, make_luca());
+        if (with_cleaner) sim.add_creature(20.5f, 20.8f, 400.0f, cleaner_g);
+        fouled = eaten = worst = 0.0;
+        for (int t = 0; t < 600; ++t) {
+            const double before = sim.stored_energy();
+            sim.step();
+            const TickStats& st = sim.last_stats();
+            fouled += st.out_fouling;
+            eaten += st.eaten_waste;
+            const double after = sim.stored_energy();
+            worst = std::max(worst, std::abs(after - (before + st.energy_in - st.energy_out)) / std::max(1.0, after));
+        }
+        waste_here = sim.soil().waste[sim.world().cell_index(20.5f, 20.5f)];
+    };
+    double f1, e1, w1, f4, e4, w4, fc, ec, wc;
+    float h1, h4, hc;
+    run(1, false, f1, e1, h1, w1);
+    run(4, false, f4, e4, h4, w4);
+    run(4, true, fc, ec, hc, wc);
+    CHECK(h1 > 0.0f && f1 > 0.0);                // one body fouls its own cell a little
+    CHECK(h4 > 2.0f * h1 && f4 > 6.0 * f1);      // four in one cell foul it far more, and each feels it
+    CHECK(e1 == 0.0 && e4 == 0.0);               // without the gene nobody eats it
+    CHECK(ec > 0.0 && hc < h4);                  // a cleaner takes it up and the cell is cleaner
+    CHECK(w1 < 1e-5 && w4 < 1e-5 && wc < 1e-5);  // the energy books balance throughout
+
+    // Waste outlives its maker, spreads to the next cell, and fades.
+    Simulation sim(cfg);
+    sim.add_creature(30.5f, 30.5f, 40.0f, with_part(PartType::Storage, 1.0f));  // can't feed: lives a while, then dies
+    for (int t = 0; t < 400 && sim.creatures().size() > 0; ++t) sim.step();
+    CHECK(sim.creatures().size() == 0);
+    const int here = sim.world().cell_index(30.5f, 30.5f), next = sim.world().cell_index(31.5f, 30.5f);
+    const float w0 = sim.soil().waste[here];
+    CHECK(w0 > 0.0f && sim.soil().waste[next] > 0.0f);
+    for (int t = 0; t < 800; ++t) sim.step();
+    CHECK(sim.soil().waste[here] < 0.5f * w0);
+}
+
+// Wandering bends by distance, not by time: a slow wanderer turns a little
+// each tick and a fast one more, so neither spins on the spot and both trace
+// paths of about the same shape.
+void test_wander_turns_by_distance() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.day_length = 0;
+    cfg.nutrient_mean = 0.0f;  // nobody breeds
+    auto wanderer = [](float motor) {
+        Genome g = with_part(PartType::Flagellum, motor);
+        g.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
+        return g;
+    };
+    Simulation sim(cfg);
+    const uint64_t slow = sim.add_creature(12.5f, 24.5f, 500.0f, wanderer(0.1f));
+    const uint64_t fast = sim.add_creature(36.5f, 24.5f, 500.0f, wanderer(2.0f));
+    auto heading = [&](uint64_t id) { const std::size_t i = find(sim, id); return std::atan2(sim.creatures().hy[i], sim.creatures().hx[i]); };
+    double turn_slow = 0.0, turn_fast = 0.0, path_slow = 0.0;
+    float hs = 0.0f, hf = 0.0f;
+    const int T = 300;
+    for (int t = 0; t < T; ++t) {
+        sim.step();
+        CHECK(find(sim, slow) < sim.creatures().size() && find(sim, fast) < sim.creatures().size());
+        const float ns = heading(slow), nf = heading(fast);
+        if (t > 0) {
+            turn_slow += std::abs(std::remainder(ns - hs, 6.2831853f));
+            turn_fast += std::abs(std::remainder(nf - hf, 6.2831853f));
+        }
+        path_slow += sim.creatures().moved[find(sim, slow)];
+        hs = ns;
+        hf = nf;
+    }
+    CHECK(path_slow > 0.0);                           // it does move
+    CHECK(turn_slow / T < 0.15);                      // under ~9 degrees a tick: no spinning
+    CHECK(turn_fast > 2.0 * turn_slow);               // the faster one turns more per tick
+}
+
 int main() {
     test_day_and_night();
     test_cold_nights();
@@ -998,8 +1096,10 @@ int main() {
     test_feeding_genes_and_kin_sense();
     test_evolving_brain();
     test_moving_costs_sunlight();
+    test_wander_turns_by_distance();
     test_dormancy();
     test_poison();
+    test_waste();
     test_gene_transfer();
     test_species();
     if (failures == 0) std::puts("all life tests passed");

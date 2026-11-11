@@ -71,7 +71,7 @@ public:
     godot::PackedFloat32Array get_lights() const;       // at noon
     godot::PackedFloat32Array get_nutrients() const;    // free matter in the soil
     godot::PackedFloat32Array get_corpses() const;      // energy left in dead bodies
-    godot::PackedFloat32Array get_soil() const;         // both, interleaved: one two-channel texture
+    godot::PackedFloat32Array get_soil() const;         // nutrient, corpse energy, waste, interleaved: one three-channel texture
     int get_height_revision() const;
     int get_climate_revision() const;
 

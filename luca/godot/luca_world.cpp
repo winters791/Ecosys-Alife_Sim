@@ -98,6 +98,7 @@ Dictionary LucaWorld::get_census() const {
     d["producers"]  = static_cast<int64_t>(k.producers);
     d["hunters"]    = static_cast<int64_t>(k.hunters);
     d["scavengers"] = static_cast<int64_t>(k.scavengers);
+    d["cleaners"]   = static_cast<int64_t>(k.cleaners);
     d["mixed"]      = static_cast<int64_t>(k.mixed);
     d["young"]      = static_cast<int64_t>(k.young);
     d["movers"]     = static_cast<int64_t>(k.movers);
@@ -205,9 +206,10 @@ PackedFloat32Array LucaWorld::get_soil() const {
     if (!sim_) return out;
     const auto& a = sim_->soil().nutrient;
     const auto& b = sim_->soil().corpse_energy;
-    out.resize(static_cast<int64_t>(a.size()) * 2);
+    const auto& w = sim_->soil().waste;
+    out.resize(static_cast<int64_t>(a.size()) * 3);
     float* f = out.ptrw();
-    for (std::size_t i = 0; i < a.size(); ++i) { f[i * 2] = a[i]; f[i * 2 + 1] = b[i]; }
+    for (std::size_t i = 0; i < a.size(); ++i) { f[i * 3] = a[i]; f[i * 3 + 1] = b[i]; f[i * 3 + 2] = w[i]; }
     return out;
 }
 int LucaWorld::get_height_revision() const { return sim_ ? static_cast<int>(sim_->world().height_revision()) : 0; }
@@ -393,6 +395,9 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["fed_light"] = c.fed_light[who];
     d["fed_living"] = c.fed_living[who];
     d["fed_dead"] = c.fed_dead[who];
+    d["fed_waste"] = c.fed_waste[who];
+    d["detox"] = p.detox;
+    d["cell_waste"] = sim_->soil().waste[cell];
     d["cell_light"] = w.light(cell);
     d["cell_temperature"] = w.temperature(cell);
     d["cell_nutrient"] = sim_->soil().nutrient[cell];

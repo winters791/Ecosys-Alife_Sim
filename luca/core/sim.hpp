@@ -31,9 +31,13 @@ struct TickStats {
     double out_decay       = 0.0;  // corpses weathering away uneaten
     double out_waste       = 0.0;  // taken in by a body already full
     double out_poison      = 0.0;  // burned by eaters dealing with a poisonous meal
+    double out_fouling     = 0.0;  // lost to living in waste
+    double out_waste_decay = 0.0;  // waste breaking down by itself
     // Energy that changed hands inside the world (not part of in/out):
     double eaten_living    = 0.0;  // arrived from living bodies
     double eaten_dead      = 0.0;  // arrived from corpses
+    double excreted        = 0.0;  // upkeep given off as waste instead of heat
+    double eaten_waste     = 0.0;  // arrived from waste
     // Blueprints taken up through contact (see Simulation::step, phase 2a):
     std::size_t gene_transfers = 0;        // all of them
     std::size_t gene_transfers_cross = 0;  // between different species
@@ -47,6 +51,7 @@ struct Census {
     std::size_t producers = 0;    // mostly light
     std::size_t hunters = 0;      // mostly taken from living bodies
     std::size_t scavengers = 0;   // mostly taken from corpses
+    std::size_t cleaners = 0;     // mostly taken from waste
     std::size_t mixed = 0;        // no single source above 60%
     std::size_t young = 0;        // hasn't eaten enough yet to say
     std::size_t movers = 0;       // can move
@@ -111,6 +116,7 @@ private:
                Genome genome, const Phenotype& pheno, float body_temp = -1000.0f);
     void weather_corpses();
     void wash_soil();
+    void spread_waste();
     void share_light_by_canopy();
     // Where a child flung `dist` from (x, y) along (ux, uy) comes down: it
     // stops short of any step in the ground taller than birth_max_step.
@@ -147,7 +153,7 @@ private:
     std::size_t day_peak_ = 0;        // highest population so far today
     uint64_t    day_seen_ = 0;
     bool        extinct_logged_ = false;
-    bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false;
+    bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false, cleaners_logged_ = false;
     bool        sighted_logged_ = false, armoured_logged_ = false, poisonous_logged_ = false, transfer_logged_ = false;
 
     // Scratch buffers, reused every tick to avoid allocation.
@@ -161,6 +167,9 @@ private:
     std::vector<float> wash_;                // per cell: matter on its way downhill
     std::vector<float> cell_corpse_demand_;  // per cell
     std::vector<float> corpse_want_, corpse_gain_;
+    std::vector<float> cell_waste_demand_;   // per cell
+    std::vector<float> waste_want_, waste_gain_;
+    std::vector<float> waste_flow_;          // per cell: waste on its way to the neighbours
     std::vector<float> drain_want_, drained_, intake_, poisoned_;
     struct Contact { uint32_t taker, giver; float flow; };
     std::vector<Contact> contacts_;

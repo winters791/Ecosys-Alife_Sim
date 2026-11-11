@@ -27,7 +27,7 @@ struct Creatures {
 
     // Where its energy has come from over its life. Observation only (food
     // web, inspector, chronicle); the sim never reads these to decide anything.
-    std::vector<float>     fed_light, fed_living, fed_dead;
+    std::vector<float>     fed_light, fed_living, fed_dead, fed_waste;
 
     // Cold: identity and inheritance
     std::vector<uint64_t>  id;          // unique for the whole run; never reused
@@ -45,7 +45,7 @@ struct Creatures {
     void reserve(std::size_t n) {
         x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n); wander.reserve(n); sleep.reserve(n); body_temp.reserve(n);
         energy.reserve(n); age.reserve(n); pheno.reserve(n);
-        fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n);
+        fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n); fed_waste.reserve(n);
         id.reserve(n); lineage.reserve(n); species.reserve(n); generation.reserve(n); genome.reserve(n);
         brain.reserve(n); brain_state.reserve(n);
     }
@@ -62,6 +62,7 @@ struct Creatures {
         fed_light.push_back(0.0f);
         fed_living.push_back(0.0f);
         fed_dead.push_back(0.0f);
+        fed_waste.push_back(0.0f);
         id.push_back(uid);
         energy.push_back(e);
         age.push_back(0);
@@ -79,7 +80,7 @@ struct Creatures {
     void remove_swap(std::size_t i) {
         swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i); swap_pop(wander, i); swap_pop(sleep, i); swap_pop(body_temp, i);
         swap_pop(energy, i); swap_pop(age, i);
-        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(id, i);
+        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(id, i);
         swap_pop(pheno, i); swap_pop(lineage, i); swap_pop(species, i); swap_pop(generation, i); swap_pop(genome, i);
         swap_pop(brain, i); swap_pop(brain_state, i);
     }

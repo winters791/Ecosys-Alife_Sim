@@ -32,7 +32,7 @@ constexpr float MOVING_SHADE = 0.8f;
 // Was 0.08; 0.02 since wandering became a drifting direction (2026-11-11).
 // At 0.08 a slow drifter kept 90% of its light, so roaming grazers lost
 // almost nothing by moving and overgrazed the world to a quarter of its size.
-constexpr float FULL_STRIDE  = 0.02f;  // world units per tick
+constexpr float FULL_STRIDE  = 0.005f;  // world units per tick
 
 // Dormancy. A night is about 240 ticks of a 600-tick day, so at full depth a
 // sleeper saves most of a night's upkeep and loses roughly the first hour and
@@ -57,6 +57,12 @@ constexpr float CLIMB_COST = 1.0f;
 
 // Flinging a child: mass x distance^2, like moving, but paid once per birth.
 constexpr float THROW_COST = 2.0f;
+
+// Waste (see energy.hpp). At these numbers a LUCA alone on open ground sits
+// in about 4 units of waste and loses ~0.01 a tick to it (3% of its upkeep);
+// in a crowded cell it is several times that.
+constexpr float WASTE_HARM     = 0.0025f;  // energy per tick per unit of waste per unit of skin
+constexpr float WASTE_EAT_RATE = 0.3f;     // waste taken up per tick at full detox
 
 // Contact.
 constexpr float CONTACT_RATE = 1.5f;  // energy per tick for a pull of 1 against no membrane
@@ -124,6 +130,14 @@ float contact_flow(const Phenotype& taker, const Phenotype& giver) {
     if (a <= 0.0f) return 0.0f;
     const float edge = std::min(std::pow(taker.radius / giver.radius, SIZE_POWER), SIZE_EDGE_MAX);
     return CONTACT_RATE * taker.bite * edge * a * a / (a + giver.membrane);
+}
+
+float fouling_cost(const Phenotype& p, float waste_here) {
+    return WASTE_HARM * waste_here * p.surface_area;
+}
+
+float waste_demand(const Phenotype& p) {
+    return WASTE_EAT_RATE * p.detox;
 }
 
 float corpse_demand(const Phenotype& p) {

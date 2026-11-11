@@ -28,7 +28,7 @@ const ZOOMS := [0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]  # scr
 const FRAME_BUDGET_MS := 10.0     # sim time allowed per frame; beyond it the world just runs slower
 const SPEED_TICKS := [0, 1, 4, 16, 100000]
 const SPEED_NAMES := ["Pause", "1x", "4x", "16x", "Max"]
-const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead"]
+const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead", "Waste"]
 const GRADUAL_TICKS := 1000       # how long a power takes in Gradual mode
 const NIGHT_GROUND := Vector3(0.30, 0.34, 0.58)
 const NIGHT_BLOBS := Vector3(0.58, 0.62, 0.82)
@@ -214,7 +214,7 @@ func _upload_fields() -> void:
 ## The soil changes a little every tick (things die, things are built), so
 ## it is re-sent a few times a second rather than tracked with a counter.
 func _upload_soil() -> void:
-	var img := Image.create_from_data(world_size, world_size, false, Image.FORMAT_RGF, world.get_soil().to_byte_array())
+	var img := Image.create_from_data(world_size, world_size, false, Image.FORMAT_RGBF, world.get_soil().to_byte_array())
 	if soil_tex == null:
 		soil_tex = ImageTexture.create_from_image(img)
 		terrain_mat.set_shader_parameter("soil_tex", soil_tex)
@@ -544,11 +544,15 @@ func _diet(info: Dictionary) -> String:
 	var light: float = info["fed_light"]
 	var living: float = info["fed_living"]
 	var dead: float = info["fed_dead"]
-	var total := light + living + dead
+	var waste: float = info["fed_waste"]
+	var total := light + living + dead + waste
 	if total < 1.0:
 		return "has not fed yet"
-	return "sun %d%%, the living %d%%, the dead %d%%" % [
+	var text := "sun %d%%, the living %d%%, the dead %d%%" % [
 		roundi(100.0 * light / total), roundi(100.0 * living / total), roundi(100.0 * dead / total)]
+	if waste > 0.0:
+		text += ", waste %d%%" % roundi(100.0 * waste / total)
+	return text
 
 
 func _show_creature(info: Dictionary) -> void:
@@ -568,9 +572,10 @@ func _show_creature(info: Dictionary) -> void:
 		"No brain" if info["brain_neurons"] < 0 else "Brain: %d hidden neurons, %d links" % [info["brain_neurons"], info["brain_links"]],
 		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
+		"Can't eat waste" if info["detox"] <= 0.0 else "Eats waste (detox %.2f)" % info["detox"],
 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
 		"Body %.1f °C   comfort %.0f ± %.0f °C" % [info["body_temperature"], info["thermal_optimum"], info["thermal_tolerance"]],
-		"Here: light %.2f, %.1f °C, soil %.1f" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"]],
+		"Here: light %.2f, %.1f °C, soil %.1f, waste %.1f" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"], info["cell_waste"]],
 		"Parts: " + (", ".join(parts) if parts.size() > 0 else "none"),
 	])
 
@@ -737,10 +742,10 @@ func _clock() -> String:
 
 func _update_ui() -> void:
 	var census: Dictionary = world.get_census()
-	stats_label.text = "%sTick %s\nPopulation %s\nSun-fed %s   Hunters %s   Scavengers %s\nMixed diet %s   Able to move %s\n%d ticks/s   %.2f ms/tick   %d fps\nSun %.2fx    Climate %+.1f °C" % [
+	stats_label.text = "%sTick %s\nPopulation %s\nSun-fed %s   Hunters %s   Scavengers %s\nCleaners %s   Mixed diet %s   Able to move %s\n%d ticks/s   %.2f ms/tick   %d fps\nSun %.2fx    Climate %+.1f °C" % [
 		_clock(), _commas(world.get_tick()), _commas(world.get_population()),
 		_commas(census.get("producers", 0)), _commas(census.get("hunters", 0)), _commas(census.get("scavengers", 0)),
-		_commas(census.get("mixed", 0)), _commas(census.get("movers", 0)),
+		_commas(census.get("cleaners", 0)), _commas(census.get("mixed", 0)), _commas(census.get("movers", 0)),
 		ticks_per_second, world.get_tick_ms(), Engine.get_frames_per_second(),
 		world.get_sun_scale(), world.get_climate_offset()]
 

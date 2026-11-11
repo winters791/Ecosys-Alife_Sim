@@ -20,7 +20,12 @@ constexpr float    TWO_PI         = 6.28318531f;
 // 23 degrees a tick, a wobbly path rather than a straight one. Slower turning
 // (0.15) let wanderers sweep the map and overgraze it; 1.0 brought back most
 // of the jitter. Picked from a three-seed sweep, 2026-11-11.
-constexpr float    WANDER_TURN    = 0.5f;
+// Wandering bends by distance, not by time: over each world unit travelled
+// the wander angle drifts with variance 2 / WANDER_PATH, so a wanderer's path
+// stays fairly straight for about WANDER_PATH world units whatever its speed.
+// (It used to turn ~0.5 rad every tick however far it went; a body creeping
+// 0.01 a tick then spun in place, its loops smaller than a pixel.)
+constexpr float    WANDER_PATH    = 1.0f;
 constexpr int      SOCIAL_CELLS   = 2;     // the danger / kin sense looks this many cells out at most
 constexpr float    SOCIAL_FAST    = 0.25f; // a body covering this much a tick counts as fully "moving"
 
@@ -31,6 +36,7 @@ Simulation::Simulation(const SimConfig& cfg) : cfg_(cfg), rng_(cfg.seed * 0x2545
     const std::size_t cells = static_cast<std::size_t>(world_.num_cells());
     cell_demand_.assign(cells, 0.0f);
     cell_corpse_demand_.assign(cells, 0.0f);
+    cell_waste_demand_.assign(cells, 0.0f);
     biomass_.assign(cells, 0.0f);
 
     // Starting soil: patches of rich ground and stretches of poor ground,
@@ -97,6 +103,7 @@ double Simulation::stored_energy() const {
     for (float e : c_.energy) s += e;
     for (const Phenotype& p : c_.pheno) s += p.body_energy;
     for (float e : soil_.corpse_energy) s += e;
+    for (float e : soil_.waste) s += e;
     return s;
 }
 
@@ -195,18 +202,18 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     // brand-new random angle each tick made wanderers jitter on the spot,
     // facing a new way every frame and going nowhere. The angle is the
     // creature's own state, so writing it here is like its brain's memory.
+    const float throttle = std::clamp(0.5f + w[OUT_THROTTLE], 0.0f, 1.0f);
+    const float dist = throttle * p.max_speed;
     float& angle = c_.wander[i];
-    angle += WANDER_TURN * rng_.normal();
+    angle += std::sqrt(2.0f * dist / WANDER_PATH) * rng_.normal();
     if (angle > TWO_PI) angle -= TWO_PI; else if (angle < 0.0f) angle += TWO_PI;
     dx += w[OUT_WANDER] * std::cos(angle) + w[OUT_INERTIA] * c_.hx[i];
     dy += w[OUT_WANDER] * std::sin(angle) + w[OUT_INERTIA] * c_.hy[i];
 
     const float len = std::sqrt(dx * dx + dy * dy);
-    const float throttle = std::clamp(0.5f + w[OUT_THROTTLE], 0.0f, 1.0f);
     if (len < 1e-5f || throttle <= 0.0f) return;  // stays put
 
     const float ux = dx / len, uy = dy / len;
-    const float dist = throttle * p.max_speed;
     const float nx = world_.clamp_coord(c_.x[i] + ux * dist);
     const float ny = world_.clamp_coord(c_.y[i] + uy * dist);
     const float dh = world_.height(world_.cell_index(nx, ny)) - env.height;
@@ -255,6 +262,8 @@ void Simulation::step() {
     new_hy_.resize(n);
     corpse_want_.resize(n);
     corpse_gain_.resize(n);
+    waste_want_.resize(n);
+    waste_gain_.resize(n);
     drain_want_.assign(n, 0.0f);
     drained_.assign(n, 0.0f);
     intake_.assign(n, 0.0f);
@@ -271,6 +280,7 @@ void Simulation::step() {
     // --- Phase 1a: what everyone asks for, summed per cell --------------------
     std::fill(cell_demand_.begin(), cell_demand_.end(), 0.0f);
     std::fill(cell_corpse_demand_.begin(), cell_corpse_demand_.end(), 0.0f);
+    std::fill(cell_waste_demand_.begin(), cell_waste_demand_.end(), 0.0f);
     const bool dark = world_.daylight() <= 0.0f;
     for (std::size_t i = 0; i < n; ++i) {
         const Phenotype& p = c_.pheno[i];
@@ -281,6 +291,8 @@ void Simulation::step() {
         cell_demand_[cell] += demand_[i];
         corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
         cell_corpse_demand_[cell] += corpse_want_[i];
+        waste_want_[i] = p.detox > 0.0f ? std::max(0.0f, waste_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
+        cell_waste_demand_[cell] += waste_want_[i];
     }
 
     if (!dark) share_light_by_canopy();
@@ -332,6 +344,12 @@ void Simulation::step() {
         if (corpse_want_[i] > 0.0f) {
             const float have = soil_.corpse_energy[cell], want = cell_corpse_demand_[cell];
             corpse_gain_[i] = corpse_want_[i] * (want > have ? have / want : 1.0f);
+        }
+        // Waste is shared out the same way.
+        waste_gain_[i] = 0.0f;
+        if (waste_want_[i] > 0.0f) {
+            const float have = soil_.waste[cell], want = cell_waste_demand_[cell];
+            waste_gain_[i] = waste_want_[i] * (want > have ? have / want : 1.0f);
         }
 
         // A dormant body burns less, whatever the weather.
@@ -407,7 +425,22 @@ void Simulation::step() {
                 lost += take - from_dead;
             }
         }
-        e += gain_[i] + from_living + from_dead;
+        // Waste: one look at the cell's waste does all three things. A body
+        // with detox takes some up first; then it pays for living in what is
+        // left; then it adds its own. (Read here rather than in phase 1 to
+        // touch the cell once: the field is a tick's excretion fresher for
+        // later bodies in the same cell, which is far below its size.)
+        float& w = soil_.waste[cell];
+        float from_waste = 0.0f;
+        if (waste_gain_[i] > 0.0f) {
+            const float take = std::min(waste_gain_[i], w);
+            w -= take;
+            from_waste = take * p.efficiency;
+            lost += take - from_waste;
+        }
+        e += gain_[i] + from_living + from_dead + from_waste;
+        stats_.eaten_waste += from_waste;
+        c_.fed_waste[i] += from_waste;
         stats_.energy_in += gain_[i];
         stats_.eaten_living += from_living;
         stats_.eaten_dead += from_dead;
@@ -434,15 +467,24 @@ void Simulation::step() {
         }
 
         // Pay costs; can never pay more than you have.
-        const float want = cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i];
+        // Living in waste costs everyone in the cell, asleep or awake.
+        const float foul = std::max(0.0f, fouling_cost(p, w));
+        const float want = cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i] + foul;
         const float paid = std::min(want, e);
         e -= paid;
-        stats_.energy_out += paid;
         if (want > 0.0f) {
-            const double f = static_cast<double>(paid) / want;  // pro-rata if it couldn't pay in full
-            stats_.out_upkeep   += cost_upkeep_[i] * f;
+            const float f = paid / want;  // pro-rata if it couldn't pay in full
+            // Part of its upkeep leaves the body as waste, still holding energy;
+            // the rest, and every other cost, is lost as heat.
+            const float upkeep = cost_upkeep_[i] * f;
+            const float excreted = WASTE_SHARE * upkeep;
+            w += excreted;
+            stats_.excreted     += excreted;
+            stats_.energy_out   += paid - excreted;
+            stats_.out_upkeep   += upkeep - excreted;
             stats_.out_thermal  += cost_thermal_[i] * f;
             stats_.out_movement += cost_move_[i] * f;
+            stats_.out_fouling  += foul * f;
         }
 
         c_.moved[i] = std::hypot(new_x_[i] - c_.x[i], new_y_[i] - c_.y[i]);
@@ -514,7 +556,7 @@ void Simulation::step() {
     stats_.deaths = dead_.size();
     stats_.births = births_.size();
     ++tick_;
-    if (tick_ % FIELD_INTERVAL == 0) weather_corpses();
+    if (tick_ % FIELD_INTERVAL == 0) { weather_corpses(); spread_waste(); }
     if (tick_ % WASH_INTERVAL == 0) wash_soil();
     if (tick_ % 50 == 0 || c_.size() == 0) {
         take_census();
@@ -588,6 +630,40 @@ void Simulation::weather_corpses() {
     }
 }
 
+// Waste drifts: each cell hands WASTE_SPREAD of its waste to its four
+// neighbours (a quarter each; what would fall off the edge stays put), then
+// WASTE_DECAY of what is left breaks down to heat. All taking is worked out
+// before any giving, so cell order doesn't matter.
+void Simulation::spread_waste() {
+    const int n = world_.size();
+    const std::size_t cells = soil_.waste.size();
+    waste_flow_.assign(cells, 0.0f);
+    for (int y = 0; y < n; ++y)
+        for (int x = 0; x < n; ++x) {
+            const int c = y * n + x;
+            float& w = soil_.waste[c];
+            if (w <= 0.0f) continue;
+            if (w < 1e-4f) {  // sweep up crumbs
+                stats_.out_waste_decay += w;
+                stats_.energy_out += w;
+                w = 0.0f;
+                continue;
+            }
+            const float part = w * (WASTE_SPREAD * 0.25f);
+            const int nb[4] = {x > 0 ? c - 1 : -1, x + 1 < n ? c + 1 : -1, y > 0 ? c - n : -1, y + 1 < n ? c + n : -1};
+            for (int k : nb)
+                if (k >= 0) { waste_flow_[k] += part; w -= part; }
+        }
+    for (std::size_t c = 0; c < cells; ++c) {
+        float& w = soil_.waste[c];
+        w += waste_flow_[c];
+        const float gone = w * WASTE_DECAY;
+        w -= gone;
+        stats_.out_waste_decay += gone;
+        stats_.energy_out += gone;
+    }
+}
+
 // Rain: a little free matter moves from each cell to its lowest neighbour,
 // more on a steep slope, none on the flat. Ridges grow poor and hollows rich.
 // Every amount taken from one cell is given to another, so matter is conserved;
@@ -614,12 +690,13 @@ void Simulation::take_census() {
         if (p.sense_cells > 0) ++k.sighted;
         if (p.part_total[static_cast<int>(PartType::Armour)] > 0.0f) ++k.armoured;
         if (p.toxicity > 0.0f) ++k.poisonous;
-        const float l = c_.fed_light[i], v = c_.fed_living[i], d = c_.fed_dead[i];
-        const float total = l + v + d;
+        const float l = c_.fed_light[i], v = c_.fed_living[i], d = c_.fed_dead[i], w = c_.fed_waste[i];
+        const float total = l + v + d + w;
         if (total < 20.0f)           ++k.young;
         else if (l > 0.6f * total)   ++k.producers;
         else if (v > 0.6f * total)   ++k.hunters;
         else if (d > 0.6f * total)   ++k.scavengers;
+        else if (w > 0.6f * total)   ++k.cleaners;
         else                         ++k.mixed;
     }
     census_ = k;
@@ -651,6 +728,7 @@ void Simulation::detect_events() {
     first(poisonous_logged_, census_.poisonous, "The first poison: some bodies now sicken whatever feeds on them.");
     first(hunters_logged_, census_.hunters, "The first hunters: some creatures now live mostly by draining the living.");
     first(scavengers_logged_, census_.scavengers, "The first scavengers: some creatures now live mostly on the dead.");
+    first(cleaners_logged_, census_.cleaners, "The first cleaners: some creatures now live mostly on what others give off.");
 
     // First time the world holds 1,000 / 10,000 / 100,000 ... creatures.
     while (pop >= next_milestone_) {

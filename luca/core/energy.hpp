@@ -89,6 +89,24 @@ float corpse_demand(const Phenotype& p);
 // digestion gene raises it for its owner (Phenotype::efficiency), at a price.
 constexpr float TRANSFER_EFFICIENCY = 0.7f;
 
+// --- Waste: the smallest piece of the chemistry layer -----------------------------
+// Living gives something off. WASTE_SHARE of every body's upkeep leaves it not
+// as heat but as a chemical in its cell, still holding that energy. Waste
+// sickens every body in the cell (fouling_cost), its maker included, so a
+// crowded cell costs more to live in. It spreads a little to the cells
+// around and slowly breaks down to heat. A body with the detox gene takes it
+// up as food (waste_demand), keeping Phenotype::efficiency of it like any meal.
+// Waste carries energy only, no matter: the matter books are untouched.
+constexpr float WASTE_SHARE = 0.2f;
+// Energy a body loses per tick per unit of waste in its cell, per unit of skin.
+float fouling_cost(const Phenotype& p, float waste_here);
+// Waste this body tries to take up per tick (before sharing within the cell).
+float waste_demand(const Phenotype& p);
+// Each field update (8 ticks), this fraction of a cell's waste moves to its
+// four neighbours (a quarter each), and this fraction breaks down to heat.
+constexpr float WASTE_SPREAD = 0.2f;
+constexpr float WASTE_DECAY  = 0.04f;
+
 // Fraction of every corpse that weathers away each field update even if
 // nothing eats it: its energy is lost as heat, its matter returns to the soil.
 // Slow on purpose, so whatever breaks corpses down faster has a niche.

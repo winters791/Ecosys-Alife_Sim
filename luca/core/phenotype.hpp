@@ -30,6 +30,7 @@ struct Phenotype {
     float toxicity   = 0.0f; // energy an eater loses per unit of energy it drains from this body
     float bite       = 1.0f; // multiplies its pull on living bodies (1 = plain)
     float efficiency = 0.0f; // fraction of what it pulls, from the living or the dead, that it keeps
+    float detox      = 0.0f; // 0..1: how hard it takes up waste (see energy.hpp)
 
     float energy_capacity = 0.0f;  // the most energy the body can hold
     float body_energy     = 0.0f;  // energy locked in the body itself; becomes the corpse

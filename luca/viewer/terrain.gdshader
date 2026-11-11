@@ -8,12 +8,12 @@ render_mode unshaded;
 uniform sampler2D height_tex : filter_nearest, repeat_disable;
 uniform sampler2D temp_tex : filter_nearest, repeat_disable;    // °C
 uniform sampler2D light_tex : filter_nearest, repeat_disable;   // energy per cell per tick at noon
-uniform sampler2D soil_tex : filter_nearest, repeat_disable;    // r = free nutrient, g = corpse energy
+uniform sampler2D soil_tex : filter_nearest, repeat_disable;    // r = free nutrient, g = corpse energy, b = waste
 uniform float extent = 128.0;    // world units per side
 uniform float cells = 128.0;     // cells per side
 uniform float px_size = 0.125;   // world units per pixel (shared with the creatures)
 uniform float max_height = 40.0;
-uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead
+uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead, 5 waste
 uniform vec3 brush = vec3(0.0, 0.0, -1.0);  // x, z, radius; radius <= 0 hides it
 uniform vec3 brush_color : source_color = vec3(1.0);
 uniform vec3 tint = vec3(1.0);   // day / night
@@ -59,7 +59,7 @@ void fragment() {
 	float h_w = height_of(cell + vec2(-1.0, 0.0)), h_e = height_of(cell + vec2(1.0, 0.0));
 	float temp = texture(temp_tex, uv).r;
 	float light = texture(light_tex, uv).r;
-	vec2 soil = texture(soil_tex, uv).rg;
+	vec3 soil = texture(soil_tex, uv).rgb;
 
 	vec3 col;
 	if (overlay == 1) {
@@ -70,6 +70,8 @@ void fragment() {
 		col = steps3(soil.r / 6.0, vec3(0.10, 0.09, 0.08), vec3(0.45, 0.30, 0.12), vec3(0.95, 0.75, 0.25));
 	} else if (overlay == 4) {
 		col = steps3(soil.g / 150.0, vec3(0.08, 0.08, 0.10), vec3(0.50, 0.25, 0.40), vec3(0.98, 0.92, 0.85));
+	} else if (overlay == 5) {
+		col = steps3(soil.b / 30.0, vec3(0.08, 0.10, 0.08), vec3(0.45, 0.42, 0.12), vec3(0.80, 0.90, 0.20));
 	} else {
 		// Height bands, with the boundary between two bands dithered.
 		const vec3 BANDS[6] = vec3[](
@@ -96,6 +98,9 @@ void fragment() {
 
 		// The dead: pale specks, more of them where more lies uneaten.
 		if (hash(pix + 31.0) < clamp(soil.g / 400.0, 0.0, 0.35)) col = vec3(0.88, 0.84, 0.72);
+
+		// Waste: fouled ground goes murky olive where it builds up.
+		col = mix(col, vec3(0.42, 0.40, 0.16), clamp((soil.b - 10.0) / 60.0, 0.0, 0.45));
 	}
 
 	// Brush ring, on the pixel grid.

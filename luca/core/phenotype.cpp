@@ -62,13 +62,17 @@ constexpr float DIGEST_UPKEEP        = 0.10f;   // upkeep at full digestion
 
 // Dormancy: the machinery for shutting down costs a little all the time.
 // Its real price is paid in energy.cpp: a sleeper is helpless and slow to wake.
-constexpr float DORMANCY_UPKEEP      = 0.02f;
+constexpr float DORMANCY_UPKEEP      = 0.02f;   // upkeep at full depth
 // Cold nights (added by Claude, 2026-11-11): a body holds heat for mass /
 // surface area x HEAT_LAG ticks (heat is stored in bulk and lost through skin).
 // A LUCA lags the air by ~130 ticks, so it feels about 60% of the night's
 // chill; a body of radius 2 feels about 30%; a small thin one nearly all of it.
 // Not a new gene: size and fat already cost upkeep.
-constexpr float HEAT_LAG             = 120.0f;   // upkeep at full depth
+constexpr float HEAT_LAG             = 120.0f;
+// Waste (added by Claude, 2026-11-11): taking up the chemical everyone gives
+// off. Priced so a body cleaning up only after itself loses by it (it gets
+// back ~0.03 a tick of its own waste); it pays only where many others foul a cell.
+constexpr float DETOX_UPKEEP         = 0.08f;   // upkeep at full detox
 
 // Gene ranges live in genome.hpp (limits::); mutation enforces them through
 // clamp_genome(). The clamps below are a second line of defence for genomes
@@ -137,6 +141,7 @@ Phenotype compile_phenotype(const Genome& g) {
     const float bite           = std::clamp(g.bite, 0.0f, limits::MAX_BITE);
     const float digestion      = std::clamp(g.digestion, 0.0f, 1.0f);
     const float dormancy       = std::clamp(g.dormancy, 0.0f, 1.0f);
+    const float detox          = std::clamp(g.detox, 0.0f, 1.0f);
 
     // A brain only exists if there is something for it to drive.
     // Its price grows with its size: neurons, links and the strength of the links.
@@ -156,7 +161,8 @@ Phenotype compile_phenotype(const Genome& g) {
     p.surface_area = r * r;
     p.upkeep       = BASE_UPKEEP * std::pow(mass, 0.75f) + part_upkeep  // Kleiber + parts
                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
-                   + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP;
+                   + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP
+                   + detox * DETOX_UPKEEP;
     // LUCA (r = 1, one photo patch of size 1): mass 1.1, upkeep ≈ 0.42 + 0.04 for its ±10 °C.
 
     // --- 4. Light capture: patches need skin to sit on, and plates cover skin
@@ -186,6 +192,7 @@ Phenotype compile_phenotype(const Genome& g) {
     p.toxicity = std::min(TOXICITY_PER_SIZE * p.part_total[static_cast<int>(PartType::Poison)], MAX_TOXICITY);
     p.bite       = 1.0f + bite;
     p.efficiency = TRANSFER_EFFICIENCY + DIGEST_GAIN * digestion;
+    p.detox      = detox;
 
     // --- 9. Storage: a body can only hold so much, and can't save up more
     //        than it can hold before dividing --------------------------------
