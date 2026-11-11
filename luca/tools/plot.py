@@ -29,7 +29,7 @@ def plot_run(out_dir: Path):
         sys.exit("metrics.csv is empty")
     t = m["tick"]
 
-    fig, ax = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
+    fig, ax = plt.subplots(3, 2, figsize=(12, 12), constrained_layout=True)
 
     a = ax[0][0]
     a.plot(t, m["population"], color="#2a6f97")
@@ -49,7 +49,7 @@ def plot_run(out_dir: Path):
     a.plot(t, m["photo_bright"], label="photo size, sunny half", color="#e0a100")
     a.plot(t, m["photo_dim"], label="photo size, dim half", color="#5b5f97")
     a.plot(t, m["mean_radius"], label="core radius (all)", color="#888888", linestyle="--")
-    a.set_title("Traits (should diverge once mutation + real costs exist)")
+    a.set_title("Traits: sunny half vs dim half")
     a.set_xlabel("tick")
     a.legend()
     a.grid(alpha=0.3)
@@ -63,6 +63,28 @@ def plot_run(out_dir: Path):
     b = a.twinx()
     b.plot(t, m["ms_per_tick"], color="#2a6f97", alpha=0.6, label="ms / tick")
     b.set_ylabel("ms / tick")
+
+    # Who lives how: counted from where each creature's energy really came from.
+    if "producers" in m:
+        a = ax[2][0]
+        a.stackplot(t, m["producers"], m["mixed"], m["hunters"], m["scavengers"],
+                    labels=["sun-fed", "mixed diet", "fed on the living", "fed on the dead"],
+                    colors=["#3a7d44", "#c9a227", "#b5443b", "#6c5b7b"])
+        a.plot(t, m["movers"], color="black", linewidth=1, label="able to move")
+        a.set_title("Ways of life (nothing here is coded as a class)")
+        a.set_xlabel("tick")
+        a.legend(loc="upper left", fontsize=8)
+        a.grid(alpha=0.3)
+
+        a = ax[2][1]
+        a.plot(t, m["energy_in"], label="from the sun", color="#e0a100")
+        a.plot(t, m["eaten_living"], label="taken from the living", color="#b5443b")
+        a.plot(t, m["eaten_dead"], label="taken from the dead", color="#6c5b7b")
+        a.set_yscale("symlog", linthresh=10)
+        a.set_title("Energy flows per interval")
+        a.set_xlabel("tick")
+        a.legend(fontsize=8)
+        a.grid(alpha=0.3)
 
     path = out_dir / "run.png"
     fig.savefig(path, dpi=120)

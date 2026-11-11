@@ -9,6 +9,8 @@
 #include "creatures.hpp"
 #include "powers.hpp"
 #include "rng.hpp"
+#include "soil.hpp"
+#include "species.hpp"
 #include "spatial_grid.hpp"
 #include "world.hpp"
 
@@ -20,12 +22,31 @@ struct TickStats {
     uint64_t    tick = 0;
     std::size_t births = 0;
     std::size_t deaths = 0;
-    double energy_in       = 0.0;  // light absorbed
-    double energy_out      = 0.0;  // everything paid (lost as heat)
+    double energy_in       = 0.0;  // light absorbed: the only energy that enters the world
+    double energy_out      = 0.0;  // everything lost as heat
     double out_upkeep      = 0.0;  // breakdown of energy_out
     double out_thermal     = 0.0;
     double out_movement    = 0.0;
+    double out_transfer    = 0.0;  // lost crossing membranes (1 - TRANSFER_EFFICIENCY)
+    double out_decay       = 0.0;  // corpses weathering away uneaten
+    double out_waste       = 0.0;  // taken in by a body already full
+    // Energy that changed hands inside the world (not part of in/out):
+    double eaten_living    = 0.0;  // arrived from living bodies
+    double eaten_dead      = 0.0;  // arrived from corpses
     double tick_ms         = 0.0;  // wall-clock time of this tick
+};
+
+// Who lives how, counted from where each creature's energy has actually come
+// from. Nothing in the sim is labelled "predator": these are observations.
+struct Census {
+    std::size_t producers = 0;    // mostly light
+    std::size_t hunters = 0;      // mostly taken from living bodies
+    std::size_t scavengers = 0;   // mostly taken from corpses
+    std::size_t mixed = 0;        // no single source above 60%
+    std::size_t young = 0;        // hasn't eaten enough yet to say
+    std::size_t movers = 0;       // can move
+    std::size_t sighted = 0;      // has a sensor
+    std::size_t armoured = 0;
 };
 
 class Simulation {
@@ -34,6 +55,13 @@ public:
 
     // Scatter the initial LUCAs uniformly over the world.
     void seed_population();
+
+    // Drop one creature into the world from outside (a test, and later a
+    // creature file or a life-bearing meteor). Only the genome comes in; its
+    // stats are compiled here, under this world's physics. Its body is new
+    // matter and energy arriving from outside, so do this between audits.
+    // Returns the creature's id.
+    uint64_t add_creature(float x, float y, float energy, const Genome& genome);
 
     // Advance one tick.
     void step();
@@ -55,17 +83,36 @@ public:
     const TickStats& last_stats() const { return stats_; }
     const Chronicle& chronicle() const { return chronicle_; }
     const PowerSystem& powers() const { return powers_; }
+    const Soil&      soil() const { return soil_; }
+    const std::vector<float>& biomass() const { return biomass_; }  // living mass per cell, last tick
+    const Census&    census() const { return census_; }             // refreshed every 50 ticks
+    const SpeciesRegistry& species() const { return species_; }     // every species there has ever been
 
-    // Total energy currently stored in living creatures.
+    // All energy held in the world: in living creatures, locked in their
+    // bodies, and left in corpses.
     double stored_energy() const;
+    // All matter in the world: soil, corpses and living bodies. Constant.
+    double total_matter() const;
 
 private:
     // Population-level event detectors; they only write to the chronicle.
     void detect_events();
 
+    void take_census();
+    // Add a creature and keep the species books; all arrivals go through here.
+    void admit(float x, float y, float energy, uint32_t lineage, uint32_t species, uint32_t generation,
+               Genome genome, const Phenotype& pheno);
+    void weather_corpses();
+    void wash_soil();
+    void share_light_by_canopy();
+    // Where a child flung `dist` from (x, y) along (ux, uy) comes down: it
+    // stops short of any step in the ground taller than birth_max_step.
+    void land_child(float x, float y, float ux, float uy, float dist, float& out_x, float& out_y) const;
+    void decide_movement(std::size_t i, int cell, const LocalEnv& env);
+
     struct Birth {
         float x, y, energy;
-        uint32_t lineage, generation;
+        uint32_t lineage, species, generation;
         Genome genome;
         Phenotype pheno;
     };
@@ -77,16 +124,24 @@ private:
     SpatialGrid grid_;
     uint64_t    tick_ = 0;
     uint32_t    next_lineage_ = 0;
+    uint64_t    next_id_ = 1;
+    Soil        soil_;
+    Census      census_;
     TickStats   stats_;
     PowerSystem powers_;
     Chronicle   chronicle_;
+    SpeciesRegistry species_;
 
     // Detector state
     std::size_t peak_pop_ = 0;        // highest population since the last die-off
     std::size_t crash_from_ = 0;      // the peak we fell from; 0 = not in a die-off
     uint64_t    crash_tick_ = 0;      // when that die-off was logged
     std::size_t next_milestone_ = 1000;
+    std::size_t day_peak_ = 0;        // highest population so far today
+    uint64_t    day_seen_ = 0;
     bool        extinct_logged_ = false;
+    bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false;
+    bool        sighted_logged_ = false, armoured_logged_ = false;
 
     // Scratch buffers, reused every tick to avoid allocation.
     std::vector<int>   cell_of_;
@@ -94,8 +149,19 @@ private:
     std::vector<float> cell_demand_;
     std::vector<float> gain_;
     std::vector<float> cost_upkeep_, cost_thermal_, cost_move_;
-    std::vector<float> new_x_, new_y_;
+    std::vector<float> new_x_, new_y_, new_hx_, new_hy_;
+    std::vector<float> biomass_;             // per cell
+    std::vector<float> wash_;                // per cell: matter on its way downhill
+    std::vector<float> cell_corpse_demand_;  // per cell
+    std::vector<float> corpse_want_, corpse_gain_;
+    std::vector<float> drain_want_, drained_, intake_;
+    struct Contact { uint32_t taker, giver; float flow; };
+    std::vector<Contact> contacts_;
+    struct Near { float x, y, reach; uint32_t who; };  // one creature, in cell order
+    std::vector<Near> near_;
     std::vector<uint32_t> dead_;
+    struct Tall { float radius; uint32_t who; };
+    std::vector<Tall> canopy_;               // one crowded cell's bodies, tallest first
     std::vector<Birth> births_;
 };
 

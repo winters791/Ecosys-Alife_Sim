@@ -19,15 +19,21 @@ PackedFloat32Array to_packed(const std::vector<float>& v) {
     return out;
 }
 
-// Stable-ish random number in [0, 1) from a position. Creatures change array
-// slots when others die, so the phase is tied to where they are, not to
-// their index, or blobs would flicker.
-float hash01(float x, float y) {
-    uint32_t h = static_cast<uint32_t>(x * 97.0f) * 0x9E3779B1u ^ static_cast<uint32_t>(y * 89.0f) * 0x85EBCA77u;
-    h ^= h >> 15;
-    h *= 0x2C1B3C6Du;
-    h ^= h >> 12;
+// A fixed random number in [0, 1) per creature, so each blob breathes and
+// wiggles on its own beat for its whole life.
+float hash01(uint64_t id) {
+    uint64_t h = id * 0x9E3779B97F4A7C15ull;
+    h ^= h >> 29;
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 32;
     return static_cast<float>(h & 0xFFFFu) / 65536.0f;
+}
+
+// One colour per species, as a hue: steps of the golden ratio keep species
+// with neighbouring ids far apart on the colour wheel.
+float species_hue(uint32_t id) {
+    const float h = 0.13f + static_cast<float>(id % 4096u) * 0.61803399f;
+    return h - std::floor(h);
 }
 
 // Bilinear height between cell centres.
@@ -78,6 +84,105 @@ double  LucaWorld::get_extent() const { return sim_ ? sim_->world().extent() : 0
 double  LucaWorld::get_height_limit() const { return sim_ ? sim_->config().height_limit : 0.0; }
 double  LucaWorld::get_sun_scale() const { return sim_ ? sim_->world().sun_scale() : 1.0; }
 double  LucaWorld::get_climate_offset() const { return sim_ ? sim_->world().climate_offset() : 0.0; }
+double  LucaWorld::get_daylight() const {
+    if (!sim_) return 1.0;
+    return sim_->world().day_length() > 0 ? sim_->world().daylight() * 0.5 : 1.0;
+}
+double  LucaWorld::get_day_phase() const { return sim_ ? sim_->world().day_phase() : 0.25; }
+int     LucaWorld::get_day_length() const { return sim_ ? sim_->world().day_length() : 0; }
+
+Dictionary LucaWorld::get_census() const {
+    Dictionary d;
+    if (!sim_) return d;
+    const luca::Census& k = sim_->census();
+    d["producers"]  = static_cast<int64_t>(k.producers);
+    d["hunters"]    = static_cast<int64_t>(k.hunters);
+    d["scavengers"] = static_cast<int64_t>(k.scavengers);
+    d["mixed"]      = static_cast<int64_t>(k.mixed);
+    d["young"]      = static_cast<int64_t>(k.young);
+    d["movers"]     = static_cast<int64_t>(k.movers);
+    d["sighted"]    = static_cast<int64_t>(k.sighted);
+    d["armoured"]   = static_cast<int64_t>(k.armoured);
+    return d;
+}
+
+int LucaWorld::get_species_count(int min_population) const {
+    if (!sim_) return 0;
+    int n = 0;
+    for (const luca::Species& s : sim_->species().all())
+        n += (s.population > 0 && s.population >= static_cast<uint32_t>(std::max(min_population, 0))) ? 1 : 0;
+    return n;
+}
+
+Array LucaWorld::get_top_species(int max_count) const {
+    Array out;
+    if (!sim_ || max_count <= 0) return out;
+    const auto& all = sim_->species().all();
+    std::vector<uint32_t> ids;
+    for (const luca::Species& s : all)
+        if (s.alive()) ids.push_back(s.id);
+    const std::size_t keep = std::min(ids.size(), static_cast<std::size_t>(max_count));
+    // Biggest first; ties go to the older species, so the order is stable.
+    std::partial_sort(ids.begin(), ids.begin() + static_cast<std::ptrdiff_t>(keep), ids.end(),
+                      [&](uint32_t a, uint32_t b) {
+                          return all[a].population != all[b].population ? all[a].population > all[b].population : a < b;
+                      });
+    for (std::size_t k = 0; k < keep; ++k) {
+        const luca::Species& s = all[ids[k]];
+        Dictionary d;
+        d["id"] = static_cast<int64_t>(s.id);
+        d["name"] = String::utf8(s.name.c_str());
+        d["population"] = static_cast<int64_t>(s.population);
+        d["parent"] = s.parent != luca::NO_SPECIES ? String::utf8(all[s.parent].name.c_str()) : String();
+        d["born"] = static_cast<int64_t>(s.born_tick);
+        d["hue"] = species_hue(s.id);
+        out.push_back(d);
+    }
+    return out;
+}
+
+Array LucaWorld::get_species_tree(int min_peak) const {
+    Array out;
+    if (!sim_) return out;
+    const auto& all = sim_->species().all();
+    const uint32_t need = static_cast<uint32_t>(std::max(min_peak, 1));
+    const std::size_t n = all.size();
+
+    // Nearest ancestor that is itself listed. Parents always have smaller
+    // ids, so one pass in id order is enough.
+    std::vector<uint32_t> anchor(n, luca::NO_SPECIES);
+    std::vector<std::vector<uint32_t>> children(n);
+    std::vector<uint32_t> roots;
+    for (std::size_t i = 0; i < n; ++i) {
+        const uint32_t p = all[i].parent;
+        if (p != luca::NO_SPECIES) anchor[i] = all[p].peak >= need ? p : anchor[p];
+        if (all[i].peak < need) continue;
+        if (anchor[i] == luca::NO_SPECIES) roots.push_back(static_cast<uint32_t>(i));
+        else children[anchor[i]].push_back(static_cast<uint32_t>(i));   // already in birth order
+    }
+
+    // Depth-first, without recursion: a species, then its branches.
+    std::vector<int64_t> row(n, -1);
+    std::vector<uint32_t> stack(roots.rbegin(), roots.rend());
+    while (!stack.empty()) {
+        const uint32_t id = stack.back();
+        stack.pop_back();
+        const luca::Species& s = all[id];
+        row[id] = out.size();
+        Dictionary d;
+        d["id"] = static_cast<int64_t>(s.id);
+        d["name"] = String::utf8(s.name.c_str());
+        d["row_parent"] = anchor[id] != luca::NO_SPECIES ? row[anchor[id]] : static_cast<int64_t>(-1);
+        d["born"] = static_cast<int64_t>(s.born_tick);
+        d["extinct"] = s.alive() ? static_cast<int64_t>(-1) : static_cast<int64_t>(s.extinct_tick);
+        d["population"] = static_cast<int64_t>(s.population);
+        d["peak"] = static_cast<int64_t>(s.peak);
+        d["hue"] = species_hue(s.id);
+        out.push_back(d);
+        for (auto it = children[id].rbegin(); it != children[id].rend(); ++it) stack.push_back(*it);
+    }
+    return out;
+}
 
 PackedFloat32Array LucaWorld::get_heights() const {
     return sim_ ? to_packed(sim_->world().heights()) : PackedFloat32Array();
@@ -88,10 +193,26 @@ PackedFloat32Array LucaWorld::get_temperatures() const {
 PackedFloat32Array LucaWorld::get_lights() const {
     return sim_ ? to_packed(sim_->world().lights()) : PackedFloat32Array();
 }
+PackedFloat32Array LucaWorld::get_nutrients() const {
+    return sim_ ? to_packed(sim_->soil().nutrient) : PackedFloat32Array();
+}
+PackedFloat32Array LucaWorld::get_corpses() const {
+    return sim_ ? to_packed(sim_->soil().corpse_energy) : PackedFloat32Array();
+}
+PackedFloat32Array LucaWorld::get_soil() const {
+    PackedFloat32Array out;
+    if (!sim_) return out;
+    const auto& a = sim_->soil().nutrient;
+    const auto& b = sim_->soil().corpse_energy;
+    out.resize(static_cast<int64_t>(a.size()) * 2);
+    float* f = out.ptrw();
+    for (std::size_t i = 0; i < a.size(); ++i) { f[i * 2] = a[i]; f[i * 2 + 1] = b[i]; }
+    return out;
+}
 int LucaWorld::get_height_revision() const { return sim_ ? static_cast<int>(sim_->world().height_revision()) : 0; }
 int LucaWorld::get_climate_revision() const { return sim_ ? static_cast<int>(sim_->world().climate_revision()) : 0; }
 
-PackedFloat32Array LucaWorld::get_instance_buffer(int capacity, double blob_scale) const {
+PackedFloat32Array LucaWorld::get_instance_buffer(int capacity) const {
     constexpr int STRIDE = 20;
     PackedFloat32Array out;
     capacity = std::max(capacity, 0);
@@ -99,30 +220,30 @@ PackedFloat32Array LucaWorld::get_instance_buffer(int capacity, double blob_scal
     if (!sim_ || capacity == 0) return out;
 
     const luca::Creatures& c = sim_->creatures();
-    const luca::World&     w = sim_->world();
     const std::size_t n = std::min(c.size(), static_cast<std::size_t>(capacity));
-    const float scale = static_cast<float>(blob_scale);
     float* f = out.ptrw();
+    auto part = [](const luca::Phenotype& p, luca::PartType t) { return p.part_total[static_cast<int>(t)]; };
 
     for (std::size_t i = 0; i < n; ++i, f += STRIDE) {
         const luca::Genome&    g = c.genome[i];
         const luca::Phenotype& p = c.pheno[i];
-        const float r = std::max(g.core_radius, 0.05f) * scale;
 
-        // Transform3D as 3 rows of 4: uniform scale, then the position.
-        // The blob sits on the ground, so its centre is one radius up.
-        f[0] = r;    f[1] = 0.0f; f[2]  = 0.0f; f[3]  = c.x[i];
-        f[4] = 0.0f; f[5] = r;    f[6]  = 0.0f; f[7]  = smooth_height(w, c.x[i], c.y[i]) + r * 0.8f;
-        f[8] = 0.0f; f[9] = 0.0f; f[10] = r;    f[11] = c.y[i];
+        // Rows of the 3x4 transform; see the header for what sits where.
+        f[0] = g.core_radius;                    f[1] = part(p, luca::PartType::Legs);
+        f[2] = part(p, luca::PartType::Storage); f[3] = c.x[i];
+        f[4] = part(p, luca::PartType::Absorber); f[5] = part(p, luca::PartType::Sensor);
+        f[6] = c.hx[i];                          f[7] = species_hue(c.species[i]);
+        f[8] = part(p, luca::PartType::Flagellum); f[9] = part(p, luca::PartType::Armour);
+        f[10] = c.hy[i];                         f[11] = c.y[i];
 
         // Colour channel: raw traits. The shader decides how they look.
         f[12] = std::clamp(g.pigment, 0.0f, 1.0f);
         f[13] = p.surface_area > 0.0f ? std::clamp(p.light_capture / p.surface_area, 0.0f, 1.0f) : 0.0f;
         f[14] = p.repro_threshold > 0.0f ? std::clamp(c.energy[i] / p.repro_threshold, 0.0f, 1.0f) : 0.0f;
-        f[15] = std::clamp(p.max_speed * 0.5f, 0.0f, 1.0f);
+        f[15] = p.has_brain ? std::clamp(p.max_speed * 4.0f, 0.0f, 1.0f) : 0.0f;
 
         // Custom data.
-        f[16] = hash01(c.x[i], c.y[i]);
+        f[16] = hash01(c.id[i]);
         f[17] = g.shape[0];
         f[18] = g.shape[1];
         f[19] = g.shape[2];
@@ -216,29 +337,60 @@ Dictionary LucaWorld::inspect(double x, double z, double max_distance) const {
         const float d2 = dx * dx + dy * dy;
         if (d2 < best) { best = d2; who = i; }
     }
-    if (who == c.size()) return d;
+    return who == c.size() ? d : describe(who);
+}
 
+Dictionary LucaWorld::inspect_id(int64_t id) const {
+    if (!sim_) return Dictionary();
+    const auto& ids = sim_->creatures().id;
+    for (std::size_t i = 0; i < ids.size(); ++i)
+        if (ids[i] == static_cast<uint64_t>(id)) return describe(i);
+    return Dictionary();
+}
+
+Dictionary LucaWorld::describe(std::size_t who) const {
+    Dictionary d;
+    const luca::Creatures& c = sim_->creatures();
     const luca::Genome&    g = c.genome[who];
     const luca::Phenotype& p = c.pheno[who];
     const luca::World&     w = sim_->world();
     const int cell = w.cell_index(c.x[who], c.y[who]);
+    d["id"] = static_cast<int64_t>(c.id[who]);
     d["x"] = c.x[who];
     d["z"] = c.y[who];
     d["energy"] = c.energy[who];
+    d["energy_capacity"] = p.energy_capacity;
     d["age"] = static_cast<int64_t>(c.age[who]);
     d["lineage"] = static_cast<int64_t>(c.lineage[who]);
     d["generation"] = static_cast<int64_t>(c.generation[who]);
+    const luca::Species& sp = sim_->species().get(c.species[who]);
+    d["species"] = String::utf8(sp.name.c_str());
+    d["species_parent"] = sp.parent != luca::NO_SPECIES ? String::utf8(sim_->species().get(sp.parent).name.c_str()) : String();
+    d["species_population"] = static_cast<int64_t>(sp.population);
+    d["species_hue"] = species_hue(sp.id);
     d["radius"] = g.core_radius;
     d["pigment"] = g.pigment;
     d["mass"] = p.mass;
     d["upkeep"] = p.upkeep;
     d["light_capture"] = p.light_capture;
-    d["max_speed"] = p.max_speed;
+    d["max_speed"] = p.has_brain ? p.max_speed : 0.0f;
+    d["throw_range"] = p.throw_range;
+    d["bite"] = p.bite;
+    d["brain_neurons"] = p.has_brain ? static_cast<int64_t>(c.brain[who].hidden) : static_cast<int64_t>(-1);
+    d["brain_links"] = static_cast<int64_t>(c.brain[who].links);
+    d["efficiency"] = p.efficiency;
+    d["absorb"] = p.absorb;
+    d["membrane"] = p.membrane;
+    d["sense_cells"] = p.sense_cells;
     d["repro_threshold"] = p.repro_threshold;
     d["thermal_optimum"] = p.thermal_optimum;
     d["thermal_tolerance"] = p.thermal_tolerance;
+    d["fed_light"] = c.fed_light[who];
+    d["fed_living"] = c.fed_living[who];
+    d["fed_dead"] = c.fed_dead[who];
     d["cell_light"] = w.light(cell);
     d["cell_temperature"] = w.temperature(cell);
+    d["cell_nutrient"] = sim_->soil().nutrient[cell];
     PackedStringArray parts;
     for (const luca::Part& part : g.parts)
         parts.push_back(String(luca::part_name(part.type)) + " " + String::num(part.size, 2));
@@ -270,7 +422,18 @@ void LucaWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_lights"), &LucaWorld::get_lights);
     ClassDB::bind_method(D_METHOD("get_height_revision"), &LucaWorld::get_height_revision);
     ClassDB::bind_method(D_METHOD("get_climate_revision"), &LucaWorld::get_climate_revision);
-    ClassDB::bind_method(D_METHOD("get_instance_buffer", "capacity", "blob_scale"), &LucaWorld::get_instance_buffer);
+    ClassDB::bind_method(D_METHOD("get_instance_buffer", "capacity"), &LucaWorld::get_instance_buffer);
+    ClassDB::bind_method(D_METHOD("get_daylight"), &LucaWorld::get_daylight);
+    ClassDB::bind_method(D_METHOD("get_day_phase"), &LucaWorld::get_day_phase);
+    ClassDB::bind_method(D_METHOD("get_day_length"), &LucaWorld::get_day_length);
+    ClassDB::bind_method(D_METHOD("get_census"), &LucaWorld::get_census);
+    ClassDB::bind_method(D_METHOD("get_species_count", "min_population"), &LucaWorld::get_species_count);
+    ClassDB::bind_method(D_METHOD("get_top_species", "max_count"), &LucaWorld::get_top_species);
+    ClassDB::bind_method(D_METHOD("get_species_tree", "min_peak"), &LucaWorld::get_species_tree);
+    ClassDB::bind_method(D_METHOD("get_nutrients"), &LucaWorld::get_nutrients);
+    ClassDB::bind_method(D_METHOD("get_corpses"), &LucaWorld::get_corpses);
+    ClassDB::bind_method(D_METHOD("get_soil"), &LucaWorld::get_soil);
+    ClassDB::bind_method(D_METHOD("inspect_id", "id"), &LucaWorld::inspect_id);
     ClassDB::bind_method(D_METHOD("height_at", "x", "z"), &LucaWorld::height_at);
     ClassDB::bind_method(D_METHOD("raycast", "origin", "direction"), &LucaWorld::raycast);
     ClassDB::bind_method(D_METHOD("cast_power", "power", "x", "z", "radius", "amount", "duration", "quiet"),

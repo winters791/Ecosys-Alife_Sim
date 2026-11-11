@@ -26,6 +26,8 @@ void usage() {
         "  --pop N          initial LUCA count            (default 200)\n"
         "  --light MODE     uniform | gradient            (default gradient)\n"
         "  --sun F          energy per cell per tick      (default 1.0)\n"
+        "  --day N          ticks per day, 0 = no night     (default 600)\n"
+        "  --nutrients F    mean free matter per cell     (default 0.8)\n"
         "  --interval N     ticks between metrics rows    (default 100)\n"
         "  --script FILE    god-power script (format: core/powers.hpp)\n"
         "  --out DIR        output directory              (default out)\n"
@@ -54,6 +56,8 @@ int main(int argc, char** argv) {
         else if (arg_is(a, "--size"))        cfg.world_size = std::atoi(next());
         else if (arg_is(a, "--pop"))         cfg.initial_population = std::atoi(next());
         else if (arg_is(a, "--sun"))         cfg.sun_strength = static_cast<float>(std::atof(next()));
+        else if (arg_is(a, "--day"))         cfg.day_length = std::atoi(next());
+        else if (arg_is(a, "--nutrients"))   cfg.nutrient_mean = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--interval"))    cfg.metrics_interval = std::atoi(next());
         else if (arg_is(a, "--out"))         out_dir = next();
         else if (arg_is(a, "--script"))      script_path = next();
@@ -116,9 +120,11 @@ int main(int argc, char** argv) {
             const double audit = metrics.write_row(sim, interval);
             if (std::abs(audit) > std::abs(worst_audit)) worst_audit = audit;
             if (!quiet)
-                std::printf("tick %8llu  pop %7zu  births %6zu  deaths %6zu  %.3f ms/tick  audit %+.2e\n",
+                std::printf("tick %8llu  pop %7zu  births %6zu  deaths %6zu  sun/living/dead-fed %zu/%zu/%zu  movers %zu  species %zu  %.3f ms/tick  audit %+.2e\n",
                             static_cast<unsigned long long>(sim.tick()), sim.creatures().size(),
                             interval.births, interval.deaths,
+                            sim.census().producers, sim.census().hunters, sim.census().scavengers, sim.census().movers,
+                            sim.species().living_established(),
                             interval.total_ms / static_cast<double>(interval.ticks), audit);
             interval.begin(sim);
         }
@@ -133,6 +139,7 @@ int main(int argc, char** argv) {
         luca::write_world_snapshot(sim, out_dir + "/world.csv");
     }
 
+    luca::write_species_table(sim, out_dir + "/species.csv");
     {
         std::ofstream f(out_dir + "/chronicle.txt");
         for (const auto& e : sim.chronicle().entries()) f << luca::format_entry(e) << '\n';

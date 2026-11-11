@@ -27,6 +27,17 @@ float lattice(int x, int y, uint32_t seed) {
 
 float smoothstep(float t) { return t * t * (3.0f - 2.0f * t); }
 
+// --- Slope shade (laws of this world; tune here) -------------------------------
+// The sun stands over the y = 0 edge. Ground that falls away from it is in its
+// own shadow; ground sunk below the land around it is in everyone else's.
+constexpr float FACING_LOSS  = 0.15f;  // light lost per unit of height dropped per cell, away from the sun
+constexpr float FACING_MAX   = 0.5f;
+constexpr int   HORIZON      = 3;      // cells: how far a valley floor looks for its rim
+constexpr float VALLEY_LOSS  = 0.06f;  // light lost per unit of depth below that rim
+constexpr float VALLEY_MAX   = 0.4f;
+// --- Drainage -------------------------------------------------------------------
+constexpr float STEEP_DROP   = 2.0f;   // a drop this tall to the lowest neighbour counts as fully steep
+
 float value_noise(float x, float y, uint32_t seed) {
     const int   x0 = static_cast<int>(std::floor(x));
     const int   y0 = static_cast<int>(std::floor(y));
@@ -58,9 +69,13 @@ void World::generate(const SimConfig& cfg) {
     cell_size_ = cfg.cell_size;
     sun_scale_ = 1.0f;
     climate_ = 0.0f;
+    set_time(0);
     const int cells = n_ * n_;
     height_.assign(cells, 0.0f);
     heat_.assign(cells, 0.0f);
+    shade_.assign(cells, 1.0f);
+    downhill_.assign(cells, -1);
+    steep_.assign(cells, 0.0f);
     light_.assign(cells, 0.0f);
     temperature_.assign(cells, 0.0f);
 
@@ -78,8 +93,25 @@ void World::generate(const SimConfig& cfg) {
     const float range = (hi - lo) > 1e-6f ? (hi - lo) : 1.0f;
     for (float& h : height_) h = (h - lo) / range * cfg.max_height;
 
+    refresh_terrain(0, 0, n_ - 1, n_ - 1);
     refresh_light();
     refresh_temperature(0, 0, n_ - 1, n_ - 1);
+}
+
+void World::set_time(uint64_t tick) {
+    if (cfg_.day_length <= 0) { daylight_ = 1.0f; day_phase_ = 0.25f; return; }
+    const uint64_t len = static_cast<uint64_t>(cfg_.day_length);
+    day_phase_ = static_cast<float>(tick % len) / static_cast<float>(len);
+    // A sine pushed through a clamp: flat day, flat night, short twilight.
+    // Scaled to 0..2 so it averages 1 over a day: sun_strength stays "energy
+    // per cell per tick" in the long run, it just all arrives in daytime.
+    daylight_ = 2.0f * std::clamp(0.5f + 1.5f * std::sin(6.2831853f * day_phase_), 0.0f, 1.0f);
+}
+
+float World::patch_noise(int cell, uint32_t salt) const {
+    const uint32_t seed = static_cast<uint32_t>(cfg_.seed ^ (cfg_.seed >> 32)) + salt * 0x9E3779B1u;
+    const float base = 7.0f / static_cast<float>(n_);
+    return fbm(static_cast<float>(cell % n_) * base, static_cast<float>(cell / n_) * base, seed, 4);
 }
 
 float World::latitude(int row) const {
@@ -93,8 +125,45 @@ void World::refresh_light() {
         const float frac = cfg_.light_mode == LightMode::Gradient
                                ? 1.0f - (1.0f - cfg_.gradient_min) * latitude(y)
                                : 1.0f;
-        std::fill_n(light_.begin() + y * n_, n_, sun * frac);
+        for (int x = 0; x < n_; ++x) light_[y * n_ + x] = sun * frac * shade_[y * n_ + x];
     }
+}
+
+void World::refresh_terrain(int x0, int y0, int x1, int y1) {
+    // A changed cell alters the shade of cells up to HORIZON away.
+    x0 = std::max(x0 - HORIZON, 0);
+    y0 = std::max(y0 - HORIZON, 0);
+    x1 = std::min(x1 + HORIZON, n_ - 1);
+    y1 = std::min(y1 + HORIZON, n_ - 1);
+    auto h = [&](int x, int y) { return height_[std::clamp(y, 0, n_ - 1) * n_ + std::clamp(x, 0, n_ - 1)]; };
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            const int i = y * n_ + x;
+            const float here = height_[i];
+
+            // Facing: how fast the ground drops as you walk away from the sun.
+            const float away = std::max(0.0f, 0.5f * (h(x, y - 1) - h(x, y + 1)));
+            const float facing = std::min(FACING_LOSS * away, FACING_MAX);
+            // Valley: how far below its rim (four points HORIZON cells out) it lies.
+            const float rim = 0.25f * (h(x - HORIZON, y) + h(x + HORIZON, y) + h(x, y - HORIZON) + h(x, y + HORIZON));
+            const float valley = std::min(VALLEY_LOSS * std::max(0.0f, rim - here), VALLEY_MAX);
+            shade_[i] = 1.0f - std::clamp(cfg_.slope_shade, 0.0f, 1.0f) * (facing + valley);
+
+            // Drainage: the lowest of the eight neighbours, if any is lower.
+            int low = -1;
+            float low_h = here;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    if ((dx == 0 && dy == 0) || nx < 0 || ny < 0 || nx >= n_ || ny >= n_) continue;
+                    if (height_[ny * n_ + nx] < low_h) {
+                        low_h = height_[ny * n_ + nx];
+                        low = ny * n_ + nx;
+                    }
+                }
+            downhill_[i] = low;
+            steep_[i] = low >= 0 ? std::min((here - low_h) / STEEP_DROP, 1.0f) : 0.0f;
+        }
 }
 
 void World::refresh_temperature(int x0, int y0, int x1, int y1) {
@@ -127,7 +196,11 @@ void World::brush(BrushField field, float x, float y, float radius, float amount
             if (field == BrushField::Height) v = std::clamp(v, 0.0f, cfg_.height_limit);
         }
     refresh_temperature(x0, y0, x1, y1);
-    if (field == BrushField::Height) ++height_rev_;
+    if (field == BrushField::Height) {
+        ++height_rev_;
+        refresh_terrain(x0, y0, x1, y1);
+        refresh_light();
+    }
 }
 
 void World::add_sun(float delta) {

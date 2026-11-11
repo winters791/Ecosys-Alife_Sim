@@ -22,8 +22,8 @@ Run `--help` for defaults.
 | --- | --- | --- |
 | `core/genome.*` | Genome + `make_luca()` | Scaffolding (extend freely) |
 | `core/phenotype.*` | Genome → derived stats | **Uday** (placeholder inside) |
-| `core/energy.*` | Light demand, upkeep, thermal and movement costs | **Uday** (placeholder inside) |
-| `core/mutation.*` | Parent genome → child genome | **Uday** (placeholder inside) |
+| `core/energy.*` | Light demand, upkeep, thermal, movement, contact and corpse rules | First version by Claude (2026-11-11); Uday tunes |
+| `core/mutation.*` | Parent genome → child genome | First version by Claude (2026-11-11); Uday tunes |
 | `core/world.*` | Heightmap terrain, light and temperature fields | Scaffolding |
 | `core/creatures.hpp` | Data-oriented creature storage (one array per field) | Scaffolding |
 | `core/spatial_grid.hpp` | Per-cell buckets, rebuilt each tick in O(N) | Scaffolding |
@@ -34,7 +34,7 @@ Run `--help` for defaults.
 | `headless/main.cpp` | CLI runner | Scaffolding |
 | `tools/plot.py` | Plots for a run | Scaffolding |
 
-Search for `TODO(Uday)` to find your parts. Each one has notes on what to build.
+The creature rules are now filled in. `../CLAUDE.md` (sections 10 and 11) is the up-to-date reference, including which constants to tune; parts of this README and `DESIGN.md` describe the earlier placeholder stage.
 
 ## Units (proposed: change now, not later)
 

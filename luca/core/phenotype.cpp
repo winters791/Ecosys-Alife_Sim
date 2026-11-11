@@ -1,5 +1,7 @@
 #include "phenotype.hpp"
 
+#include "energy.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -17,13 +19,50 @@ constexpr float COST_PER_SIZE[NUM_PARTS] = { 0.1f,  0.15f,   0.2f,     0.2f, 0.3
 constexpr float BASE_UPKEEP    = 0.3f;
 constexpr float PHOTO_PER_AREA = 1.0f;   // max photo patch size per unit of skin
 
-constexpr float FLAGELLUM_THRUST = 0.5f; // world units per tick, per unit size, per unit mass
-constexpr float LEGS_THRUST      = 0.4f;
-constexpr float MAX_SPEED        = 2.0f; // hard physical ceiling (a law, not a population cap)
+// Thrust was 0.5 / 0.4 before anything moved; at 60 ticks a second that crossed
+// the map in five seconds. These give a one-flagellum LUCA about 6 cells/s.
+constexpr float FLAGELLUM_THRUST = 0.125f; // world units per tick, per unit size, per unit mass
+constexpr float LEGS_THRUST      = 0.10f;
+constexpr float MAX_SPEED        = 0.5f;   // hard physical ceiling (a law, not a population cap)
 
-// Gene ranges. Clamping happens here, and only here.
-constexpr float MIN_RADIUS = 0.3f;
-constexpr float MAX_RADIUS = 5.0f;
+// Contact.
+constexpr float MEMBRANE_BASE   = 0.3f;  // every body resists a little
+constexpr float ARMOUR_RESIST   = 2.0f;  // resistance per unit of armour
+constexpr float ARMOUR_CLOGS    = 0.5f;  // armour also slows the wearer's own absorbing
+constexpr float ARMOUR_SHADES   = 0.5f;  // skin under a plate catches no light
+constexpr float REACH_PER_RADIUS = 0.5f;
+
+// Storage and building.
+constexpr float CAPACITY_PER_VOLUME = 650.0f;   // energy a core blob of radius 1 can hold (450 before bodies cost 244 to build)
+constexpr float CAPACITY_PER_STORE  = 600.0f;  // extra per unit of storage part
+// A body is worth eating: a LUCA (mass 1.1) takes 244 to build, and leaves
+// that much behind as a corpse. It was 40 (a 44-energy corpse nobody bothered with).
+constexpr float BODY_ENERGY_PER_MASS = 222.0f;  // energy it takes to build one unit of body
+
+// Behaviour.
+constexpr float SENSE_CELLS_PER_SIZE = 2.0f;
+constexpr int   MAX_SENSE_CELLS      = 4;
+constexpr float BRAIN_COST           = 0.01f;   // upkeep per unit of total weight: thinking isn't free
+constexpr float NEURON_COST          = 0.012f;  // upkeep per hidden neuron
+constexpr float LINK_COST            = 0.002f;  // upkeep per link, however weak
+constexpr float TOLERANCE_COST       = 0.004f;  // upkeep per °C of tolerance: generalists pay
+
+// Dispersal: the means to fling a child costs upkeep whether or not it is used
+// (each throw also costs energy; see throw_cost in energy.cpp).
+constexpr float THROW_UPKEEP         = 0.015f;  // upkeep per cell of range
+
+// Feeding specialisations. Both are pure cost to a body that eats nothing.
+constexpr float BITE_UPKEEP          = 0.06f;   // upkeep per unit of bite (each unit adds the plain pull again)
+constexpr float DIGEST_GAIN          = 0.25f;   // efficiency added at full digestion: 0.70 -> 0.95
+constexpr float DIGEST_UPKEEP        = 0.10f;   // upkeep at full digestion
+
+// Gene ranges live in genome.hpp (limits::); mutation enforces them through
+// clamp_genome(). The clamps below are a second line of defence for genomes
+// that arrive from outside (creature files).
+using limits::MIN_RADIUS;
+using limits::MAX_RADIUS;
+
+bool thrust_possible(float flagella, float legs) { return flagella + legs > 0.0f; }
 
 }  // namespace
 
@@ -38,8 +77,11 @@ constexpr float MAX_RADIUS = 5.0f;
 //   5. Max speed: thrust from flagella + legs, divided by mass, capped
 //   6. Heat absorption: pigment × surface area / mass (small bodies swing more)
 //
+//   7. (added by Claude, 2026-11-11, at Uday's request) wide thermal tolerance
+//      and brain weights cost upkeep; contact stats (absorb / membrane / reach);
+//      energy capacity; the energy locked in the body; sensor range; brain copy
+//
 // Later:
-//   * Extra upkeep for wide thermal tolerance, so generalists pay
 //   * Split max_speed into swim_speed (flagella) and walk_speed (legs) once
 //     the world has water
 //
@@ -66,18 +108,44 @@ Phenotype compile_phenotype(const Genome& g) {
         mass        += size * MASS_PER_SIZE[t];
         part_upkeep += size * COST_PER_SIZE[t];
 
+        p.part_total[t] += size;
+
         if (part.type == PartType::Photo)     photo_total     += size;
         if (part.type == PartType::Flagellum) flagellum_total += size;
         if (part.type == PartType::Legs)      legs_total      += size;
     }
+    const float absorber_total = p.part_total[static_cast<int>(PartType::Absorber)];
+    const float sensor_total   = p.part_total[static_cast<int>(PartType::Sensor)];
+    const float armour_total   = p.part_total[static_cast<int>(PartType::Armour)];
+    const float storage_total  = p.part_total[static_cast<int>(PartType::Storage)];
+    const float tolerance      = std::max(0.0f, g.thermal_tolerance);
+    const float seed_throw     = std::clamp(g.seed_throw, 0.0f, limits::MAX_THROW);
+    const float bite           = std::clamp(g.bite, 0.0f, limits::MAX_BITE);
+    const float digestion      = std::clamp(g.digestion, 0.0f, 1.0f);
+
+    // A brain only exists if there is something for it to drive.
+    // Its price grows with its size: neurons, links and the strength of the links.
+    p.has_brain = thrust_possible(flagellum_total, legs_total) && !g.brain.empty();
+    float brain_upkeep = 0.0f;
+    if (p.has_brain) {
+        brain_upkeep = NEURON_COST * static_cast<float>(std::min<int>(g.brain.hidden, MAX_HIDDEN));
+        const std::size_t links = std::min(g.brain.links.size(), static_cast<std::size_t>(MAX_LINKS));
+        for (std::size_t k = 0; k < links; ++k)
+            brain_upkeep += LINK_COST + BRAIN_COST * std::min(std::abs(g.brain.links[k].weight), limits::MAX_WEIGHT);
+    }
 
     p.mass         = mass;
+    p.radius       = r;
+    p.throw_range  = seed_throw;
     p.surface_area = r * r;
-    p.upkeep       = BASE_UPKEEP * std::pow(mass, 0.75f) + part_upkeep;  // Kleiber + parts
-    // LUCA (r = 1, one photo patch of size 1): mass 1.1, upkeep ≈ 0.42.
+    p.upkeep       = BASE_UPKEEP * std::pow(mass, 0.75f) + part_upkeep  // Kleiber + parts
+                   + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
+                   + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP;
+    // LUCA (r = 1, one photo patch of size 1): mass 1.1, upkeep ≈ 0.42 + 0.04 for its ±10 °C.
 
-    // --- 4. Light capture: patches need skin to sit on ----------------------
-    p.light_capture = std::min(photo_total, PHOTO_PER_AREA * p.surface_area);
+    // --- 4. Light capture: patches need skin to sit on, and plates cover skin
+    const float open_skin = std::max(0.0f, PHOTO_PER_AREA * p.surface_area - ARMOUR_SHADES * armour_total);
+    p.light_capture = std::min(photo_total, open_skin);
 
     // --- 5. Movement: thrust / mass, with a physical ceiling ----------------
     const float thrust = flagellum_total * FLAGELLUM_THRUST + legs_total * LEGS_THRUST;
@@ -89,12 +157,73 @@ Phenotype compile_phenotype(const Genome& g) {
     // LUCA: 0.3 × 1 / 1.1 ≈ 0.27.
 
     // --- 7. Copy-through genes (clamped) -------------------------------------
-    p.repro_threshold   = std::clamp(g.repro_threshold, 1.0f, 100.0f);
-    p.offspring_share   = std::clamp(g.offspring_share, 0.05f, 0.95f);
+    p.offspring_share   = std::clamp(g.offspring_share, limits::MIN_SHARE, limits::MAX_SHARE);
     p.thermal_optimum   = g.thermal_optimum;
-    p.thermal_tolerance = std::max(0.0f, g.thermal_tolerance);
+    p.thermal_tolerance = tolerance;
+
+    // --- 8. Contact: pull, resistance, reach --------------------------------
+    p.absorb   = absorber_total / (1.0f + ARMOUR_CLOGS * armour_total);
+    p.membrane = MEMBRANE_BASE + ARMOUR_RESIST * armour_total;
+    p.reach    = REACH_PER_RADIUS * r;
+    p.bite       = 1.0f + bite;
+    p.efficiency = TRANSFER_EFFICIENCY + DIGEST_GAIN * digestion;
+
+    // --- 9. Storage: a body can only hold so much, and can't save up more
+    //        than it can hold before dividing --------------------------------
+    p.energy_capacity = CAPACITY_PER_VOLUME * r * r * r + CAPACITY_PER_STORE * storage_total;
+    p.body_energy     = BODY_ENERGY_PER_MASS * mass;
+    p.repro_threshold = std::min(std::clamp(g.repro_threshold, limits::MIN_THRESHOLD, limits::MAX_THRESHOLD),
+                                 0.95f * p.energy_capacity);
+
+    // --- 10. Senses -----------------------------------------------------------
+    p.sense_cells = sensor_total > 0.0f
+                        ? std::clamp(static_cast<int>(std::ceil(sensor_total * SENSE_CELLS_PER_SIZE)), 1, MAX_SENSE_CELLS)
+                        : 0;
 
     return p;
+}
+
+BrainPlan compile_brain(const Genome& g) {
+    BrainPlan plan;
+    const int hidden = std::min<int>(g.brain.hidden, MAX_HIDDEN);
+    const int nodes = FIRST_HIDDEN + hidden;
+    plan.hidden = static_cast<uint8_t>(hidden);
+    // Two passes, so links that feed hidden neurons come first. Anything
+    // malformed (a genome from outside) is simply left out.
+    for (int pass = 0; pass < 2; ++pass) {
+        for (const BrainLink& l : g.brain.links) {
+            if (plan.links >= MAX_LINKS) break;
+            const bool from_ok = l.from < NUM_INPUTS || (l.from >= FIRST_HIDDEN && l.from < nodes);
+            const bool feeds_hidden = l.to >= FIRST_HIDDEN && l.to < nodes;
+            const bool feeds_output = l.to >= FIRST_OUTPUT && l.to < FIRST_HIDDEN;
+            if (!from_ok || (pass == 0 ? !feeds_hidden : !feeds_output)) continue;
+            plan.link[plan.links] = l;
+            plan.link[plan.links].weight = std::clamp(l.weight, -limits::MAX_WEIGHT, limits::MAX_WEIGHT);
+            ++plan.links;
+        }
+        if (pass == 0) plan.to_hidden = plan.links;
+    }
+    return plan;
+}
+
+void think(const BrainPlan& plan, BrainState& state, const float* inputs, float* outputs) {
+    // Hidden neurons all update together from the inputs and from what the
+    // hidden neurons held last tick, so the order of links never matters.
+    float next[MAX_HIDDEN] = {};
+    for (int k = 0; k < plan.to_hidden; ++k) {
+        const BrainLink& l = plan.link[k];
+        const float v = l.from < NUM_INPUTS ? inputs[l.from] : state.hidden[l.from - FIRST_HIDDEN];
+        next[l.to - FIRST_HIDDEN] += v * l.weight;
+    }
+    for (int h = 0; h < plan.hidden; ++h) state.hidden[h] = std::tanh(next[h]);
+
+    for (int o = 0; o < NUM_OUTPUTS; ++o) outputs[o] = 0.0f;
+    for (int k = plan.to_hidden; k < plan.links; ++k) {
+        const BrainLink& l = plan.link[k];
+        const float v = l.from < NUM_INPUTS ? inputs[l.from] : state.hidden[l.from - FIRST_HIDDEN];
+        outputs[l.to - FIRST_OUTPUT] += v * l.weight;
+    }
+    for (int o = 0; o < NUM_OUTPUTS; ++o) outputs[o] = std::clamp(outputs[o], -limits::MAX_WEIGHT, limits::MAX_WEIGHT);
 }
 
 }  // namespace luca

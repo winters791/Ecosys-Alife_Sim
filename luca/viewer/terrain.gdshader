@@ -1,79 +1,109 @@
-// Terrain: a flat grid pushed up by the sim's heightmap texture. Colour comes
-// from height, slope and temperature, so climate powers are visible: cool the
-// world and the snow line comes down.
+// The ground, as pixel art seen from straight above. One flat quad; every
+// cell of the sim is a tile, and each tile is drawn on the same pixel grid as
+// the creatures. Height shows as colour bands, hill shading and dark cliff
+// edges; cold ground whitens; rich soil darkens; the dead leave pale specks.
 shader_type spatial;
+render_mode unshaded;
 
-uniform sampler2D height_tex : filter_linear, repeat_disable;
-uniform sampler2D temp_tex : filter_linear, repeat_disable;   // °C
-uniform sampler2D light_tex : filter_linear, repeat_disable;  // energy per cell per tick
-uniform float extent = 128.0;   // world units per side
-uniform float cells = 128.0;    // cells per side
+uniform sampler2D height_tex : filter_nearest, repeat_disable;
+uniform sampler2D temp_tex : filter_nearest, repeat_disable;    // °C
+uniform sampler2D light_tex : filter_nearest, repeat_disable;   // energy per cell per tick at noon
+uniform sampler2D soil_tex : filter_nearest, repeat_disable;    // r = free nutrient, g = corpse energy
+uniform float extent = 128.0;    // world units per side
+uniform float cells = 128.0;     // cells per side
+uniform float px_size = 0.125;   // world units per pixel (shared with the creatures)
 uniform float max_height = 40.0;
-uniform int overlay = 0;        // 0 natural, 1 temperature, 2 light
+uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead
 uniform vec3 brush = vec3(0.0, 0.0, -1.0);  // x, z, radius; radius <= 0 hides it
 uniform vec3 brush_color : source_color = vec3(1.0);
+uniform vec3 tint = vec3(1.0);   // day / night
 
 varying vec3 world_pos;
 
-float height_at(vec2 uv) { return textureLod(height_tex, uv, 0.0).r; }
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// Ordered 4x4 dither: the regular cross-hatch of pixel art, not random noise.
+float bayer(vec2 p) {
+	const float M[16] = float[](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+	ivec2 i = ivec2(mod(p, 4.0));
+	return (M[i.x + i.y * 4] + 0.5) / 16.0;
+}
+
+float height_of(vec2 cell) {
+	return texture(height_tex, (clamp(cell, vec2(0.0), vec2(cells - 1.0)) + 0.5) / cells).r;
+}
 
 void vertex() {
-	vec2 uv = VERTEX.xz / extent;
-	VERTEX.y = height_at(uv);
 	world_pos = VERTEX;
 }
 
-vec3 temperature_ramp(float t) {
-	// -30 °C deep blue, 0 white-ish, +40 red.
-	float k = clamp((t + 30.0) / 70.0, 0.0, 1.0);
-	vec3 cold = vec3(0.10, 0.25, 0.75), mid = vec3(0.92, 0.94, 0.90), hot = vec3(0.85, 0.20, 0.10);
-	return k < 0.43 ? mix(cold, mid, k / 0.43) : mix(mid, hot, (k - 0.43) / 0.57);
+// A ramp cut into flat steps: pixel art has no gradients.
+vec3 steps3(float k, vec3 a, vec3 b, vec3 c) {
+	k = floor(clamp(k, 0.0, 0.999) * 8.0) / 7.0;
+	return k < 0.5 ? mix(a, b, k * 2.0) : mix(b, c, k * 2.0 - 1.0);
 }
 
 void fragment() {
-	vec2 uv = world_pos.xz / extent;
-	float e = 1.0 / cells;
-	float cell = extent / cells;
-	float hx = height_at(uv + vec2(e, 0.0)) - height_at(uv - vec2(e, 0.0));
-	float hz = height_at(uv + vec2(0.0, e)) - height_at(uv - vec2(0.0, e));
-	vec3 n = normalize(vec3(-hx, 2.0 * cell, -hz));
-	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
+	vec2 wp = world_pos.xz;
+	vec2 pix = floor(wp / px_size);                 // which pixel of the world
+	vec2 cellf = wp * cells / extent;
+	vec2 cell = floor(cellf);
+	vec2 in_cell = fract(cellf);
+	vec2 uv = (cell + 0.5) / cells;
+	float grain = bayer(floor(pix / 2.0));          // dither in 2x2 pixel blocks
 
-	float h = world_pos.y;
+	float h = height_of(cell);
+	float h_n = height_of(cell + vec2(0.0, -1.0)), h_s = height_of(cell + vec2(0.0, 1.0));
+	float h_w = height_of(cell + vec2(-1.0, 0.0)), h_e = height_of(cell + vec2(1.0, 0.0));
 	float temp = texture(temp_tex, uv).r;
 	float light = texture(light_tex, uv).r;
+	vec2 soil = texture(soil_tex, uv).rg;
 
 	vec3 col;
 	if (overlay == 1) {
-		col = temperature_ramp(temp);
+		col = steps3((temp + 30.0) / 70.0, vec3(0.12, 0.25, 0.75), vec3(0.92, 0.94, 0.90), vec3(0.85, 0.22, 0.12));
 	} else if (overlay == 2) {
-		col = mix(vec3(0.03, 0.03, 0.08), vec3(1.0, 0.92, 0.45), clamp(light, 0.0, 1.0));
+		col = steps3(light, vec3(0.05, 0.05, 0.12), vec3(0.60, 0.50, 0.25), vec3(1.0, 0.92, 0.45));
+	} else if (overlay == 3) {
+		col = steps3(soil.r / 6.0, vec3(0.10, 0.09, 0.08), vec3(0.45, 0.30, 0.12), vec3(0.95, 0.75, 0.25));
+	} else if (overlay == 4) {
+		col = steps3(soil.g / 150.0, vec3(0.08, 0.08, 0.10), vec3(0.50, 0.25, 0.40), vec3(0.98, 0.92, 0.85));
 	} else {
-		float k = clamp(h / max_height, 0.0, 1.5);
-		vec3 low = vec3(0.26, 0.22, 0.15), mid = vec3(0.33, 0.29, 0.21), high = vec3(0.30, 0.29, 0.28);
-		col = k < 0.5 ? mix(low, mid, k * 2.0) : mix(mid, high, clamp(k * 2.0 - 1.0, 0.0, 1.0));
-		float steep = smoothstep(0.80, 0.55, n.y);
-		col = mix(col, vec3(0.20, 0.19, 0.19), steep);             // bare rock on cliffs
-		float snow = smoothstep(1.0, -5.0, temp) * (1.0 - 0.6 * steep);
-		col = mix(col, vec3(0.80, 0.84, 0.90), snow);
+		// Height bands, with the boundary between two bands dithered.
+		const vec3 BANDS[6] = vec3[](
+			vec3(0.80, 0.69, 0.44), vec3(0.67, 0.54, 0.34), vec3(0.52, 0.41, 0.28),
+			vec3(0.40, 0.35, 0.31), vec3(0.50, 0.49, 0.50), vec3(0.68, 0.69, 0.72));
+		float k = clamp(h / max_height, 0.0, 1.2) * 5.0;
+		int band = int(clamp(floor(k + (grain - 0.5) * 0.35), 0.0, 5.0));
+		col = BANDS[band];
+
+		// Rich soil is darker; bare ground is paler.
+		col *= mix(1.08, 0.80, clamp(floor(soil.r * 1.5) / 6.0, 0.0, 1.0));
+
+		// Hill shading in three flat steps, lit from the top left.
+		float slope = (h - h_w) + (h - h_n) - (h - h_e) - (h - h_s);
+		col *= slope > 2.0 ? 1.08 : (slope < -2.0 ? 0.90 : 1.0);
+
+		// Cliffs: a dark face along the lower edge of a tile that drops
+		// away to the south, and a shadow under one that rises to the north.
+		if (h - h_s > 2.5 && in_cell.y > 0.72) col *= 0.55;
+		if (h_n - h > 2.5 && in_cell.y < 0.28) col *= 0.75;
+
+		// Frost and snow creep in as it gets colder.
+		if (grain < clamp(-temp / 8.0, 0.0, 1.0)) col = vec3(0.88, 0.92, 0.97);
+
+		// The dead: pale specks, more of them where more lies uneaten.
+		if (hash(pix + 31.0) < clamp(soil.g / 400.0, 0.0, 0.35)) col = vec3(0.88, 0.84, 0.72);
 	}
 
-	// Faint contour lines every 5 height units make the shape readable.
-	float line = abs(fract(h / 5.0 - 0.5) - 0.5) / (fwidth(h / 5.0) + 1e-5);
-	col *= mix(0.86, 1.0, clamp(line, 0.0, 1.0));
-
-	// Brush ring.
-	vec3 glow = vec3(0.0);
+	// Brush ring, on the pixel grid.
 	if (brush.z > 0.0) {
-		float d = distance(world_pos.xz, brush.xy);
-		float w = fwidth(d) * 1.5 + 0.08;
-		float ring = 1.0 - smoothstep(0.0, w, abs(d - brush.z));
-		float inner = (1.0 - smoothstep(brush.z - w, brush.z, d)) * 0.10;
-		col = mix(col, brush_color, clamp(ring + inner, 0.0, 1.0));
-		glow = brush_color * ring * 0.6;
+		float d = distance((pix + 0.5) * px_size, brush.xy);
+		if (abs(d - brush.z) < px_size * 0.75) col = brush_color;
+		else if (d < brush.z) col = mix(col, brush_color, 0.08);
 	}
 
-	ALBEDO = col;
-	ROUGHNESS = 0.95;
-	EMISSION = glow + (overlay != 0 ? col * 0.35 : vec3(0.0));
+	ALBEDO = col * (overlay == 0 ? tint : vec3(1.0));
 }

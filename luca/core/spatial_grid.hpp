@@ -19,7 +19,7 @@ public:
         for (int c = 0; c < num_cells; ++c) start_[c + 1] += start_[c];
 
         idx_.resize(cell_of.size());
-        fill_ = std::vector<uint32_t>(start_.begin(), start_.end() - 1);
+        fill_.assign(start_.begin(), start_.end() - 1);
         for (uint32_t i = 0; i < cell_of.size(); ++i) idx_[fill_[cell_of[i]]++] = i;
     }
 
@@ -29,6 +29,15 @@ public:
     }
 
     uint32_t count(int c) const { return start_[c + 1] - start_[c]; }
+
+    // Slots: positions in the cell-sorted order. Cell c owns slots
+    // [begin(c), end(c)), and creature_at(slot) says who sits there. Copying
+    // a few fields into slot order makes a neighbourhood scan read memory in
+    // a straight line instead of hopping around the creature arrays.
+    uint32_t begin(int c) const { return start_[c]; }
+    uint32_t end(int c) const { return start_[c + 1]; }
+    uint32_t creature_at(uint32_t slot) const { return idx_[slot]; }
+    std::size_t slots() const { return idx_.size(); }
 
 private:
     std::vector<uint32_t> start_;  // start_[c] .. start_[c+1] = slice for cell c
