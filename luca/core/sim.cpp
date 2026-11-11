@@ -248,6 +248,7 @@ void Simulation::step() {
     // same world this tick.
     powers_.update(tick_, world_, chronicle_);
     world_.set_time(tick_);
+    drop_windfalls();
 
     const std::size_t n = c_.size();
     cell_of_.resize(n);
@@ -650,6 +651,28 @@ void Simulation::weather_corpses() {
         soil_.nutrient[c] += dm;
         stats_.out_decay += de;
         stats_.energy_out += de;
+    }
+}
+
+// Windfalls: food falls on random cells, windfall_rate per cell per tick on
+// average, in lumps of windfall_size. The number of lumps per tick has the
+// right mean (whole lumps, plus one more by chance for the fraction), so on a
+// 128 x 128 map at the default rate one falls about every 16 ticks. It lands
+// in the cell's corpse energy with no matter, so it is eaten, smelled and
+// weathered exactly like the dead. It is new energy: booked under energy_in.
+void Simulation::drop_windfalls() {
+    if (cfg_.windfall_rate <= 0.0f || cfg_.windfall_size <= 0.0f) return;
+    const int cells = world_.num_cells();
+    float lumps = static_cast<float>(cells) * cfg_.windfall_rate / cfg_.windfall_size;
+    int count = static_cast<int>(lumps);
+    lumps -= static_cast<float>(count);
+    if (rng_.uniform() < lumps) ++count;
+    for (int k = 0; k < count; ++k) {
+        const int cell = std::min(static_cast<int>(rng_.uniform() * static_cast<float>(cells)), cells - 1);
+        soil_.corpse_energy[static_cast<std::size_t>(cell)] += cfg_.windfall_size;
+        stats_.in_windfall += cfg_.windfall_size;
+        stats_.energy_in += cfg_.windfall_size;
+        ++stats_.windfalls;
     }
 }
 

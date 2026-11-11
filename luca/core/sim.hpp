@@ -22,7 +22,9 @@ struct TickStats {
     uint64_t    tick = 0;
     std::size_t births = 0;
     std::size_t deaths = 0;
-    double energy_in       = 0.0;  // light absorbed: the only energy that enters the world
+    double energy_in       = 0.0;  // everything that enters the world: light absorbed plus windfalls
+    double in_windfall     = 0.0;  // part of energy_in: food dropped on the map (see drop_windfalls)
+    std::size_t windfalls  = 0;    // lumps dropped this tick
     double energy_out      = 0.0;  // everything lost as heat
     double out_upkeep      = 0.0;  // breakdown of energy_out
     double out_thermal     = 0.0;
@@ -118,6 +120,7 @@ private:
     void weather_corpses();
     void wash_soil();
     void spread_waste();
+    void drop_windfalls();
     void share_light_by_canopy();
     // Where a child flung `dist` from (x, y) along (ux, uy) comes down: it
     // stops short of any step in the ground taller than birth_max_step.

@@ -61,6 +61,17 @@ struct SimConfig {
     // that it takes up the blueprint of one of that body's parts. 0 = never.
     float gene_transfer_chance = 0.0001f;
 
+    // Windfalls: now and then a lump of food falls on a random cell and lies
+    // there like a corpse with no matter in it (energy only, so the matter
+    // books don't change). Anything with a mouth in that cell can eat it, and
+    // it weathers away like a corpse; movers can smell it with the same sense
+    // and lean they use for the dead. A second, patchy energy source besides
+    // the sun, so finding food can pay. Rate is energy per cell per tick,
+    // averaged over the map (sun_strength is 1): 0.001 is about 1% of the
+    // light life takes in. Each lump holds windfall_size. 0 = none.
+    float windfall_rate = 0.001f;
+    float windfall_size = 250.0f;   // about one LUCA corpse
+
     // Population
     int   initial_population = 200;
     float initial_energy     = 300.0f;   // half of what a LUCA needs to divide

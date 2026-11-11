@@ -1249,6 +1249,46 @@ void test_stalks() {
     CHECK(sim.creatures().fed_light[find(sim, tall)] > 2.0f * sim.creatures().fed_light[find(sim, plain)]);
 }
 
+// Windfalls: food falls on random cells at the configured mean rate, as
+// energy only. The energy books balance with it counted in; the matter books
+// don't move; the same seed drops it in the same places; rate 0 drops nothing.
+void test_windfalls() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.windfall_rate = 0.01f;
+    cfg.windfall_size = 50.0f;   // 48 x 48 cells: about 0.46 lumps a tick
+    Simulation a(cfg), b(cfg);
+    const double matter0 = a.total_matter();
+    double start = a.stored_energy(), in = 0, out = 0, fallen = 0;
+    std::size_t lumps = 0;
+    const int ticks = 2000;
+    for (int t = 0; t < ticks; ++t) {
+        a.step();
+        b.step();
+        in += a.last_stats().energy_in;
+        out += a.last_stats().energy_out;
+        fallen += a.last_stats().in_windfall;
+        lumps += a.last_stats().windfalls;
+    }
+    const double expected = static_cast<double>(ticks) * 48 * 48 * cfg.windfall_rate;
+    CHECK(std::abs(fallen - expected) < 0.15 * expected);
+    CHECK(std::abs(fallen - static_cast<double>(lumps) * cfg.windfall_size) < 1e-3);
+    CHECK(out > 0.0);                                                  // uneaten, it weathers away
+    CHECK(std::abs(a.stored_energy() - (start + in - out)) < 1e-4 * a.stored_energy());
+    CHECK(std::abs(a.total_matter() - matter0) < 1e-6 * matter0);
+    double corpse_matter = 0.0;
+    for (float m : a.soil().corpse_matter) corpse_matter += m;
+    CHECK(corpse_matter == 0.0);
+    CHECK(a.soil().corpse_energy == b.soil().corpse_energy);           // deterministic
+
+    cfg.windfall_rate = 0.0f;
+    Simulation none(cfg);
+    for (int t = 0; t < 200; ++t) none.step();
+    double left = 0.0;
+    for (float e : none.soil().corpse_energy) left += e;
+    CHECK(left == 0.0);
+}
+
 int main() {
     test_day_and_night();
     test_cold_nights();
@@ -1273,6 +1313,7 @@ int main() {
     test_part_placement();
     test_body_shape();
     test_stalks();
+    test_windfalls();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;
 }

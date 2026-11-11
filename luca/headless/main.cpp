@@ -28,6 +28,7 @@ void usage() {
         "  --sun F          energy per cell per tick      (default 1.0)\n"
         "  --day N          ticks per day, 0 = no night     (default 600)\n"
         "  --day-swing F    °C between warm afternoon and cold night (default 10)\n"
+        "  --windfall F     food dropped per cell per tick, 0 = none (default 0.001)\n"
         "  --nutrients F    mean free matter per cell     (default 0.8)\n"
         "  --interval N     ticks between metrics rows    (default 100)\n"
         "  --script FILE    god-power script (format: core/powers.hpp)\n"
@@ -59,6 +60,7 @@ int main(int argc, char** argv) {
         else if (arg_is(a, "--sun"))         cfg.sun_strength = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--day"))         cfg.day_length = std::atoi(next());
         else if (arg_is(a, "--day-swing"))   cfg.temp_day_swing = static_cast<float>(std::atof(next()));
+        else if (arg_is(a, "--windfall"))    cfg.windfall_rate = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--nutrients"))   cfg.nutrient_mean = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--interval"))    cfg.metrics_interval = std::atoi(next());
         else if (arg_is(a, "--out"))         out_dir = next();
