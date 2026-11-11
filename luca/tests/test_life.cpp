@@ -75,6 +75,61 @@ void test_day_and_night() {
     CHECK(flat.daylight() == 1.0f);
 }
 
+// Cold nights: the air swings with the day, and a body's own temperature lags
+// it, the more so the bigger it is. Nothing tells anything to be big.
+void test_cold_nights() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    World w;
+    w.generate(cfg);
+    const int cell = w.cell_index(5.0f, 5.0f);
+    double sum = 0.0;
+    float warmest = -1e9f, coldest = 1e9f;
+    int warm_t = 0, cold_t = 0;
+    for (int t = 0; t < cfg.day_length; ++t) {
+        w.set_time(static_cast<uint64_t>(t));
+        const float temp = w.temperature(cell);
+        sum += temp - w.mean_temperature(cell);
+        if (temp > warmest) { warmest = temp; warm_t = t; }
+        if (temp < coldest) { coldest = temp; cold_t = t; }
+    }
+    CHECK(std::abs(sum / cfg.day_length) < 0.01);                          // the daily mean is unchanged
+    CHECK(std::abs((warmest - coldest) - cfg.temp_day_swing) < 0.01f);
+    CHECK(warm_t > cfg.day_length / 4 && warm_t < cfg.day_length / 2);     // warmest in the afternoon
+    CHECK(cold_t > cfg.day_length / 2);                                    // coldest in the night
+
+    // Three bodies, small, plain and big, through a few days on the same ground.
+    Genome small_g = make_luca(), big_g = make_luca();
+    small_g.core_radius = 0.5f;
+    big_g.core_radius = 2.0f;
+    const Phenotype ps = compile_phenotype(small_g), pl = compile_phenotype(make_luca()), pb = compile_phenotype(big_g);
+    CHECK(ps.heat_follow > pl.heat_follow && pl.heat_follow > pb.heat_follow);
+    float ts = 20.0f, tl = 20.0f, tb = 20.0f;
+    float lo_s = 1e9f, hi_s = -1e9f, lo_b = 1e9f, hi_b = -1e9f;
+    for (int t = 0; t < 4 * cfg.day_length; ++t) {
+        w.set_time(static_cast<uint64_t>(t));
+        LocalEnv env = w.env(cell);
+        env.light = 0.0f;  // leave pigment out of it
+        ts = next_body_temp(ps, env, ts);
+        tl = next_body_temp(pl, env, tl);
+        tb = next_body_temp(pb, env, tb);
+        if (t >= 2 * cfg.day_length) {
+            lo_s = std::min(lo_s, ts); hi_s = std::max(hi_s, ts);
+            lo_b = std::min(lo_b, tb); hi_b = std::max(hi_b, tb);
+        }
+    }
+    CHECK(hi_s - lo_s < cfg.temp_day_swing);           // even a small body smooths the swing a little
+    CHECK(hi_b - lo_b < 0.6f * (hi_s - lo_s));         // a big one far more
+    CHECK(lo_b > lo_s);                                // so its nights are warmer
+
+    // No day cycle, no swing.
+    cfg.day_length = 0;
+    World flat;
+    flat.generate(cfg);
+    flat.set_time(123);
+    CHECK(flat.temperature(cell) == flat.mean_temperature(cell));
+}
+
 void test_mutation() {
     using namespace luca;
     Rng rng(7);
@@ -118,9 +173,9 @@ void test_costs() {
     // Wear: an old body costs more than a young one.
     CHECK(upkeep_cost(p, 10000) > upkeep_cost(p, 0) * 1.9f);
     // Comfortable inside the range, paying outside it, more the further out.
-    CHECK(thermal_cost(p, {0.0f, p.thermal_optimum, 0.0f}) == 0.0f);
-    const float cold = thermal_cost(p, {0.0f, p.thermal_optimum - p.thermal_tolerance - 8.0f, 0.0f});
-    const float colder = thermal_cost(p, {0.0f, p.thermal_optimum - p.thermal_tolerance - 16.0f, 0.0f});
+    CHECK(thermal_cost(p, p.thermal_optimum) == 0.0f);
+    const float cold = thermal_cost(p, p.thermal_optimum - p.thermal_tolerance - 8.0f);
+    const float colder = thermal_cost(p, p.thermal_optimum - p.thermal_tolerance - 16.0f);
     CHECK(cold > 0.0f && colder > cold * 3.0f);
     // Moving costs with the square of speed; climbing costs extra; downhill is not a refund.
     CHECK(movement_cost(p, 0.2f, 0.0f) > movement_cost(p, 0.1f, 0.0f) * 3.9f);
@@ -691,18 +746,18 @@ void test_dormancy() {
     CHECK(sleeper.upkeep > plain.upkeep);                       // the gene has a price even awake
 
     LocalEnv night{0.0f, 20.0f, 0.0f}, day{1.0f, 20.0f, 0.0f}, frost{1.0f, -5.0f, 0.0f};
-    CHECK(next_sleep(plain, night, 0.0f) == 0.0f);              // without the gene, never
+    CHECK(next_sleep(plain, night, night.temperature, 0.0f) == 0.0f);              // without the gene, never
     float s = 0.0f;
-    for (int t = 0; t < 30; ++t) s = next_sleep(sleeper, night, s);
+    for (int t = 0; t < 30; ++t) s = next_sleep(sleeper, night, night.temperature, s);
     CHECK(s == 1.0f);                                           // asleep within half an hour of dusk
     int waking = 0;
-    for (; s > 0.0f && waking < 1000; ++waking) s = next_sleep(sleeper, day, s);
+    for (; s > 0.0f && waking < 1000; ++waking) s = next_sleep(sleeper, day, day.temperature, s);
     CHECK(waking > 60);                                         // and slow to wake
-    CHECK(next_sleep(sleeper, frost, 0.0f) > 0.0f);             // cold sends it under too, even by day
+    CHECK(next_sleep(sleeper, frost, frost.temperature, 0.0f) > 0.0f);             // cold sends it under too, even by day
     Genome dozer_g = make_luca();
     dozer_g.dormancy = 0.4f;
     s = 0.0f;
-    for (int t = 0; t < 100; ++t) s = next_sleep(compile_phenotype(dozer_g), night, s);
+    for (int t = 0; t < 100; ++t) s = next_sleep(compile_phenotype(dozer_g), night, night.temperature, s);
     CHECK(std::abs(s - 0.4f) < 1e-6f);                          // never deeper than its gene allows
     CHECK(cost_while_asleep(0.0f) == 1.0f && cost_while_asleep(1.0f) < 0.2f);
 
@@ -930,6 +985,7 @@ void test_species() {
 
 int main() {
     test_day_and_night();
+    test_cold_nights();
     test_mutation();
     test_costs();
     test_movement();

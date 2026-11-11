@@ -62,7 +62,13 @@ constexpr float DIGEST_UPKEEP        = 0.10f;   // upkeep at full digestion
 
 // Dormancy: the machinery for shutting down costs a little all the time.
 // Its real price is paid in energy.cpp: a sleeper is helpless and slow to wake.
-constexpr float DORMANCY_UPKEEP      = 0.02f;   // upkeep at full depth
+constexpr float DORMANCY_UPKEEP      = 0.02f;
+// Cold nights (added by Claude, 2026-11-11): a body holds heat for mass /
+// surface area x HEAT_LAG ticks (heat is stored in bulk and lost through skin).
+// A LUCA lags the air by ~130 ticks, so it feels about 60% of the night's
+// chill; a body of radius 2 feels about 30%; a small thin one nearly all of it.
+// Not a new gene: size and fat already cost upkeep.
+constexpr float HEAT_LAG             = 120.0f;   // upkeep at full depth
 
 // Gene ranges live in genome.hpp (limits::); mutation enforces them through
 // clamp_genome(). The clamps below are a second line of defence for genomes
@@ -165,6 +171,8 @@ Phenotype compile_phenotype(const Genome& g) {
     // --- 6. Heat: absorbed over skin, spread over body mass ------------------
     p.heat_absorption = pigment * p.surface_area / p.mass;
     // LUCA: 0.3 × 1 / 1.1 ≈ 0.27.
+    // Heat is held in bulk and lost through skin: bigger and fatter bodies lag the air.
+    p.heat_follow = 1.0f / (1.0f + HEAT_LAG * p.mass / p.surface_area);
 
     // --- 7. Copy-through genes (clamped) -------------------------------------
     p.offspring_share   = std::clamp(g.offspring_share, limits::MIN_SHARE, limits::MAX_SHARE);

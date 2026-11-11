@@ -22,6 +22,7 @@ struct Phenotype {
     float thermal_optimum   = 0.0f;
     float thermal_tolerance = 0.0f;
     float heat_absorption   = 0.0f;  // from pigment
+    float heat_follow       = 1.0f;  // fraction of the gap to the air its body temperature closes per tick
 
     // Contact (the one interaction primitive, see energy.hpp)
     float absorb   = 0.0f;   // how hard it pulls energy across a membrane it touches

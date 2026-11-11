@@ -411,7 +411,7 @@ cmake --build build -j
 python3 tools/plot.py out
 ```
 
-Options: `--ticks --seed --size --pop --light uniform|gradient --sun --day --nutrients --interval --script --out --no-snapshot --quiet`.
+Options: `--ticks --seed --size --pop --light uniform|gradient --sun --day --day-swing --nutrients --interval --script --out --no-snapshot --quiet`.
 
 God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long_winter.txt`. Each run also writes `chronicle.txt`, `powers.txt` (every command cast, replayable with `--script`) and `species.csv` (every species there has ever been, with its parent: the tree of life as a table).
 
@@ -435,6 +435,7 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
 - **Slope shade (2026-11-11):** the sun stands over the y = 0 edge. A cell loses light for dropping away from the sun (15% per unit of height per cell, up to 50%) and for lying below its rim, the ground three cells out (6% per unit of depth, up to 40%). `World::shade()` is a static field, recomputed around a terrain brush stroke only; `slope_shade` in the config scales it (0 = off). On the default map the mean is 0.94 and the darkest cell 0.53.
 - **Matter washes downhill (2026-11-11):** every 64 ticks a cell sends `wash_rate` (0.001) × steepness of its free nutrient to its lowest neighbour (`World::downhill()`, eight neighbours; steepness is the drop over 2 height units, capped at 1). Corpse matter stays put until it is freed. All taking is worked out before any giving, and `total_matter()` is unchanged.
 - **Day and night:** `World::set_time(tick)` runs at the start of every tick, after powers. Daylight is a pure function of the tick (no randomness), 0 at night to 2 at noon.
+- **Cold nights (2026-11-11):** the air everywhere swings by `temp_day_swing` (10 °C, peak to peak, in `config.hpp`; 0 = off) with the day, a sine an eighth of a day behind the sun: warmest mid-afternoon, coldest just before dawn, daily mean unchanged (`World::air_swing()`; `temperature()` and `env()` include it, `temperatures()` and `mean_temperature()` are daily means). No creature feels the air directly: each carries a `body_temp` that closes `heat_follow` of the gap to what it would feel (air plus sun on dark skin) each tick, where `heat_follow = 1 / (1 + HEAT_LAG × mass / skin)` (`HEAT_LAG` 120 in `phenotype.cpp`). A LUCA lags by ~130 ticks and feels about 60% of the night's chill; a radius-2 body about 30%. Thermal cost, the dormancy cold trigger and the brain's cold input all read body temperature. A child starts as warm as its parent. Not a new gene: size and fat already cost upkeep.
 - **Contact:** a body with an absorber looks at the 3×3 cells around it. For each body within reach, energy flows at `edge × pull² / (pull + membrane)`, where `edge` is (taker radius / giver radius)², at most 2 (the size rule, 2026-11-11: equal bodies are unchanged, a body half its victim's size pulls a quarter as hard, and nothing is ever immune); 70% arrives, 30% is lost as heat. If several bodies pull on one, each gets the same fraction. Reach is capped at 1.5 cells, so very large bodies don't yet touch further.
 - **Movement:** only a body with a motor part *and* a brain moves. A motor part with no brain gets a small random one at the next mutation.
 - **The brain is evolved, structure and all (2026-11-11, Uday's request).** The genome holds a number of hidden neurons (0 to `MAX_HIDDEN` = 8) and a list of links (up to `MAX_LINKS` = 48), each from an input or hidden neuron to a hidden neuron or an output, with a weight. Inputs (7): a constant, hunger, light, crowding, cold, corpse here, own speed. Outputs (11): how hard to lean towards light, the living, the dead, comfort, soil matter, kin, bigger bodies, moving bodies; wander; inertia; throttle. Hidden neurons are tanh and all update together from the inputs and last tick's hidden values, so a neuron wired to itself or to another is memory (a small discrete-time recurrent net, in place of the CTRNN of 2.4). With no hidden neurons it is a set of reflexes, which is where every brain starts.
@@ -486,7 +487,13 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 
 ### 10.7 Baseline numbers (default settings, 128×128, seed 42, measured 2026-11-11)
 
-**After wander drifts, with `FULL_STRIDE` 0.02 and `WANDER_TURN` 0.5 (current):**
+**After cold nights, `temp_day_swing` 10 (current):**
+- `--ticks 5000`: 745 creatures, 0.024 to 0.038 ms/tick (noisy), audit error ≈ 1e-7.
+- `--light uniform --seed 7 --ticks 60000`: 4,998 creatures, 0.165 ms/tick.
+- Sweep, seeds 42 / 7 / 99, 100,000 ticks, mean of the last fifth, at swing 0 / 10 / 20 °C: population 3,300 / 3,140 / 2,980 (mean of seeds); established species 28.5 / 24.5 / 22.6; mean radius 0.895 / 0.907 / 0.920; heat burned (`out_thermal`) 490 / 1,130 / 3,240 a row. Audit error under 1e-7 throughout. Bigger swings mean bigger bodies, a little, and fewer species.
+- Seed 42 at tick 100,000, mean radius by band of latitude from the warm edge: no swing 0.82 / 0.90 / 0.91; swing 10 0.85 / 0.93 / 0.94; swing 20 0.89 / 0.92 / 0.94. Bodies were already bigger away from the warm, bright edge (light falls that way too, so the two are mixed up); the swing makes every band bigger. The coldest quarter of the map holds no life in any of them. One seed only.
+
+**After wander drifts, with `FULL_STRIDE` 0.02 and `WANDER_TURN` 0.5 (before cold nights):**
 - `--ticks 5000`: 796 creatures, 0.031 ms/tick, audit error ≈ 2e-7.
 - `--light uniform --seed 7 --ticks 60000`: 4,247 creatures, 0.178 ms/tick.
 - Sweep, seeds 42 / 7 / 99, 100,000 ticks, mean of the last fifth: 3,669 / 3,746 / 3,181 creatures; 26 / 21 / 27 established species; movers 59 / 27 / 33; hunters 48 / 42 / 61; mixed feeders 179 / 126 / 213. The old per-tick random wander gave 4,228 / 3,446 / 2,387, 26 / 28 / 29 species, 51 / 58 / 160 movers, about 40 hunters and 130 mixed.
@@ -571,6 +578,7 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - `mutation.cpp`: the `P_*` rates, including `P_NEW_TRAIT` and the brain's `P_ADD_LINK`, `P_DEL_LINK`, `P_ADD_NEURON`, `P_DEL_NEURON`.
 - Brain: `NEURON_COST`, `LINK_COST`, `BRAIN_COST` (`phenotype.cpp`); `MAX_HIDDEN`, `MAX_LINKS` (`genome.hpp`).
 - `phenotype.cpp`: `BITE_UPKEEP`, `DIGEST_GAIN`, `DIGEST_UPKEEP`; `sim.cpp`: `SOCIAL_CELLS`, `SOCIAL_FAST` (the kin sense), `WANDER_TURN` (how fast wandering turns).
+- Cold nights: `temp_day_swing` (`config.hpp`), `HEAT_LAG` (`phenotype.cpp`).
 - `config.hpp`: `day_length`, `nutrient_mean`, `nutrient_patchiness`, `gradient_min`, `birth_max_step`, `slope_shade`, `wash_rate`, `gene_transfer_chance`.
 - `world.cpp`: `FACING_LOSS`, `VALLEY_LOSS`, `HORIZON`, `STEEP_DROP` (shade and drainage).
 - Dispersal: `THROW_COST` (`energy.cpp`), `THROW_UPKEEP` (`phenotype.cpp`), `limits::MAX_THROW`.
@@ -621,7 +629,7 @@ These answer points 2 and 3 above. None is built yet. Each is one physical rule 
 
 - [x] **Canopy.** *(built 2026-11-11)* Light in a cell goes to the biggest body first; smaller ones get what is left, instead of an equal share. Size buys sunlight and costs upkeep and matter. Expect tall things and shade-tolerant things beneath them.
 - [x] **Mouths only work on smaller bodies.** *(built 2026-11-11; scaled, not cut off, so a small thing can still sip from a big host)* Scale the pull in `contact_flow` by the size ratio of taker to giver, so being bigger than a neighbour is real protection.
-- [ ] **Cold nights.** Temperature swings with day and night, and a big body feels a smoothed version of it (it holds heat). Big bodies should do better in cold places without being told to.
+- [x] **Cold nights.** *(built 2026-11-11; body temperature lags the air by mass / skin, so fat counts as well as size)* Temperature swings with day and night, and a big body feels a smoothed version of it (it holds heat). Big bodies should do better in cold places without being told to.
 
 **Movement and hunting**
 

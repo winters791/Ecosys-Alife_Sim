@@ -51,6 +51,11 @@ struct SimConfig {
     float temp_sea_level     = 25.0f;
     float temp_lapse         = 0.4f;   // °C lost per unit of height
     float temp_latitude_drop = 20.0f;  // °C lost from y = 0 edge to far edge
+    // Cold nights: the air everywhere is this many °C warmer in mid-afternoon
+    // than just before dawn (half above the daily mean, half below). Bodies
+    // feel it through their own body temperature, which lags the air more the
+    // bigger they are (energy.hpp). 0 = no swing; no day cycle = no swing.
+    float temp_day_swing     = 10.0f;
 
     // Gene transfer: each tick that a body is draining another, the chance
     // that it takes up the blueprint of one of that body's parts. 0 = never.

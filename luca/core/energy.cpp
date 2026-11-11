@@ -79,9 +79,9 @@ float light_while_moving(float moved) {
     return 1.0f - MOVING_SHADE * std::min(moved * (1.0f / FULL_STRIDE), 1.0f);
 }
 
-float next_sleep(const Phenotype& p, const LocalEnv& env, float sleep) {
+float next_sleep(const Phenotype& p, const LocalEnv& env, float body_temp, float sleep) {
     if (p.dormancy <= 0.0f) return 0.0f;
-    const bool shut_down = env.light <= 0.0f || env.temperature < p.thermal_optimum - p.thermal_tolerance;
+    const bool shut_down = env.light <= 0.0f || body_temp < p.thermal_optimum - p.thermal_tolerance;
     return shut_down ? std::min(sleep + FALL_ASLEEP, p.dormancy) : std::max(sleep - WAKE_UP, 0.0f);
 }
 
@@ -94,9 +94,16 @@ float upkeep_cost(const Phenotype& p, uint32_t age) {
     return METABOLIC_RATE * p.upkeep * (1.0f + a * a);
 }
 
-float thermal_cost(const Phenotype& p, const LocalEnv& env) {
-    const float felt   = env.temperature + PIGMENT_WARMTH * p.heat_absorption * env.light;
-    const float excess = std::abs(felt - p.thermal_optimum) - p.thermal_tolerance;
+float felt_temperature(const Phenotype& p, const LocalEnv& env) {
+    return env.temperature + PIGMENT_WARMTH * p.heat_absorption * env.light;
+}
+
+float next_body_temp(const Phenotype& p, const LocalEnv& env, float body_temp) {
+    return body_temp + p.heat_follow * (felt_temperature(p, env) - body_temp);
+}
+
+float thermal_cost(const Phenotype& p, float body_temp) {
+    const float excess = std::abs(body_temp - p.thermal_optimum) - p.thermal_tolerance;
     if (excess <= 0.0f) return 0.0f;
     const float k = excess * (1.0f / THERMAL_SCALE);
     return METABOLIC_RATE * p.upkeep * k * k;

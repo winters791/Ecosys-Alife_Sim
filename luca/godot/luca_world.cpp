@@ -389,6 +389,7 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["repro_threshold"] = p.repro_threshold;
     d["thermal_optimum"] = p.thermal_optimum;
     d["thermal_tolerance"] = p.thermal_tolerance;
+    d["body_temperature"] = c.body_temp[who];
     d["fed_light"] = c.fed_light[who];
     d["fed_living"] = c.fed_living[who];
     d["fed_dead"] = c.fed_dead[who];

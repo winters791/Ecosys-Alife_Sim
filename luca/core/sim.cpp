@@ -64,8 +64,9 @@ void Simulation::seed_population() {
 }
 
 void Simulation::admit(float x, float y, float energy, uint32_t lineage, uint32_t species, uint32_t generation,
-                       Genome genome, const Phenotype& pheno) {
-    c_.add(x, y, energy, next_id_++, lineage, species, generation, std::move(genome), pheno);
+                       Genome genome, const Phenotype& pheno, float body_temp) {
+    if (body_temp < -273.0f) body_temp = felt_temperature(pheno, world_.env(world_.cell_index(x, y)));
+    c_.add(x, y, energy, body_temp, next_id_++, lineage, species, generation, std::move(genome), pheno);
     if (!species_.born(species)) return;
 
     // The species has taken hold: enough alive at once to be more than a freak.
@@ -117,7 +118,7 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     const float hunger = 1.0f - std::clamp(c_.energy[i] / p.repro_threshold, 0.0f, 1.0f);
     const float crowd = std::min(biomass_[cell] * 0.25f, 1.0f);
     // Comfort: positive when too cold, negative when too hot.
-    const float want = std::clamp((p.thermal_optimum - env.temperature) / std::max(p.thermal_tolerance, 1.0f), -1.0f, 1.0f);
+    const float want = std::clamp((p.thermal_optimum - c_.body_temp[i]) / std::max(p.thermal_tolerance, 1.0f), -1.0f, 1.0f);
 
     float in[NUM_INPUTS];
     in[IN_BIAS]   = 1.0f;
@@ -336,7 +337,7 @@ void Simulation::step() {
         // A dormant body burns less, whatever the weather.
         const float burning = cost_while_asleep(c_.sleep[i]);
         cost_upkeep_[i]  = std::max(0.0f, upkeep_cost(p, c_.age[i]) * burning);
-        cost_thermal_[i] = std::max(0.0f, thermal_cost(p, env) * burning);
+        cost_thermal_[i] = std::max(0.0f, thermal_cost(p, c_.body_temp[i]) * burning);
 
         new_x_[i] = c_.x[i];
         new_y_[i] = c_.y[i];
@@ -452,7 +453,9 @@ void Simulation::step() {
         // A deep sleeper ages at an eighth of the usual pace; then sleep deepens
         // or lifts for the next tick.
         if (c_.sleep[i] < DEEP_SLEEP || (tick_ & 7u) == 0) c_.age[i] += 1;
-        c_.sleep[i] = next_sleep(p, env_here, c_.sleep[i]);
+        // Its body warms or cools towards the air where it now stands.
+        c_.body_temp[i] = next_body_temp(p, env_here, c_.body_temp[i]);
+        c_.sleep[i] = next_sleep(p, env_here, c_.body_temp[i], c_.sleep[i]);
 
         if (e <= 0.0f) {
             // Death: the body stays where it fell, as matter and as food.
@@ -488,7 +491,7 @@ void Simulation::step() {
                 land_child(c_.x[i], c_.y[i], std::cos(ang), std::sin(ang), p.reach + cp.reach + flung, bx, by);
                 births_.push_back(Birth{
                     bx, by,
-                    child_e, c_.lineage[i], species_.classify(c_.species[i], g, tick_), c_.generation[i] + 1,
+                    child_e, c_.body_temp[i], c_.lineage[i], species_.classify(c_.species[i], g, tick_), c_.generation[i] + 1,
                     std::move(g), cp});
             }
         }
@@ -506,7 +509,7 @@ void Simulation::step() {
         c_.remove_swap(*it);
     }
     for (Birth& b : births_)
-        admit(b.x, b.y, b.energy, b.lineage, b.species, b.generation, std::move(b.genome), b.pheno);
+        admit(b.x, b.y, b.energy, b.lineage, b.species, b.generation, std::move(b.genome), b.pheno, b.body_temp);
 
     stats_.deaths = dead_.size();
     stats_.births = births_.size();

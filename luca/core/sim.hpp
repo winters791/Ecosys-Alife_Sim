@@ -106,8 +106,9 @@ private:
 
     void take_census();
     // Add a creature and keep the species books; all arrivals go through here.
+    // body_temp < -273 means "as warm as the ground it lands on" (newcomers).
     void admit(float x, float y, float energy, uint32_t lineage, uint32_t species, uint32_t generation,
-               Genome genome, const Phenotype& pheno);
+               Genome genome, const Phenotype& pheno, float body_temp = -1000.0f);
     void weather_corpses();
     void wash_soil();
     void share_light_by_canopy();
@@ -117,7 +118,7 @@ private:
     void decide_movement(std::size_t i, int cell, const LocalEnv& env);
 
     struct Birth {
-        float x, y, energy;
+        float x, y, energy, body_temp;  // a child starts as warm as its parent
         uint32_t lineage, species, generation;
         Genome genome;
         Phenotype pheno;

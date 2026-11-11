@@ -569,7 +569,7 @@ func _show_creature(info: Dictionary) -> void:
 		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
-		"Comfort %.0f ± %.0f °C" % [info["thermal_optimum"], info["thermal_tolerance"]],
+		"Body %.1f °C   comfort %.0f ± %.0f °C" % [info["body_temperature"], info["thermal_optimum"], info["thermal_tolerance"]],
 		"Here: light %.2f, %.1f °C, soil %.1f" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"]],
 		"Parts: " + (", ".join(parts) if parts.size() > 0 else "none"),
 	])

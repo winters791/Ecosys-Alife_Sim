@@ -44,6 +44,9 @@ public:
     float daylight() const { return daylight_; }      // 0 at night .. 2 at noon; averages 1 over a day
     float day_phase() const { return day_phase_; }    // 0 sunrise, 0.25 noon, 0.5 sunset, 0.75 midnight
     int   day_length() const { return cfg_.day_length; }
+    // Cold nights: °C added to every cell's daily mean temperature right now.
+    // Warmest in mid-afternoon, coldest just before dawn; averages 0 over a day.
+    float air_swing() const { return air_swing_; }
 
     // Bumped whenever a field changes, so a renderer knows when to re-upload.
     uint32_t height_revision() const { return height_rev_; }
@@ -67,9 +70,10 @@ public:
     // is lower, and how steep the way down is (0 flat .. 1 steep).
     int   downhill(int cell) const { return downhill_[cell]; }
     float steepness(int cell) const { return steep_[cell]; }
-    float temperature(int cell) const { return temperature_[cell]; }
+    float temperature(int cell) const { return temperature_[cell] + air_swing_; }  // right now
+    float mean_temperature(int cell) const { return temperature_[cell]; }        // averaged over a day
 
-    LocalEnv env(int cell) const { return {light_[cell] * daylight_, temperature_[cell], height_[cell]}; }
+    LocalEnv env(int cell) const { return {light_[cell] * daylight_, temperature_[cell] + air_swing_, height_[cell]}; }
 
     // Smooth patchy noise in [0, 1] for a cell, different for each `salt`.
     // Used to lay out the starting soil.
@@ -80,7 +84,7 @@ public:
 
     const std::vector<float>& heights() const { return height_; }
     const std::vector<float>& lights() const { return light_; }  // at noon
-    const std::vector<float>& temperatures() const { return temperature_; }
+    const std::vector<float>& temperatures() const { return temperature_; }  // daily means (add air_swing() for now)
 
 private:
     // Recompute the derived fields (light, temperature) from the layers.
@@ -98,6 +102,7 @@ private:
     float climate_   = 0.0f;
     float daylight_  = 1.0f;
     float day_phase_ = 0.25f;
+    float air_swing_ = 0.0f;
     uint32_t height_rev_ = 0, climate_rev_ = 0;
     std::vector<float> height_;       // layer: terrain
     std::vector<float> heat_;         // layer: local temperature offset

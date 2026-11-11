@@ -99,13 +99,17 @@ void World::generate(const SimConfig& cfg) {
 }
 
 void World::set_time(uint64_t tick) {
-    if (cfg_.day_length <= 0) { daylight_ = 1.0f; day_phase_ = 0.25f; return; }
+    if (cfg_.day_length <= 0) { daylight_ = 1.0f; day_phase_ = 0.25f; air_swing_ = 0.0f; return; }
     const uint64_t len = static_cast<uint64_t>(cfg_.day_length);
     day_phase_ = static_cast<float>(tick % len) / static_cast<float>(len);
     // A sine pushed through a clamp: flat day, flat night, short twilight.
     // Scaled to 0..2 so it averages 1 over a day: sun_strength stays "energy
     // per cell per tick" in the long run, it just all arrives in daytime.
     daylight_ = 2.0f * std::clamp(0.5f + 1.5f * std::sin(6.2831853f * day_phase_), 0.0f, 1.0f);
+    // Cold nights: the ground warms all day and cools all night, so the air
+    // lags the sun by an eighth of a day: warmest at phase 0.375, coldest at
+    // 0.875 (just before dawn). A plain sine, so the daily mean is unchanged.
+    air_swing_ = 0.5f * cfg_.temp_day_swing * std::sin(6.2831853f * (day_phase_ - 0.125f));
 }
 
 float World::patch_noise(int cell, uint32_t salt) const {

@@ -41,8 +41,9 @@ float light_while_moving(float moved);
 // Falling asleep is quick and waking is slow, so a sleeper misses the dawn.
 // Its membrane is unchanged: anything with a mouth can still drain it.
 
-// How asleep the body is after this tick, given how asleep it was.
-float next_sleep(const Phenotype& p, const LocalEnv& env, float sleep);
+// How asleep the body is after this tick, given how asleep it was and how
+// warm its body is (see body temperature below).
+float next_sleep(const Phenotype& p, const LocalEnv& env, float body_temp, float sleep);
 // Fraction of its upkeep and thermal cost a body still pays at this depth.
 float cost_while_asleep(float sleep);
 // Below this a body counts as awake: it may move and breed.
@@ -53,8 +54,17 @@ constexpr float DEEP_SLEEP = 0.5f;
 // Cost of existing. Bodies wear out, so it creeps up with age.
 float upkeep_cost(const Phenotype& p, uint32_t age);
 
-// Extra cost for being outside its comfortable temperature range.
-float thermal_cost(const Phenotype& p, const LocalEnv& env);
+// --- Body temperature (cold nights) -----------------------------------------------
+// The air swings warm and cold with the day (World::air_swing). A body does
+// not feel the air directly: its own temperature moves towards what it would
+// feel (the air, plus sun on dark skin) by Phenotype::heat_follow of the gap
+// each tick. Big and fat bodies hold heat, so they feel a smoothed day; small
+// thin ones feel every cold night. Nothing tells anything to be big.
+float felt_temperature(const Phenotype& p, const LocalEnv& env);
+float next_body_temp(const Phenotype& p, const LocalEnv& env, float body_temp);
+
+// Extra cost for a body this warm being outside its comfortable range.
+float thermal_cost(const Phenotype& p, float body_temp);
 
 // Cost of moving `distance` world units in one tick while climbing
 // `height_gain` (negative = going downhill).
