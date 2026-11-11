@@ -1249,6 +1249,48 @@ void test_stalks() {
     CHECK(sim.creatures().fed_light[find(sim, tall)] > 2.0f * sim.creatures().fed_light[find(sim, plain)]);
 }
 
+// Copying fidelity and repair: two genes about the body's own upkeep. Faithful
+// copying costs upkeep, sloppy copying is free but changes more; repair slows
+// wear for a share of upkeep.
+void test_mutability_and_repair() {
+    using namespace luca;
+    const Phenotype base = compile_phenotype(make_luca());
+    Genome careful = make_luca(), sloppy = make_luca();
+    careful.mutability = -2.0f;
+    sloppy.mutability = 1.0f;
+    CHECK(std::abs(compile_phenotype(careful).upkeep - base.upkeep - 0.04f) < 1e-4f);   // two halvings of proofreading
+    CHECK(compile_phenotype(sloppy).upkeep == base.upkeep);                              // sloppiness is free
+
+    // How often a gene changes follows 2^mutability.
+    auto changed = [](const Genome& parent) {
+        Rng rng(3);
+        int n = 0;
+        for (int k = 0; k < 4000; ++k) n += mutate(parent, rng).pigment != parent.pigment;
+        return n / 4000.0;
+    };
+    const double usual = changed(make_luca()), less = changed(careful), more = changed(sloppy);
+    CHECK(std::abs(usual - 0.2) < 0.03 && std::abs(less - 0.05) < 0.02 && std::abs(more - 0.4) < 0.04);
+    // And the gene itself is inherited and drifts.
+    Rng rng(9);
+    Genome g = make_luca();
+    for (int k = 0; k < 300; ++k) g = mutate(g, rng);
+    CHECK(g.mutability != 0.0f);
+
+    // Repair: dearer when young, much cheaper when old.
+    Genome mended = make_luca();
+    mended.repair = 1.0f;
+    const Phenotype m = compile_phenotype(mended);
+    CHECK(std::abs(m.upkeep - 1.15f * base.upkeep) < 1e-4f);
+    CHECK(upkeep_cost(m, 0) > upkeep_cost(base, 0));
+    CHECK(upkeep_cost(m, 20000) < 0.5f * upkeep_cost(base, 20000));
+    CHECK(std::abs(upkeep_cost(m, 30000) / upkeep_cost(m, 0) - (1.0f + 1.0f)) < 1e-3f);   // its clock runs three times slower
+    Genome bad = make_luca();
+    bad.repair = 5.0f;
+    bad.mutability = -10.0f;
+    clamp_genome(bad);
+    CHECK(bad.repair == 1.0f && bad.mutability == limits::MIN_MUTABILITY);
+}
+
 // Windfalls: food falls on random cells at the configured mean rate, as
 // energy only. The energy books balance with it counted in; the matter books
 // don't move; the same seed drops it in the same places; rate 0 drops nothing.
@@ -1313,6 +1355,7 @@ int main() {
     test_part_placement();
     test_body_shape();
     test_stalks();
+    test_mutability_and_repair();
     test_windfalls();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;

@@ -484,6 +484,8 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["fed_dead"] = c.fed_dead[who];
     d["fed_waste"] = c.fed_waste[who];
     d["detox"] = p.detox;
+    d["mutability"] = g.mutability;
+    d["repair"] = g.repair;
     d["cell_waste"] = sim_->soil().waste[cell];
     d["cell_light"] = w.light(cell);
     d["cell_temperature"] = w.temperature(cell);

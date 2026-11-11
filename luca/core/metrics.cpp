@@ -51,7 +51,7 @@ bool MetricsWriter::open(const std::string& path) {
             "out_transfer,out_decay,out_waste,eaten_living,eaten_dead,"
             "producers,hunters,scavengers,mixed,movers,sighted,armoured,"
             "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison,gene_transfers,gene_transfers_cross,gene_transfers_novel,"
-            "waste_total,excreted,eaten_waste,out_fouling,out_waste_decay,cleaners,mean_detox,"
+            "waste_total,excreted,eaten_waste,out_fouling,out_waste_decay,cleaners,mean_detox,mean_mutability,mean_repair,"
             "in_windfall,windfalls\n";
     return true;
 }
@@ -65,7 +65,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     double photo_b = 0, photo_d = 0, sum_speed = 0, sum_absorb = 0, sum_armour = 0, sum_throw = 0, sum_bite = 0, sum_digest = 0, sum_neurons = 0, sum_links = 0, sum_detox = 0;
     std::size_t brains = 0;
     int max_neurons = 0;
-    double sum_dormancy = 0;
+    double sum_dormancy = 0, sum_mutability = 0, sum_repair = 0;
     std::size_t asleep = 0;
     std::size_t nb = 0, nd = 0;
     uint32_t max_gen = 0;
@@ -85,6 +85,8 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
         sum_digest += c.genome[i].digestion;
         sum_detox += c.genome[i].detox;
         sum_dormancy += c.genome[i].dormancy;
+        sum_mutability += c.genome[i].mutability;
+        sum_repair += c.genome[i].repair;
         asleep += c.sleep[i] >= DEEP_SLEEP ? 1 : 0;
         if (c.pheno[i].has_brain) {   // brains that are actually running
             ++brains;
@@ -132,7 +134,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
          << sum_dormancy * inv << ',' << asleep << ',' << k.poisonous << ',' << t.out_poison << ','
          << t.gene_transfers << ',' << t.gene_transfers_cross << ',' << t.gene_transfers_novel << ','
          << waste << ',' << t.excreted << ',' << t.eaten_waste << ',' << t.out_fouling << ',' << t.out_waste_decay << ','
-         << k.cleaners << ',' << sum_detox * inv << ','
+         << k.cleaners << ',' << sum_detox * inv << ',' << sum_mutability * inv << ',' << sum_repair * inv << ','
          << t.in_windfall << ',' << t.windfalls << '\n';
     out_.flush();
     return audit;
@@ -159,7 +161,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
     if (!f) return false;
     f << "x,y,energy,age,lineage,generation,core_radius,photo,parts,pigment,"
          "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy,detox,fed_waste,"
-         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing\n";
+         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair\n";
     const Creatures& c = sim.creatures();
     for (std::size_t i = 0; i < c.size(); ++i) {
         const Genome& g = c.genome[i];
@@ -170,7 +172,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
         for (int t = 1; t < static_cast<int>(PartType::Count); ++t) f << ',' << c.pheno[i].part_total[t];
         f << ',' << c.pheno[i].max_speed << ',' << c.fed_light[i] << ',' << c.fed_living[i] << ',' << c.fed_dead[i] << ',' << c.species[i] << ',' << g.seed_throw << ',' << g.bite << ',' << g.digestion << ','
           << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << g.detox << ',' << c.fed_waste[i] << ','
-          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << '\n';
+          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << '\n';
     }
     return true;
 }

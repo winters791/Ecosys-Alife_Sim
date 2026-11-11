@@ -13,6 +13,7 @@ struct Phenotype {
     float radius        = 0.0f;  // core radius: how tall it stands in the canopy
     float surface_area  = 0.0f;
     float upkeep        = 0.0f;  // energy per tick just to stay alive
+    float wear          = 1.0f;  // how fast age raises upkeep: 1 = unrepaired (see upkeep_cost)
     float light_capture = 0.0f;  // how strongly it absorbs light (see energy.hpp)
     float max_speed     = 0.0f;  // world units per tick; 0 = cannot move
     float drag          = 1.0f;  // moving cost and speed, against a round body's (body.hpp)

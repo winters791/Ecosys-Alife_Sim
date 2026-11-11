@@ -65,6 +65,15 @@ constexpr float SKIN_UPKEEP          = 0.1f;    // upkeep per unit of extra skin
 // and is never clogged by armour (body.hpp); stalked sun patches stand higher
 // in the canopy.
 constexpr float STALK_MASS   = 0.1f;
+
+// Copying and repair (2026-11-12). Faithful copying needs proofreading: each
+// halving of the mutation rate below the usual costs FIDELITY_UPKEEP. Copying
+// more sloppily than usual is free; its price is broken children. Repair
+// stretches the wear clock (energy.cpp) up to 1 + REPAIR_GAIN times longer,
+// for up to REPAIR_SHARE more upkeep: a bigger body has more to repair.
+constexpr float FIDELITY_UPKEEP = 0.02f;
+constexpr float REPAIR_GAIN     = 2.0f;
+constexpr float REPAIR_SHARE    = 0.15f;
 constexpr float STALK_UPKEEP = 0.06f;
 
 // Feeding specialisations. Both are pure cost to a body that eats nothing.
@@ -190,7 +199,11 @@ Phenotype compile_phenotype(const Genome& g) {
                    + (skin - 1.0f) * r * r * SKIN_UPKEEP + stalk_upkeep
                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
                    + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP
-                   + detox * DETOX_UPKEEP;
+                   + detox * DETOX_UPKEEP
+                   + std::max(0.0f, -std::clamp(g.mutability, limits::MIN_MUTABILITY, limits::MAX_MUTABILITY)) * FIDELITY_UPKEEP;
+    const float repair = std::clamp(g.repair, 0.0f, 1.0f);
+    p.upkeep *= 1.0f + REPAIR_SHARE * repair;
+    p.wear    = 1.0f / ((1.0f + REPAIR_GAIN * repair) * (1.0f + REPAIR_GAIN * repair));   // the age clock runs 1 + 2 x repair times slower
     // LUCA (r = 1, one photo patch of size 1): mass 1.1, upkeep ≈ 0.42 + 0.04 for its ±10 °C.
 
     // --- 4. Light capture: patches need skin to sit on, and plates cover skin

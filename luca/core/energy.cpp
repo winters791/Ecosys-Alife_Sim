@@ -41,8 +41,10 @@ constexpr float DORMANT_SAVING = 0.9f;        // fraction of upkeep saved at ful
 constexpr float FALL_ASLEEP    = 1.0f / 20.0f;  // sleep gained per tick while it is dark or too cold
 constexpr float WAKE_UP        = 1.0f / 90.0f;  // sleep lost per tick once it is light and warm enough
 
-// Wear: upkeep is multiplied by 1 + (age / AGE_SCALE)^2. Nothing dies "of old
-// age"; an old body just costs more than it can earn, and its matter is freed.
+// Wear: upkeep is multiplied by 1 + wear x (age / AGE_SCALE)^2, where wear is 1
+// for an unrepaired body and less with the repair gene (phenotype.cpp). Nothing
+// dies "of old age"; an old body just costs more than it can earn, and its
+// matter is freed.
 constexpr float AGE_SCALE = 10000.0f;  // was 5000: a body now costs 244 to build, so it should last
 
 // Dark skin under sun feels warmer: °C per unit of heat_absorption per unit light.
@@ -103,7 +105,7 @@ float cost_while_asleep(float sleep) {
 
 float upkeep_cost(const Phenotype& p, uint32_t age) {
     const float a = static_cast<float>(age) * (1.0f / AGE_SCALE);
-    return METABOLIC_RATE * p.upkeep * (1.0f + a * a);
+    return METABOLIC_RATE * p.upkeep * (1.0f + p.wear * a * a);   // repair slows wear (phenotype.cpp)
 }
 
 float felt_temperature(const Phenotype& p, const LocalEnv& env) {

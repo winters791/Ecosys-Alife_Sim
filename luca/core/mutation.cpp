@@ -1,5 +1,6 @@
 #include "mutation.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace luca {
@@ -18,8 +19,11 @@ namespace luca {
 // No operator knows what is useful. A mouth on a creature that can't reach
 // anything is pure cost and selection removes it.
 //
-// Rates are hard-coded for now; later they can become a heritable gene or a
-// god-mode law. Ranges are enforced once, in clamp_genome().
+// The rates below are for a parent with mutability 0. The mutability gene
+// (2026-11-12) scales every chance by 2^mutability: a lineage can evolve to
+// copy itself more faithfully (paying upkeep for it, phenotype.cpp) or more
+// sloppily (free, but more of its children are broken). Step sizes are not
+// scaled. Ranges are enforced once, in clamp_genome().
 // =============================================================================
 
 namespace {
@@ -62,20 +66,21 @@ void nudge_optional(float& v, float sigma, Rng& rng) {
 // The brain evolves the way the body does: mostly small nudges to what is
 // there, and now and then a change of structure. None of these knows what is
 // useful; each neuron and link costs upkeep, so what doesn't pay is lost.
-void mutate_brain(Brain& b, Rng& rng) {
+void mutate_brain(Brain& b, Rng& rng, float rate) {
+    auto chance = [&](float p) { return rng.chance(std::min(1.0f, p * rate)); };
     for (BrainLink& l : b.links)
-        if (rng.chance(P_WEIGHT)) l.weight += rng.normal() * 0.2f;
+        if (chance(P_WEIGHT)) l.weight += rng.normal() * 0.2f;
 
     // Lose a link.
-    if (rng.chance(P_DEL_LINK) && b.links.size() > 1)
+    if (chance(P_DEL_LINK) && b.links.size() > 1)
         b.links.erase(b.links.begin() + rng.below(static_cast<uint32_t>(b.links.size())));
 
     // Lose a neuron, and everything wired to it.
-    if (rng.chance(P_DEL_NEURON) && b.hidden > 0) b.remove_hidden(static_cast<int>(rng.below(b.hidden)));
+    if (chance(P_DEL_NEURON) && b.hidden > 0) b.remove_hidden(static_cast<int>(rng.below(b.hidden)));
 
     // A new neuron grows in the middle of an existing link: a -> new -> b.
     // The old link stays, so behaviour changes only slightly at first.
-    if (rng.chance(P_ADD_NEURON) && b.hidden < MAX_HIDDEN && !b.links.empty() &&
+    if (chance(P_ADD_NEURON) && b.hidden < MAX_HIDDEN && !b.links.empty() &&
         b.links.size() + 2 <= static_cast<std::size_t>(MAX_LINKS)) {
         const BrainLink through = b.links[rng.below(static_cast<uint32_t>(b.links.size()))];
         const int fresh = hidden_node(b.hidden++);
@@ -86,7 +91,7 @@ void mutate_brain(Brain& b, Rng& rng) {
     // A new link: from any input or hidden neuron, to any hidden neuron or
     // output. Hidden-to-hidden links (even a neuron to itself) are what give
     // a brain memory.
-    if (rng.chance(P_ADD_LINK) && b.links.size() < static_cast<std::size_t>(MAX_LINKS)) {
+    if (chance(P_ADD_LINK) && b.links.size() < static_cast<std::size_t>(MAX_LINKS)) {
         const uint32_t f = rng.below(static_cast<uint32_t>(NUM_INPUTS + b.hidden));
         const uint32_t t = rng.below(static_cast<uint32_t>(NUM_OUTPUTS + b.hidden));
         const int from = f < static_cast<uint32_t>(NUM_INPUTS) ? static_cast<int>(f) : hidden_node(static_cast<int>(f) - NUM_INPUTS);
@@ -101,43 +106,48 @@ void mutate_brain(Brain& b, Rng& rng) {
 
 Genome mutate(const Genome& parent, Rng& rng) {
     Genome g = parent;
+    // How sloppily this parent is copied scales every chance below.
+    const float rate = std::exp2(std::clamp(parent.mutability, limits::MIN_MUTABILITY, limits::MAX_MUTABILITY));
+    auto chance = [&](float p) { return rng.chance(std::min(1.0f, p * rate)); };
 
     // --- Tweaks ---------------------------------------------------------------
-    if (rng.chance(P_GENE)) scale(g.core_radius, 0.06f, rng);
-    if (rng.chance(P_GENE)) g.pigment += rng.normal() * 0.05f;
-    if (rng.chance(P_GENE)) g.thermal_optimum += rng.normal() * 1.0f;
-    if (rng.chance(P_GENE)) g.thermal_tolerance += rng.normal() * 0.6f;
-    if (rng.chance(P_GENE)) scale(g.repro_threshold, 0.08f, rng);
-    if (rng.chance(P_GENE)) g.offspring_share += rng.normal() * 0.03f;
-    if (rng.chance(P_GENE)) nudge_optional(g.seed_throw, 0.15f, rng);
-    if (rng.chance(P_GENE)) nudge_optional(g.bite, 0.10f, rng);
-    if (rng.chance(P_GENE)) nudge_optional(g.digestion, 0.05f, rng);
-    if (rng.chance(P_GENE)) nudge_optional(g.dormancy, 0.08f, rng);
-    if (rng.chance(P_GENE)) nudge_optional(g.detox, 0.08f, rng);
-    if (rng.chance(P_GENE)) g.elongation += rng.normal() * 0.06f;
-    if (rng.chance(P_GENE)) g.squareness += rng.normal() * 0.06f;
+    if (chance(P_GENE)) scale(g.core_radius, 0.06f, rng);
+    if (chance(P_GENE)) g.pigment += rng.normal() * 0.05f;
+    if (chance(P_GENE)) g.thermal_optimum += rng.normal() * 1.0f;
+    if (chance(P_GENE)) g.thermal_tolerance += rng.normal() * 0.6f;
+    if (chance(P_GENE)) scale(g.repro_threshold, 0.08f, rng);
+    if (chance(P_GENE)) g.offspring_share += rng.normal() * 0.03f;
+    if (chance(P_GENE)) nudge_optional(g.seed_throw, 0.15f, rng);
+    if (chance(P_GENE)) nudge_optional(g.bite, 0.10f, rng);
+    if (chance(P_GENE)) nudge_optional(g.digestion, 0.05f, rng);
+    if (chance(P_GENE)) nudge_optional(g.dormancy, 0.08f, rng);
+    if (chance(P_GENE)) nudge_optional(g.detox, 0.08f, rng);
+    if (chance(P_GENE)) g.elongation += rng.normal() * 0.06f;
+    if (chance(P_GENE)) g.squareness += rng.normal() * 0.06f;
+    if (chance(P_GENE)) g.mutability += rng.normal() * 0.15f;
+    if (chance(P_GENE)) nudge_optional(g.repair, 0.08f, rng);
     for (float& s : g.shape)
-        if (rng.chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
+        if (chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
     for (Part& p : g.parts)
-        if (rng.chance(P_GENE)) {
+        if (chance(P_GENE)) {
             scale(p.size, 0.10f, rng);
             p.theta += rng.normal() * 0.2f;
         }
     for (Part& p : g.parts)
-        if (can_have_stalk(p.type) && rng.chance(P_GENE * 0.5f)) nudge_optional(p.stalk, 0.08f, rng);
+        if (can_have_stalk(p.type) && chance(P_GENE * 0.5f)) nudge_optional(p.stalk, 0.08f, rng);
 
     // --- Structure --------------------------------------------------------------
-    if (rng.chance(P_DELETE) && !g.parts.empty())
+    if (chance(P_DELETE) && !g.parts.empty())
         g.parts.erase(g.parts.begin() + rng.below(static_cast<uint32_t>(g.parts.size())));
 
-    if (rng.chance(P_DUPLICATE) && !g.parts.empty() && g.parts.size() < static_cast<std::size_t>(limits::MAX_PARTS)) {
+    if (chance(P_DUPLICATE) && !g.parts.empty() && g.parts.size() < static_cast<std::size_t>(limits::MAX_PARTS)) {
         Part copy = g.parts[rng.below(static_cast<uint32_t>(g.parts.size()))];
         copy.size *= 0.5f;                       // a new copy starts as a bud
         copy.theta += rng.normal() * 0.5f;
         g.parts.push_back(copy);
     }
 
-    if (rng.chance(P_ADD) && g.parts.size() < static_cast<std::size_t>(limits::MAX_PARTS)) {
+    if (chance(P_ADD) && g.parts.size() < static_cast<std::size_t>(limits::MAX_PARTS)) {
         Part p;
         p.type  = static_cast<PartType>(rng.below(NUM_TYPES));
         p.size  = rng.uniform(0.15f, 0.5f);
@@ -150,7 +160,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
         g.parts.push_back(p);
     }
 
-    if (rng.chance(P_RETYPE) && !g.parts.empty())
+    if (chance(P_RETYPE) && !g.parts.empty())
         g.parts[rng.below(static_cast<uint32_t>(g.parts.size()))].type = static_cast<PartType>(rng.below(NUM_TYPES));
 
     // --- Brain ------------------------------------------------------------------
@@ -165,10 +175,10 @@ Genome mutate(const Genome& parent, Rng& rng) {
             g.brain.connect(static_cast<int>(rng.below(NUM_INPUTS)), FIRST_OUTPUT + static_cast<int>(rng.below(NUM_OUTPUTS)),
                             rng.normal() * 0.3f);
     } else if (!g.brain.empty()) {
-        if (!can_move && rng.chance(P_LOSE_BRAIN)) {
+        if (!can_move && chance(P_LOSE_BRAIN)) {
             g.brain.clear();
         } else {
-            mutate_brain(g.brain, rng);
+            mutate_brain(g.brain, rng, rate);
         }
     }
 

@@ -315,11 +315,13 @@ Creature files export the genome only.
 | `dormancy` | How deeply it sleeps through dark and cold, 0 to 1 (LUCA: 0) | A little upkeep always; asleep it is helpless, and it wakes slowly, so it misses the dawn |
 | `seed_throw` | How far a child can be flung, in cells (LUCA: 0) | Upkeep per cell of range, plus energy ∝ child mass × distance² for every throw |
 | `elongation` | Up to 3× as long as wide, same volume (0..1, LUCA: 0) | More skin (sun room, but heat loss, fouling, `SKIN_UPKEEP`); a long body moves more cheaply and faster (2026-11-12) |
+| `mutability` | How sloppily it is copied: every mutation chance × 2^mutability, from −3 (an eighth) to +2 (four times) (LUCA: 0) | Below 0, `FIDELITY_UPKEEP` 0.02 per halving (proofreading); above 0 free, paid for in broken children (2026-11-12) |
+| `repair` | Slows wear: the age clock runs 1 + 2 × repair times slower, 0 to 1 (LUCA: 0) | Up to 15% more upkeep (`REPAIR_SHARE`), so a bigger body pays more |
 | `squareness` | Round to box (0..1, LUCA: 0) | Up to 24% more skin, and 30% more drag on the move |
 | `parts` | Body modules, each with a size, an angle on the outline (`theta`) and, for mouths and sun patches only, a stalk | Each adds mass and upkeep; a stalk adds mass and upkeep per unit of length. Where a part sits matters (10.4) |
 | `brain` | Hidden neuron count and a list of weighted links, both evolved | Empty for LUCA; every neuron, link and unit of weight costs upkeep |
 
-**Likely additions:** mutation rate as a gene (evolvable mutability), reproduction mode (asexual, or sexual with a mate-preference gene), chemistry genes (which reactions a creature catalyses).
+**Likely additions:** reproduction mode (asexual, or sexual with a mate-preference gene), chemistry genes (which reactions a creature catalyses).
 
 **Rule for any new gene:** it must have a real cost in the phenotype compiler. A gene that is pure upside takes over every lineage and destroys diversity.
 
@@ -347,7 +349,7 @@ The last universal common ancestor: a core blob with one photosynthetic patch, n
 - **Tweak** (most common): small Gaussian nudges to float genes.
 - **Add / delete / duplicate a part** (less common). Duplication is how new structure appears.
 - **Change a part's type** (rare).
-- Rates are hard-coded at first; later they can become heritable genes or god-mode "law" knobs. Cap or price part counts so genomes can't bloat forever.
+- Rates are scaled per lineage by the heritable `mutability` gene (2026-11-12); a god-mode "law" knob could scale them for the whole world later. Cap or price part counts so genomes can't bloat forever.
 
 ---
 
@@ -469,7 +471,8 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
 - **Poison (2026-11-11):** a new part type. A body's `toxicity` is its total poison size, capped at 2. Whatever drains it loses `toxicity` × the energy drained, as heat (`out_poison` in `TickStats`), paid out of what it holds, so a poisonous meal can cost more than it gives (a meal returns 70%). Poison is light (0.1 mass per unit) but dear to keep (0.12 upkeep per unit), and unlike armour does not slow the bite. It works on living bodies only: a poisonous body's corpse is safe to eat. Nothing can sense it yet, so eaters cannot learn to avoid it; they are only selected against.
 - **Gene transfer (2026-11-11):** each tick that a body is draining another, there is a `gene_transfer_chance` (0.0001, in `config.hpp`; 0 = off) that it takes up the blueprint of one of that body's parts, picked at random, as a half-size bud (`transfer_part` in `mutation.cpp`, drawn from the sim `Rng` in contact order). "Touch" here means the existing contact rule, so only bodies with a mouth take anything up. The blueprint goes into the taker's **genome only**: its own body and stats do not change, and its children are built from the new plan and pay for the part. So a living body's genome can now hold parts its body lacks (the inspector's parts list reads the genome). `TickStats` counts transfers, cross-species ones and ones that bring a kind of part the taker lacked; the chronicle logs the first cross-species one.
 - **Waste (2026-11-11), the first piece of the chemistry layer:** `WASTE_SHARE` (20%) of every body's upkeep leaves it not as heat but as waste in its cell (`Soil::waste`), still holding that energy. Every body in the cell, its maker included, loses `WASTE_HARM` (0.0025) × waste × skin area a tick to it, as heat (`out_fouling`), asleep or not. Every 8 ticks each cell hands `WASTE_SPREAD` (20%) of its waste to its four neighbours and `WASTE_DECAY` (4%) of it breaks down to heat (`out_waste_decay`). A body with the `detox` gene (an optional trait like `bite`) takes up to 0.3 × detox a tick of its cell's waste, shared like corpses, and keeps its usual `efficiency` of it. Waste is energy only: the matter books do not change. "Stored" energy now includes waste. The census counts **cleaners** (over 60% of food from waste), the chronicle logs the first ten, and `fed_waste` is tracked per creature. Rules: `fouling_cost`, `waste_demand` (`energy.cpp`), `Simulation::spread_waste`. One look at the cell in phase 2 does all three things: take up, pay for fouling, excrete.
-- **Wear:** upkeep is multiplied by `1 + (age / 5000)²`. Nothing dies of old age as such; an old body costs more than it earns.
+- **Wear:** upkeep is multiplied by `1 + wear × (age / AGE_SCALE)²` (`AGE_SCALE` 10000; `wear` 1 unless repaired). Nothing dies of old age as such; an old body costs more than it earns.
+- **Repair and copying fidelity (2026-11-12):** the `repair` gene (an optional trait like `bite`) makes the wear clock run up to three times slower (`Phenotype::wear` = 1 / (1 + `REPAIR_GAIN` × repair)²) and multiplies upkeep by 1 + `REPAIR_SHARE` (0.15) × repair. The `mutability` gene scales every chance in `mutate()` (and in the brain's mutation) by 2^mutability; step sizes are unchanged. Copying better than the usual rates costs `FIDELITY_UPKEEP` (0.02) per halving; copying worse is free, and its only price is mutation load. Both are in the species distance (`W_MUTABILITY` 0.3 per doubling, `W_REPAIR` 1.5), the metrics (`mean_mutability`, `mean_repair`) and the creature snapshot.
 - **Observation only:** `fed_light / fed_living / fed_dead` per creature and `Simulation::census()` count ways of life from real energy flows. Sim logic never reads them.
 - **Species** (`core/species.*`, section 9.3 steps 1 and 2) are labels the game works out; only the kin sense reads them. Every creature carries a species id. A newborn keeps its parent's species unless its genome is further than `SPECIES_THRESHOLD` (1.0) from that species' founder; then it joins a living daughter species that is close enough, or founds a new one. The distance is Euclidean over weighted gene differences (a plain sum made every small drift a species: 164 at once instead of ~27). Shape genes are left out. No randomness is used.
 - **Determinism:** same seed + build + machine → identical runs (verified). Cross-machine determinism is not a goal yet; creature files don't need it.
@@ -512,6 +515,13 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - `--ticks 5000`: 787 creatures, audit error ≈ 1.5e-7.
 - Six seeds (42 / 7 / 99 / 1 / 2 / 3), 100,000 ticks, mean of the last fifth, at `--windfall` 0 / 0.001 (default) / 0.003: population 4,000 / 3,900 / 4,460; established species 75 / 72 / 80; hunters 30 / 32 / 22; scavengers 7 / 8 / 10; mixed feeders 105 / 107 / 115; movers 99 / 44 / 52 (the 99 is mostly one seed with 320); corpse energy eaten 49 / 52 / 57 a tick. Audit error under 2e-7 throughout.
 - At the default, windfalls are 16 energy a tick against about 2,070 of light (0.8%), and only about a fifth of it is eaten: corpse weathering rose by 13 a tick. Every difference at 0.001 is within the spread between seeds. At 0.003 (49 a tick, 2%) the world is a little fuller and has a few more scavengers. Whether movers actually seek windfalls out has not been measured.
+
+**After evolvable mutation rate and repair (2026-11-12; measured without windfalls, against the front-mouth numbers below):**
+- `--ticks 5000`: 730 creatures, 0.031 ms/tick, audit error ≈ 1e-7.
+- Six seeds (42 / 7 / 99 / 1 / 2 / 3), 100,000 ticks, mean of the last fifth: 4,000 creatures (4,240 before), 75 established species (63; part of the rise is the two genes joining the species distance), 30 hunters (29), 105 mixed feeders, 99 movers (155; one seed holds 320 of its own, the rest 16 to 104). Audit error under 2e-7.
+- At 200,000 ticks (same seeds): 5,760 creatures, 180 species, 70 hunters (more than the 56 under round mouths at 100,000), 169 movers. Seed 3 reached 9,220 creatures.
+- **Repair spreads slowly:** about half of all bodies carry some by tick 100,000; the mean gene rises steadily (about 0.01 at tick 20,000, 0.06 to 0.13 at 100,000, 0.12 to 0.18 at 200,000). Bodies live a little longer: median age about 3,500 against 3,200, the oldest tenth past 9,700 against 8,700.
+- **Mutability varies between lineages:** at tick 100,000 a third or more of bodies in every seed copy more faithfully than usual (and pay for it), while 4 to 28% copy at more than 1.4× the usual rates, some at the ×4 ceiling. The mean drifts upward slowly (+0.06 to +0.23 at 100,000, up to +0.46 at 200,000, rates about 1.4× the usual in the sloppiest world), except in seed 99, where it fell to −0.10.
 
 **After new mouths bud at the front (`P_MOUTH_FRONT` 0.3, 2026-11-12):**
 - `--ticks 5000`: 701 creatures, 0.032 ms/tick, audit error ≈ 2e-7.
@@ -649,6 +659,7 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - Dispersal: `THROW_COST` (`energy.cpp`), `THROW_UPKEEP` (`phenotype.cpp`), `limits::MAX_THROW`.
 - Body plans (`body.hpp`): `MOUTH_ARC_BASE`, `MOUTH_ARC_PER_SIZE`, `COVER_ARC`, `MEMBRANE_BASE`, `ARMOUR_RESIST`, `ARMOUR_CLOGS` (moved here from `phenotype.cpp`), `STALK_CLEARS`, `BOX_SKIN`, `BOX_DRAG`; `thrust_facing` in `body.cpp`. Keep the arc constants in step with `viewer/blob.gdshader`.
 - Shape and stalks (`phenotype.cpp`): `SKIN_UPKEEP`, `STALK_MASS`, `STALK_UPKEEP`; `limits::MAX_STALK`.
+- Copying and repair (`phenotype.cpp`): `FIDELITY_UPKEEP`, `REPAIR_GAIN`, `REPAIR_SHARE`; `limits::MIN_MUTABILITY`, `MAX_MUTABILITY`; `AGE_SCALE` (`energy.cpp`).
 
 ### Known weak spots
 
@@ -674,6 +685,7 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - **Waste can't be sensed.** Movers have no brain input for it, so nothing can learn to leave a fouled cell; they are only selected against it. Detox is mostly carried by plants as a side income (see 10.7) rather than making a separate cleaner niche: 5 to 15 true cleaners at a time.
 - **Hunters are thinner since mouths have arcs (2026-11-12):** a sessile mouth now reaches only the neighbours in front of it, so hunters fell from 50 to 75 to about 24 across six seeds; with new mouths budding at the front, 29 and rising (10.7). Levers: `MOUTH_ARC_BASE`, `MOUTH_ARC_PER_SIZE` (`body.hpp`, and the shader); evolution's own answers are more mouths, bigger ones, and tentacles.
 - **Every plant is a frond:** stalked sun patches win the canopy so reliably that 85 to 98% of bodies grow them. Levers: `STALK_UPKEEP`, `STALK_MASS`. A cell still goes to the single tallest body first; nothing yet makes being under the canopy livable (shade-tolerant photosynthesis would).
+- **Mutation rates creep upward.** Copying worse than usual is free, so mutability random-walks between a floor that costs and a ceiling that doesn't; selection against mutation load holds it only loosely (mean +0.46, rates ×1.4, in one seed by tick 200,000). If it keeps climbing, a small upkeep for sloppiness or a lower `MAX_MUTABILITY` are the levers. Not run past 200,000 ticks.
 - Shape barely evolves (mean elongation and squareness about 0.1). Extra skin only pays where sun patches outgrow the skin, and streamlining only for the few fast movers.
 - The creature snapshot (`creatures.csv`) has five new columns: elongation, squareness, mouth_stalk, canopy_lift, tail_facing.
 - `tools/plot.py` gained two panels (ways of life, energy flows) that have not been run: matplotlib isn't installed on this machine.
@@ -728,7 +740,7 @@ These answer points 2 and 3 above. None is built yet. Each is one physical rule 
 - [x] **Gene transfer on contact.** *(built 2026-11-11; through feeding contact, into the genome only)* When two bodies touch, a small chance that one part's blueprint is copied across. Reuses the contact rule; lets an invention spread between lineages. A stand-in until sexual reproduction exists. Must use the sim `Rng`.
 - [x] **Waste.** *(built 2026-11-11; waste holds energy, not matter; eaten through a `detox` gene, not the mouth)* Living produces a waste chemical in the cell that slowly poisons whatever made it, unless something else absorbs it as food. A second cost of crowding and a niche for cleaners. The smallest useful piece of the chemistry layer (2.1).
 - [ ] **Growing up.** Children are born small and grow by taking in matter, instead of appearing full-size. Young are vulnerable, and many-small versus few-large offspring becomes a real choice. The largest item: it touches the phenotype compiler and the matter books. Best judged once species are visible.
-- [ ] **Evolvable mutation rate and lifespan.** Two genes: how sloppy copying is, and how much energy goes into repair to slow wear. Each needs a cost (8.2).
+- [x] **Evolvable mutation rate and lifespan.** *(built 2026-11-12 as `mutability` and `repair`)* Two genes: how sloppy copying is, and how much energy goes into repair to slow wear. Each needs a cost (8.2).
 - [ ] **Vents.** A second energy source that needs no sun, placed by a brush (already a player power in 4.1). The first place where life in the dark has an advantage.
 
 Suggested order for this batch: the movement conflict and dormancy first (small, and aimed at "everything is a sessile plant with a mouth"), then poison, then the rest; growing up last.

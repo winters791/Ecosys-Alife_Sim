@@ -24,6 +24,8 @@ constexpr float W_DORMANCY  = 1.5f;   // never sleeps to sleeps fully is 0..1
 constexpr float W_DETOX     = 1.5f;   // none to full is 0..1
 constexpr float W_ELONGATE  = 1.5f;   // round to three times as long is 0..1
 constexpr float W_SQUARE    = 1.0f;   // rounded to boxy is 0..1
+constexpr float W_MUTABILITY = 0.3f;  // per doubling of the mutation rate
+constexpr float W_REPAIR    = 1.5f;   // none to full is 0..1
 constexpr float W_STALK     = 0.8f;   // per world unit of stalk, summed over a kind of part
 constexpr float W_PART_KIND = 0.6f;   // one has a kind of part the other lacks entirely
 constexpr float W_PART_SIZE = 0.5f;   // per unit of total size of one kind
@@ -67,6 +69,8 @@ float genome_distance(const Genome& a, const Genome& b) {
     term(W_BITE,      a.bite - b.bite);
     term(W_DIGESTION, a.digestion - b.digestion);
     term(W_DORMANCY,  a.dormancy - b.dormancy);
+    term(W_MUTABILITY, a.mutability - b.mutability);
+    term(W_REPAIR,    a.repair - b.repair);
     term(W_DETOX,     a.detox - b.detox);
     term(W_ELONGATE,  a.elongation - b.elongation);
     term(W_SQUARE,    a.squareness - b.squareness);

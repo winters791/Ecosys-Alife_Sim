@@ -124,6 +124,9 @@ struct Genome {
     // Body outline (2026-11-11). A LUCA is round: both 0.
     float elongation        = 0.0f;   // 0 round .. 1 three times as long as it is wide
     float squareness        = 0.0f;   // 0 rounded .. 1 a box with rounded corners
+    // Copying and upkeep of the body itself (2026-11-12).
+    float mutability        = 0.0f;   // log2 of how sloppily it is copied: 0 = the usual rates, -3 = an eighth, +2 = four times
+    float repair            = 0.0f;   // 0..1: energy spent repairing wear, so it ages more slowly
     std::vector<Part>  parts;
     Brain brain;                 // empty = no behaviour; see above
 };
@@ -140,6 +143,7 @@ constexpr float MAX_WEIGHT = 3.0f;
 constexpr float MAX_THROW  = 6.0f;   // cells
 constexpr float MAX_BITE   = 3.0f;   // at most four times the plain pull
 constexpr float MAX_STALK  = 1.0f;   // world units: a part can sit at most this far out
+constexpr float MIN_MUTABILITY = -3.0f, MAX_MUTABILITY = 2.0f;   // an eighth to four times the usual mutation rates
 }  // namespace limits
 
 // Pull every gene back inside its range. Called after mutation and on import.

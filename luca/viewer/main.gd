@@ -456,6 +456,7 @@ func _build_ui() -> void:
 	tree_view = Control.new()
 	tree_view.set_script(load("res://tree_view.gd"))
 	tree_view.custom_minimum_size = Vector2(900, 570)
+	tree_view.close_requested.connect(_toggle_tree)
 	tree_box.add_child(tree_view)
 
 	# Bottom right: the inspected creature.
@@ -486,11 +487,20 @@ func _set_overlay(index: int) -> void:
 
 func _toggle_tree() -> void:
 	tree_panel.visible = not tree_panel.visible
-	# As big as fits between the side panels.
-	var win := Vector2(get_window().size)
-	tree_view.custom_minimum_size = Vector2(clampf(win.x - 760.0, 560.0, 1200.0), clampf(win.y - 280.0, 400.0, 760.0))
+	if not tree_panel.visible:
+		return
+	# Nearly the whole window, over the other panels: it is a view of its own.
+	var win := get_viewport().get_visible_rect().size
+	tree_view.custom_minimum_size = Vector2(maxf(win.x - 80.0, 560.0), maxf(win.y - 90.0, 360.0))
 	tree_panel.reset_size()
+	tree_panel.move_to_front()
 	_update_tree()
+	tree_view.grab_focus()
+	# Open on the species of the creature being followed, if any.
+	if inspected_id >= 0:
+		var info: Dictionary = world.inspect_id(inspected_id)
+		if not info.is_empty():
+			tree_view.select_name(info["species"])
 
 
 func _update_tree() -> void:
@@ -501,7 +511,7 @@ func _update_tree() -> void:
 	for s: Dictionary in tree:
 		if s["extinct"] < 0:
 			alive += 1
-	tree_title.text = "TREE OF LIFE    %d species have taken hold, %d still alive    T to close" % [tree.size(), alive]
+	tree_title.text = "TREE OF LIFE    %d species have taken hold, %d still alive    T or Esc to close" % [tree.size(), alive]
 	tree_view.show_tree(tree, world.get_tick())
 
 
@@ -573,6 +583,14 @@ func _diet(info: Dictionary) -> String:
 	return text
 
 
+## How the mutability gene (log2 of the mutation rate) reads in words.
+func _rate_words(m: float) -> String:
+	var rate := pow(2.0, m)
+	if absf(m) < 0.1:
+		return "about"
+	return "%.1fx" % rate if rate >= 1.0 else "1/%.1f of" % (1.0 / rate)
+
+
 func _shape_words(info: Dictionary) -> String:
 	var e: float = info["elongation"]
 	var sq: float = info["squareness"]
@@ -602,6 +620,7 @@ func _show_creature(info: Dictionary) -> void:
 		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
 		"Can't eat waste" if info["detox"] <= 0.0 else "Eats waste (detox %.2f)" % info["detox"],
+		"Copied with %s the usual mistakes   %s" % [_rate_words(info["mutability"]), "no repair" if info["repair"] <= 0.0 else "repairs itself: ages %.1fx slower" % (1.0 + 2.0 * info["repair"])],
 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
 		"Body %.1f °C   comfort %.0f ± %.0f °C" % [info["body_temperature"], info["thermal_optimum"], info["thermal_tolerance"]],
 		"Here: light %.2f, %.1f °C, soil %.1f, waste %.1f" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"], info["cell_waste"]],
@@ -688,7 +707,9 @@ func _process(delta: float) -> void:
 		second_clock = 0.0
 
 	# 2. Camera.
-	var move := Input.get_vector("ui_left", "ui_right", "ui_down", "ui_up")
+	var move := Vector2.ZERO
+	if not tree_panel.visible:   # the tree uses the arrow keys itself
+		move = Input.get_vector("ui_left", "ui_right", "ui_down", "ui_up")
 	if Input.is_key_pressed(KEY_A): move.x -= 1.0
 	if Input.is_key_pressed(KEY_D): move.x += 1.0
 	if Input.is_key_pressed(KEY_W): move.y += 1.0
