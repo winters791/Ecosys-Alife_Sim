@@ -651,7 +651,7 @@ void test_evolving_brain() {
 void test_moving_costs_sunlight() {
     using namespace luca;
     CHECK(light_while_moving(0.0f) == 1.0f);
-    CHECK(light_while_moving(0.02f) < 1.0f && light_while_moving(0.02f) > light_while_moving(0.05f));
+    CHECK(light_while_moving(0.005f) < 1.0f && light_while_moving(0.005f) > light_while_moving(0.01f));
     CHECK(light_while_moving(10.0f) > 0.0f && light_while_moving(10.0f) == light_while_moving(1.0f));   // a floor, not zero
 
     // The same green swimmer twice, alone under a steady sun: one always on

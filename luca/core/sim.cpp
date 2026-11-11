@@ -15,6 +15,12 @@ constexpr uint64_t FIELD_INTERVAL = 8;     // ticks between corpse weathering pa
 constexpr uint64_t WASH_INTERVAL  = 64;    // ticks between passes of matter washing downhill
 constexpr float    MAX_REACH      = 1.5f;  // contact looks at the 3x3 cells around a body, no further
 constexpr float    TWO_PI         = 6.28318531f;
+// How fast the wandering urge turns: sd of its angle change per tick, in
+// radians. 0.5 keeps a heading for roughly 10 ticks: an average turn of about
+// 23 degrees a tick, a wobbly path rather than a straight one. Slower turning
+// (0.15) let wanderers sweep the map and overgraze it; 1.0 brought back most
+// of the jitter. Picked from a three-seed sweep, 2026-11-11.
+constexpr float    WANDER_TURN    = 0.5f;
 constexpr int      SOCIAL_CELLS   = 2;     // the danger / kin sense looks this many cells out at most
 constexpr float    SOCIAL_FAST    = 0.25f; // a body covering this much a tick counts as fully "moving"
 
@@ -184,7 +190,13 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
         }
     }
 
-    const float angle = rng_.uniform(0.0f, TWO_PI);
+    // Wandering is a direction that drifts, not a fresh one every tick: a
+    // brand-new random angle each tick made wanderers jitter on the spot,
+    // facing a new way every frame and going nowhere. The angle is the
+    // creature's own state, so writing it here is like its brain's memory.
+    float& angle = c_.wander[i];
+    angle += WANDER_TURN * rng_.normal();
+    if (angle > TWO_PI) angle -= TWO_PI; else if (angle < 0.0f) angle += TWO_PI;
     dx += w[OUT_WANDER] * std::cos(angle) + w[OUT_INERTIA] * c_.hx[i];
     dy += w[OUT_WANDER] * std::sin(angle) + w[OUT_INERTIA] * c_.hy[i];
 

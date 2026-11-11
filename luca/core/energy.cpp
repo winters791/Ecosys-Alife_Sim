@@ -29,7 +29,10 @@ constexpr float PHOTO_EFFICIENCY = 1.0f;
 // in between it is proportional. This is what makes a lineage choose between
 // staying put in the sun and going to find food.
 constexpr float MOVING_SHADE = 0.8f;
-constexpr float FULL_STRIDE  = 0.08f;  // world units per tick
+// Was 0.08; 0.02 since wandering became a drifting direction (2026-11-11).
+// At 0.08 a slow drifter kept 90% of its light, so roaming grazers lost
+// almost nothing by moving and overgrazed the world to a quarter of its size.
+constexpr float FULL_STRIDE  = 0.02f;  // world units per tick
 
 // Dormancy. A night is about 240 ticks of a 600-tick day, so at full depth a
 // sleeper saves most of a night's upkeep and loses roughly the first hour and
