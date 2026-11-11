@@ -1,0 +1,12 @@
+# The Long Winter: a demo of the god powers.
+#   ./build/luca_headless --ticks 12000 --script scripts/long_winter.txt --out out/winter
+#
+# <tick> terrain|heat <x> <y> <radius> <amount> [duration]
+# <tick> sun|climate  <amount> [duration]
+
+2000 terrain 64 64 30 35 2000    # a mountain range slowly rises mid-map
+4000 sun -0.5 1500               # the sun fades to half...
+4000 climate -15 1500            # ...and an ice age sets in
+7000 heat 100 20 12 10           # a hot spring appears in the south-east
+8000 sun 0.5 1500                # the sun returns
+8000 climate 15 1500

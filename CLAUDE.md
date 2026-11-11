@@ -1,6 +1,6 @@
 # Ecosystem God Game — Design & Project Reference
 
-Owner: Uday · Last updated: 2026-11-06
+Owner: Uday · Last updated: 2026-11-11
 
 An artificial-life ecosystem simulator played as a god game. It's like Dwarf Fortress, but more *fundamental*: there are no predefined classes of creature. Simple physical laws (energy, matter, inheritance, mutation) produce producers, predators, parasites, decomposers and symbionts through selection alone. The player shapes the world and its laws, never the creatures directly, and watches life respond.
 
@@ -76,6 +76,21 @@ These are regions in trait-space, not code.
 
 ---
 
+### 2.6 Open-endedness mechanics (decided 2026-11-11, build after milestones 2–4)
+
+Four additions aimed at the stagnation problem. Each is one physical rule with a cost, not a scripted feature; none tells a creature what to do with it.
+
+| Mechanic | The rule | Its cost | What might emerge |
+| --- | --- | --- | --- |
+| **Niche construction** | Living things change the fields they live in: photo patches shade the cell beneath them, corpses add matter to the soil, armoured dead pile up and raise the terrain | Nothing extra; it's a side effect of living and dying | Forests with shaded understoreys, fertile graveyards, reefs. The map itself keeps evolving |
+| **Adhesion** | A part that keeps two touching blobs attached; a little energy and matter leaks across the join | Mass, upkeep, and a joined pair moves as one heavier body | Chains, mats, colonies, and cells that specialise: multicellularity |
+| **Signals** | An emitter part writes a pulse into a scent field (a few channels) that diffuses and fades; sensors can read it | Energy per pulse; anyone can read it, including things that eat you | Herding, alarm calls, lures, mimicry. No signal has a built-in meaning |
+| **Carry and deposit** | A part that picks matter up from a cell and puts it down in another | Carried matter is extra mass; pick-up and drop cost energy | Mounds, dams, nests, hoards: evolved architecture |
+
+Order of dependency: niche construction and carrying need matter (milestone 3); signals need brains and sensors (milestone 4); adhesion needs the contact primitive (milestone 2).
+
+---
+
 ## 3. Milestone path and emergence tests
 
 Each step either works or shows which law is too generous or too harsh.
@@ -131,7 +146,27 @@ Scenarios are checked automatically by the event detectors:
 
 ### 4.5 Prior art
 
-SimEarth is the closest ancestor; Equilinox and The Bibites are also worth studying. None combines a deep emergent sim with god-level control.
+SimEarth is the closest ancestor; Equilinox and The Bibites are also worth studying. None combines a deep emergent sim with god-level control. **WorldBox** is the model for *feel*: pick a brush, poke the world, watch what happens, no menus in the way.
+
+### 4.6 Two modes: Sandbox and Scenario (decided 2026-11-11)
+
+- **Sandbox:** every power is a free, instant brush. No influence, no cooldowns. This is the WorldBox toy and the default way to play.
+- **Scenario:** the same powers, but they cost influence and play out as slow ramps (4.2), and a goal from 4.4 is being checked.
+- Both modes run on one mechanism: a power is a command with a `duration` (0 = instant). Sandbox just sets it to 0.
+- Brushes: height, heat, and later water, nutrients and vents.
+
+### 4.7 A world that acts on its own
+
+Storms, eruptions, slow climate drift and the odd meteor happen without the player, at a rate set by a slider (off is allowed). They are ordinary power commands cast by the world from the sim's `Rng`, so they are deterministic, logged and replayable like the player's. The point: you come back to a world with a history you didn't write.
+
+### 4.8 Favourites and the fossil museum
+
+- **Favourites:** pin a lineage to follow it through deep time, with alerts when something happens to it (*"Your Velox just lost its eyes"*). Observation only; a favourite gets no help.
+- **Fossils:** an extinct species leaves fossils where it lived. Digging one up adds its portrait and a short life story to a museum collection.
+
+### 4.9 Seed vault and life-bearing meteors
+
+Bank any living lineage (a ~20-individual sample, same as a creature file) in a vault, and drop it back into this world or a friend's as a meteor. A reintroduction is an invasive species under exactly the rules of section 5: genome only, stats recomputed, evolution takes over. This is also how imported creature files arrive in the world.
 
 ---
 
@@ -334,12 +369,21 @@ The last universal common ancestor: a core blob with one photosynthetic patch, n
 | `core/spatial_grid.hpp` | Per-cell buckets, counting sort, O(N) per tick | Scaffolding |
 | `core/sim.*` | Two-phase tick, births/deaths, light sharing | Scaffolding |
 | `core/metrics.*` | CSV metrics, energy audit, end-of-run snapshot | Scaffolding |
+| `core/powers.*` | God powers: commands, ramps, command log, script format | Scaffolding (built 2026-11-11) |
+| `core/chronicle.hpp` | Append-only natural history log | Scaffolding (built 2026-11-11) |
 | `core/rng.hpp` | Deterministic xoshiro256** | Scaffolding |
 | `core/config.hpp` | World settings and units | Scaffolding |
 | `headless/main.cpp` | CLI runner | Scaffolding |
 | `tools/plot.py` | `run.png` + `map.png` | Scaffolding |
+| `godot/` | GDExtension glue: `LucaWorld` wraps the sim and hands Godot packed arrays | Scaffolding (built 2026-11-11) |
+| `viewer/` | Godot 4.7 project: `main.gd` (camera, brushes, UI), terrain and blob shaders | Scaffolding (built 2026-11-11) |
+| `view.sh` | Build the extension and open the viewer | Scaffolding |
+| `tests/test_powers.cpp` | Brush, ramp, script, determinism and audit tests (`./build/test_powers`) | Scaffolding |
+| `scripts/long_winter.txt` | Demo god-power script | Scaffolding |
 
-Stack: C++20, CMake, Python + matplotlib for plots. The core has **no Godot dependency**.
+All paths are inside `luca/`.
+
+Stack: C++20, CMake, Python + matplotlib for plots, Godot 4.7 + godot-cpp for the viewer. The core has **no Godot dependency**; `godot/` depends on the core, never the reverse.
 
 ### 10.2 Build and run
 
@@ -350,7 +394,9 @@ cmake --build build -j
 python3 tools/plot.py out
 ```
 
-Options: `--ticks --seed --size --pop --light uniform|gradient --sun --interval --out --no-snapshot --quiet`.
+Options: `--ticks --seed --size --pop --light uniform|gradient --sun --interval --script --out --no-snapshot --quiet`.
+
+God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long_winter.txt`. Each run also writes `chronicle.txt` and `powers.txt` (every command cast, replayable with `--script`).
 
 ### 10.3 Units (proposed; settle before tuning)
 
@@ -366,7 +412,30 @@ Options: `--ticks --seed --size --pop --light uniform|gradient --sun --interval 
 - **Reproduction transfers energy** (never creates it).
 - **Determinism:** same seed + build + machine → identical runs (verified). Cross-machine determinism is not a goal yet; creature files don't need it.
 
-### 10.5 Baseline numbers (placeholder rules, default settings)
+### 10.5 God powers (built 2026-11-11)
+
+- **Four powers so far:** `terrain` and `heat` (soft round brushes), `sun` and `climate` (global). Script format is documented in `core/powers.hpp`.
+- **World layers vs. derived fields:** powers edit layers (height, local heat, sun multiplier, climate offset); light and temperature are recomputed from them. `World::brush / add_sun / add_climate` are the only ways the world changes after generation.
+- **Amounts are deltas,** so overlapping powers add up in any order. A ramp ends in the same world as the same power cast instantly (tested).
+- **Ramps apply every 8 ticks,** not every tick.
+- **Powers run at the start of a tick,** before any creature acts, and use no randomness. Same seed + same command log = identical world (tested by replaying `powers.txt`).
+- **Chronicle detectors so far:** population milestones (1,000, 10,000, ...), a great dying (population halves from its peak), recovery (back to 90%), total extinction.
+- **Not felt yet:** terrain, heat and climate change the temperature field, but nothing responds until `thermal_cost` and `movement_cost` are real. Today only the sun affects life.
+
+### 10.6 Viewer (built 2026-11-11)
+
+Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the clone command is in the script). Only macOS is tested.
+
+- **One class crosses the boundary:** `LucaWorld` (a `RefCounted`). Godot asks it for the height, temperature and light fields and for one MultiMesh buffer per frame; it tells it which power was cast.
+- **Terrain** is a flat grid displaced in the vertex shader by a height texture, so a brush stroke is a texture upload, not a mesh rebuild. Fields re-upload only when `World`'s revision counters change.
+- **Blobs** are one MultiMesh, one draw call. Instance colour carries raw traits (pigment, photo cover, energy fullness, speed) and custom data carries a phase and three shape genes; `blob.gdshader` decides the look.
+- **Sandbox brushes:** raise/lower land, warm/cold spot, sun and climate buttons, an instant/gradual toggle. A stroke is many small instant commands; only the first is written to the chronicle (`quiet` flag).
+- **Painting works while paused:** `Simulation::flush_powers()` applies due powers immediately, with the same result as waiting for the next tick.
+- **Time:** pause, 1x, 4x, 16x, max. The sim gets a 10 ms budget per frame; past that the world runs slower (7.1).
+- **Not done yet:** position interpolation between ticks (nothing moves yet), body-part meshes, distant-dot LOD, tree of life and food web views, sim on its own thread.
+- `./view.sh --demo --frames=420 --shot=/tmp/x.png` casts a few powers, saves a screenshot and quits; use it to check the viewer after changes.
+
+### 10.7 Baseline numbers (placeholder rules, default settings)
 
 - Population plateaus at about 8,700 on 128×128. Life stops where light falls below upkeep (≈ y = 80 in gradient mode).
 - About 0.2 ms/tick at 8.7k creatures and 0.9 ms/tick at 33k (256×256): linear scaling.
@@ -388,11 +457,14 @@ Options: `--ticks --seed --size --pop --light uniform|gradient --sun --interval 
 
 ### Next scaffolding (after Uday's parts work)
 
+- World-cast events (4.7): storms, eruptions, drift, from the sim `Rng`
+- Water as a world layer + water brush
+
 - Genome distance function + NEAT-style species IDs + split checks
 - Contact interaction using the spatial grid
 - Corpses and matter
 - Multithreading phase 1 by world tiles
-- GDExtension + MultiMesh renderer (shared deformed blob mesh)
+- Viewer follow-ups: body-part meshes, distant dots, tree-of-life and food-web panels
 
 ---
 
@@ -414,5 +486,6 @@ Options: `--ticks --seed --size --pop --light uniform|gradient --sun --interval 
 - **Never break the energy audit.** Any change that moves energy must be reflected in `TickStats`. Run a headless check after sim changes and confirm audit error stays ≈ 1e-6.
 - **Data-oriented and linear:** no per-creature heap objects in the hot path; no O(N²) loops; neighbour queries go through the spatial grid.
 - **No population caps,** ever. Limits come from ecology only.
+- **Powers never touch creatures.** They go through `World`'s edit functions and the `PowerSystem` log, so every change to the world is replayable.
 - **Every new gene needs a cost** in the phenotype compiler.
-- **Before finishing a change:** build with no warnings, run `./build/luca_headless --ticks 5000`, and check population behaviour, audit error and ms/tick against the baseline in 10.5.
+- **Before finishing a change:** build with no warnings, run `./build/luca_headless --ticks 5000`, and check population behaviour, audit error and ms/tick against the baseline in 10.7. Also run `./build/test_powers`.

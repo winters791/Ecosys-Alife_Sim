@@ -1,0 +1,12 @@
+[configuration]
+
+entry_symbol = "luca_library_init"
+compatibility_minimum = "4.7"
+
+[libraries]
+
+; Built by:  cmake --build build-godot --target luca_godot   (see ../CMakeLists.txt)
+; Only the macOS build has been tested so far.
+macos = "res://bin/libluca_godot.dylib"
+linux.x86_64 = "res://bin/libluca_godot.so"
+windows.x86_64 = "res://bin/luca_godot.dll"

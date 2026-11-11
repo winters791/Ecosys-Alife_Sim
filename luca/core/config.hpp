@@ -19,7 +19,8 @@ struct SimConfig {
     // World
     int   world_size  = 128;     // cells per side (heightmap is world_size x world_size)
     float cell_size   = 1.0f;    // world units per cell
-    float max_height  = 40.0f;   // terrain height range [0, max_height]
+    float max_height  = 40.0f;   // generated terrain height range [0, max_height]
+    float height_limit = 100.0f; // god powers can't push terrain outside [0, height_limit]
 
     // Light. Gradient: full sun at y = 0, fading to gradient_min * sun at the far edge.
     LightMode light_mode   = LightMode::Gradient;

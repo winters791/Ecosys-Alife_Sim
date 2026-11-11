@@ -51,6 +51,9 @@ void Simulation::step() {
     stats_ = TickStats{};
     stats_.tick = tick_;
 
+    // God powers act first, so every creature sees the same world this tick.
+    powers_.update(tick_, world_, chronicle_);
+
     const std::size_t n = c_.size();
     cell_of_.resize(n);
     demand_.resize(n);
@@ -164,9 +167,51 @@ void Simulation::step() {
     stats_.deaths = dead_.size();
     stats_.births = births_.size();
     ++tick_;
+    if (tick_ % 50 == 0 || c_.size() == 0) detect_events();
 
     const auto t1 = std::chrono::steady_clock::now();
     stats_.tick_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+// -----------------------------------------------------------------------------
+// Event detectors (population level). These read the sim and write chronicle
+// entries; they never change the sim. Species-level detectors (speciation,
+// first predator, new trophic level) will join them here.
+// -----------------------------------------------------------------------------
+void Simulation::detect_events() {
+    const std::size_t pop = c_.size();
+
+    if (pop == 0) {
+        if (!extinct_logged_) chronicle_.add(tick_, "The last living thing dies. The world is silent.");
+        extinct_logged_ = true;
+        return;
+    }
+
+    // First time the world holds 1,000 / 10,000 / 100,000 ... creatures.
+    while (pop >= next_milestone_) {
+        chronicle_.add(tick_, "Life is now " + with_commas(next_milestone_) + " strong.");
+        next_milestone_ *= 10;
+    }
+
+    // Mass die-off: population halves from its peak. It is logged once, then
+    // ends either with a recovery (back to 90% of the old peak) or, if the
+    // world has simply become poorer, quietly after a while.
+    if (crash_from_ == 0) {
+        peak_pop_ = std::max(peak_pop_, pop);
+        if (peak_pop_ >= 100 && pop * 2 < peak_pop_) {
+            chronicle_.add(tick_, "A great dying: only " + with_commas(pop) + " remain of " +
+                                      with_commas(peak_pop_) + ".");
+            crash_from_ = peak_pop_;
+            crash_tick_ = tick_;
+        }
+    } else if (pop * 10 >= crash_from_ * 9) {
+        chronicle_.add(tick_, "Life has recovered: " + with_commas(pop) + " creatures.");
+        crash_from_ = 0;
+        peak_pop_ = pop;
+    } else if (tick_ - crash_tick_ >= 20000) {
+        crash_from_ = 0;  // the new normal; watch for the next die-off from here
+        peak_pop_ = pop;
+    }
 }
 
 }  // namespace luca

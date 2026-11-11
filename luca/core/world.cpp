@@ -53,10 +53,14 @@ float fbm(float x, float y, uint32_t seed, int octaves) {
 }  // namespace
 
 void World::generate(const SimConfig& cfg) {
+    cfg_ = cfg;
     n_ = cfg.world_size;
     cell_size_ = cfg.cell_size;
+    sun_scale_ = 1.0f;
+    climate_ = 0.0f;
     const int cells = n_ * n_;
     height_.assign(cells, 0.0f);
+    heat_.assign(cells, 0.0f);
     light_.assign(cells, 0.0f);
     temperature_.assign(cells, 0.0f);
 
@@ -74,21 +78,66 @@ void World::generate(const SimConfig& cfg) {
     const float range = (hi - lo) > 1e-6f ? (hi - lo) : 1.0f;
     for (float& h : height_) h = (h - lo) / range * cfg.max_height;
 
-    // --- Light and temperature ----------------------------------------------
+    refresh_light();
+    refresh_temperature(0, 0, n_ - 1, n_ - 1);
+}
+
+float World::latitude(int row) const {
+    return n_ > 1 ? static_cast<float>(row) / static_cast<float>(n_ - 1) : 0.0f;
+}
+
+void World::refresh_light() {
+    ++climate_rev_;
+    const float sun = cfg_.sun_strength * sun_scale();
     for (int y = 0; y < n_; ++y) {
-        // 0 at the sunny edge (y = 0), 1 at the far edge.
-        const float lat = n_ > 1 ? static_cast<float>(y) / static_cast<float>(n_ - 1) : 0.0f;
-        const float light_frac = cfg.light_mode == LightMode::Gradient
-                                     ? 1.0f - (1.0f - cfg.gradient_min) * lat
-                                     : 1.0f;
-        for (int x = 0; x < n_; ++x) {
+        const float frac = cfg_.light_mode == LightMode::Gradient
+                               ? 1.0f - (1.0f - cfg_.gradient_min) * latitude(y)
+                               : 1.0f;
+        std::fill_n(light_.begin() + y * n_, n_, sun * frac);
+    }
+}
+
+void World::refresh_temperature(int x0, int y0, int x1, int y1) {
+    ++climate_rev_;
+    for (int y = y0; y <= y1; ++y) {
+        const float row_base = cfg_.temp_sea_level + climate_ - cfg_.temp_latitude_drop * latitude(y);
+        for (int x = x0; x <= x1; ++x) {
             const int i = y * n_ + x;
-            light_[i] = cfg.sun_strength * light_frac;
-            temperature_[i] = cfg.temp_sea_level
-                            - cfg.temp_lapse * height_[i]
-                            - cfg.temp_latitude_drop * lat;
+            temperature_[i] = row_base - cfg_.temp_lapse * height_[i] + heat_[i];
         }
     }
+}
+
+void World::brush(BrushField field, float x, float y, float radius, float amount) {
+    radius = std::max(radius, cell_size_);  // always reaches at least one cell centre's neighbourhood
+    const int x0 = std::clamp(static_cast<int>(std::floor((x - radius) / cell_size_)), 0, n_ - 1);
+    const int x1 = std::clamp(static_cast<int>(std::floor((x + radius) / cell_size_)), 0, n_ - 1);
+    const int y0 = std::clamp(static_cast<int>(std::floor((y - radius) / cell_size_)), 0, n_ - 1);
+    const int y1 = std::clamp(static_cast<int>(std::floor((y + radius) / cell_size_)), 0, n_ - 1);
+    std::vector<float>& layer = field == BrushField::Height ? height_ : heat_;
+    for (int cy = y0; cy <= y1; ++cy)
+        for (int cx = x0; cx <= x1; ++cx) {
+            const float dx = (static_cast<float>(cx) + 0.5f) * cell_size_ - x;
+            const float dy = (static_cast<float>(cy) + 0.5f) * cell_size_ - y;
+            const float d = std::sqrt(dx * dx + dy * dy);
+            if (d >= radius) continue;
+            const float w = 0.5f * (1.0f + std::cos(3.14159265f * d / radius));
+            float& v = layer[cy * n_ + cx];
+            v += amount * w;
+            if (field == BrushField::Height) v = std::clamp(v, 0.0f, cfg_.height_limit);
+        }
+    refresh_temperature(x0, y0, x1, y1);
+    if (field == BrushField::Height) ++height_rev_;
+}
+
+void World::add_sun(float delta) {
+    sun_scale_ += delta;
+    refresh_light();
+}
+
+void World::add_climate(float delta) {
+    climate_ += delta;
+    refresh_temperature(0, 0, n_ - 1, n_ - 1);
 }
 
 int World::cell_index(float x, float y) const {

@@ -5,7 +5,9 @@
 #include <vector>
 
 #include "config.hpp"
+#include "chronicle.hpp"
 #include "creatures.hpp"
+#include "powers.hpp"
 #include "rng.hpp"
 #include "spatial_grid.hpp"
 #include "world.hpp"
@@ -36,16 +38,31 @@ public:
     // Advance one tick.
     void step();
 
+    // Cast a god power. It takes effect at the start of tick `cmd.tick` (or
+    // of the next tick, if that is already past). Powers change the world,
+    // never creatures.
+    void cast(const PowerCommand& cmd) { powers_.cast(cmd); }
+
+    // Apply powers that are due right now instead of waiting for the next
+    // step(), so painting works while time is paused. The result is identical
+    // to letting step() do it: the next step() finds nothing left to add.
+    void flush_powers() { powers_.update(tick_, world_, chronicle_); }
+
     const SimConfig& config() const { return cfg_; }
     const World&     world() const { return world_; }
     const Creatures& creatures() const { return c_; }
     uint64_t         tick() const { return tick_; }
     const TickStats& last_stats() const { return stats_; }
+    const Chronicle& chronicle() const { return chronicle_; }
+    const PowerSystem& powers() const { return powers_; }
 
     // Total energy currently stored in living creatures.
     double stored_energy() const;
 
 private:
+    // Population-level event detectors; they only write to the chronicle.
+    void detect_events();
+
     struct Birth {
         float x, y, energy;
         uint32_t lineage, generation;
@@ -61,6 +78,15 @@ private:
     uint64_t    tick_ = 0;
     uint32_t    next_lineage_ = 0;
     TickStats   stats_;
+    PowerSystem powers_;
+    Chronicle   chronicle_;
+
+    // Detector state
+    std::size_t peak_pop_ = 0;        // highest population since the last die-off
+    std::size_t crash_from_ = 0;      // the peak we fell from; 0 = not in a die-off
+    uint64_t    crash_tick_ = 0;      // when that die-off was logged
+    std::size_t next_milestone_ = 1000;
+    bool        extinct_logged_ = false;
 
     // Scratch buffers, reused every tick to avoid allocation.
     std::vector<int>   cell_of_;

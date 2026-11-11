@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "metrics.hpp"
@@ -26,6 +27,7 @@ void usage() {
         "  --light MODE     uniform | gradient            (default gradient)\n"
         "  --sun F          energy per cell per tick      (default 1.0)\n"
         "  --interval N     ticks between metrics rows    (default 100)\n"
+        "  --script FILE    god-power script (format: core/powers.hpp)\n"
         "  --out DIR        output directory              (default out)\n"
         "  --no-snapshot    skip end-of-run snapshot files\n"
         "  --quiet          no progress lines");
@@ -38,7 +40,7 @@ bool arg_is(const char* a, const char* name) { return std::strcmp(a, name) == 0;
 int main(int argc, char** argv) {
     luca::SimConfig cfg;
     long long ticks = 20000;
-    std::string out_dir = "out";
+    std::string out_dir = "out", script_path;
     bool snapshot = true, quiet = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -54,6 +56,7 @@ int main(int argc, char** argv) {
         else if (arg_is(a, "--sun"))         cfg.sun_strength = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--interval"))    cfg.metrics_interval = std::atoi(next());
         else if (arg_is(a, "--out"))         out_dir = next();
+        else if (arg_is(a, "--script"))      script_path = next();
         else if (arg_is(a, "--no-snapshot")) snapshot = false;
         else if (arg_is(a, "--quiet"))       quiet = true;
         else if (arg_is(a, "--light")) {
@@ -76,6 +79,19 @@ int main(int argc, char** argv) {
     luca::Simulation sim(cfg);
     sim.seed_population();
 
+    if (!script_path.empty()) {
+        std::ifstream script(script_path);
+        std::vector<luca::PowerCommand> commands;
+        std::string error;
+        if (!script) { std::fprintf(stderr, "cannot read %s\n", script_path.c_str()); return 1; }
+        if (!luca::parse_power_script(script, commands, error)) {
+            std::fprintf(stderr, "%s: %s\n", script_path.c_str(), error.c_str());
+            return 2;
+        }
+        for (const luca::PowerCommand& cmd : commands) sim.cast(cmd);
+    }
+    std::size_t chronicle_shown = 0;
+
     luca::MetricsWriter metrics;
     if (!metrics.open(metrics_path)) {
         std::fprintf(stderr, "cannot write %s\n", metrics_path.c_str());
@@ -90,6 +106,10 @@ int main(int argc, char** argv) {
         sim.step();
         interval.add(sim.last_stats());
         total_ms += sim.last_stats().tick_ms;
+
+        if (!quiet)
+            for (const auto& entries = sim.chronicle().entries(); chronicle_shown < entries.size(); ++chronicle_shown)
+                std::printf("  ~ %s\n", luca::format_entry(entries[chronicle_shown]).c_str());
 
         const bool last = (t + 1 == ticks);
         if ((t + 1) % cfg.metrics_interval == 0 || last) {
@@ -111,6 +131,14 @@ int main(int argc, char** argv) {
     if (snapshot) {
         luca::write_creature_snapshot(sim, out_dir + "/creatures.csv");
         luca::write_world_snapshot(sim, out_dir + "/world.csv");
+    }
+
+    {
+        std::ofstream f(out_dir + "/chronicle.txt");
+        for (const auto& e : sim.chronicle().entries()) f << luca::format_entry(e) << '\n';
+        // Everything that was cast, replayable with --script.
+        std::ofstream p(out_dir + "/powers.txt");
+        luca::write_power_script(p, sim.powers().log());
     }
 
     std::printf("\ndone: %llu ticks, final population %zu, %.3f ms/tick average, worst audit error %+.2e\n",
