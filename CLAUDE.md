@@ -189,7 +189,9 @@ Players export creatures as files, share them online, and import them into their
 
 ## 6. Creatures and world
 
-> **Look changed 2026-11-11 (Uday):** the game is **top-down pixel art, like WorldBox**, not 3D. Creatures are small pixel sprites and the ground is pixel tiles. The simulation is unchanged (still 2.5D: a heightmap, slopes, climates). Read "3D blob", "mesh" and "shader jiggle" below as history; 6.6 is how it works now.
+> **Look changed again 2026-11-11 (Uday): soft 3D creatures.** The pixel-art look "isn't working"; the game is now a 3D world of squishy blobs seen from a tilted camera, close to the original plan in 6.2 and 6.4. Section 6.7 is how it works now; 6.6 (pixel bodies) is history.
+>
+> **Earlier the same day:** the game was **top-down pixel art, like WorldBox**, not 3D. Creatures are small pixel sprites and the ground is pixel tiles. The simulation is unchanged (still 2.5D: a heightmap, slopes, climates). Read "3D blob", "mesh" and "shader jiggle" below as history; 6.6 is how it works now.
 
 Creatures are soft blobs on a heightmap world with cliffs, valleys and climates. **The simulation is 2.5D.**
 
@@ -238,6 +240,17 @@ Creatures are soft blobs on a heightmap world with cliffs, valleys and climates.
 - **One pixel grid for everything:** 8 pixels to a cell (`PX_SIZE`), shared by the ground and the sprites, and sprites snap to it.
 - **What each part looks like:** poison = violet warts scattered over the skin; photo = green pixels over the skin; absorber = a dark red mouth on the leading edge (teeth when large); flagellum = a wiggling tail; legs = stubs that step; sensor = an eye (two when large); armour = grey plates round the rim; storage = a pale fat spot. Pigment is skin colour, fullness is body size, shape genes are lumps in the outline.
 - **Zoom is in whole screen pixels per sprite pixel** where it can be, so the art stays crisp.
+
+### 6.7 Soft 3D bodies (decided and built 2026-11-11; replaces 6.6)
+
+- **Every piece of a creature is an instanced mesh.** One MultiMesh each for bodies, shadows, eyes, legs, tails, leaves, mouths and horns: eight draw calls however many creatures there are. `LucaWorld::get_creature_meshes()` lays every piece out each frame from the creature's real numbers; the shaders add the motion.
+- **What each part looks like:** photo = green leaves sprouting from the top (more cover, more and bigger leaves); absorber = a red mouth low on the face (bigger with bite); flagellum = a tapering tail that wags; legs = one to three pairs that hold the body off the ground and step; sensor = white eyes with pupils (two when large) that blink; armour = bone horns along the back; storage = a fatter body; poison = violet spots on the skin. Shape genes stretch the body; fullness plumps it; species gives the hue and pigment darkens it ("Colour by species" makes the hues flat and vivid).
+- **One liberty with "drawn from the body":** a blind creature still gets two small dot eyes so it has a face. Real eyes (whites and pupils) mean sensors.
+- **Movement:** a body with legs walks (legs swing in turn, body bobs); one that moves with a tail and no legs hops in arcs with squash and stretch; one that stays put just breathes. All of it is driven by how far the creature actually moved last tick, and stops when the world is paused. A sleeping body flattens, greys, shuts its eyes, folds its legs and droops its leaves.
+- **Shadows** are a soft disc per creature, lying along the slope, shrinking as the creature leaves the ground. No real-time shadow maps.
+- **Ground:** one grid lifted by the height field in the vertex shader (so brushes reshape it live), at 0.35 of the sim's heights so hills are gentle. Colour comes from the same fields life uses: richer soil is greener, bare soil sandy, dim ground cooler, cold ground frosted, corpses leave pale flecks. The overlays are unchanged.
+- **Camera:** perspective, looking down at 40°. Drag or WASD to pan, wheel to zoom, Q / E to turn.
+- **Cost:** about 40 fps with 3,700 creatures on this Mac (measured with the window in the background, which macOS throttles). The sim itself is unchanged and no population cap was added.
 
 ### 6.5 Architecture
 
@@ -392,7 +405,7 @@ The last universal common ancestor: a core blob with one photosynthetic patch, n
 | `headless/main.cpp` | CLI runner | Scaffolding |
 | `tools/plot.py` | `run.png` + `map.png` | Scaffolding |
 | `godot/` | GDExtension glue: `LucaWorld` wraps the sim and hands Godot packed arrays | Scaffolding (built 2026-11-11) |
-| `viewer/` | Godot 4.7 project: `main.gd` (camera, brushes, UI), `tree_view.gd` (tree of life), terrain and blob shaders | Scaffolding (built 2026-11-11) |
+| `viewer/` | Godot 4.7 project: `main.gd` (camera, brushes, UI), `tree_view.gd` (tree of life), `ground.gdshader`, and one shader per creature piece sharing `creature.gdshaderinc` | Scaffolding (built 2026-11-11) |
 | `view.sh` | Build the extension and open the viewer | Scaffolding |
 | `tests/test_powers.cpp` | Brush, ramp, script, determinism and audit tests (`./build/test_powers`) | Scaffolding |
 | `tests/test_life.cpp` | Day/night, mutation, costs, movement, contact, scavenging, species, energy and matter books (`./build/test_life`) | Scaffolding (built 2026-11-11) |
@@ -465,7 +478,10 @@ God powers, headless: `./build/luca_headless --ticks 16000 --script scripts/long
 - **Species in the chronicle:** a new species is logged when 10 are alive at once (*"A new species: Vuman branches from Luca. It is smaller."*), and its extinction if it ever got that far. Names are procedural and unique per id.
 - **Chronicle detectors added 2026-11-11:** first movers, senses, armour, poison, hunters and scavengers (each needs 10 alive at once). A great dying is now judged on each day's peak population, because numbers breathe with day and night.
 
-### 10.6 Viewer (built 2026-11-11, rebuilt as pixel art the same day)
+### 10.6 Viewer (built 2026-11-11, rebuilt as pixel art, then as soft 3D, the same day)
+
+> The drawing described below as pixel art (flat ground quad, sprites, `blob.gdshader`, `terrain.gdshader`) was replaced by the 3D view of 6.7. The UI, overlays, brushes, inspector, chronicle, species list and time controls are the same. The tree-of-life panel is still drawn in pixel art.
+> **Checking the 3D view:** `./view.sh --parade` opens an empty world with one hand-made creature of each body plan (sitter, walker, hopper, armoured, poisonous, big hunter, sleeper). `--zoom=K` now means closeness (camera distance is 160 / K). Screenshots: `luca/docs/view3d_parade.png`, `view3d_crowd.png`, `view3d_world.png`.
 
 Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the clone command is in the script). Only macOS is tested.
 
@@ -481,6 +497,7 @@ Run with `./view.sh` (needs `thirdparty/godot-cpp`, which is git-ignored; the cl
 - **Sandbox brushes:** raise/lower land, warm/cold spot, sun and climate buttons, an instant/gradual toggle. A stroke is many small instant commands; only the first is written to the chronicle (`quiet` flag).
 - **Painting works while paused:** `Simulation::flush_powers()` applies due powers immediately, with the same result as waiting for the next tick.
 - **Time:** pause, 1x, 4x, 16x, max. The sim gets a 10 ms budget per frame; past that the world runs slower (7.1).
+- **Not done yet in the 3D view:** a restyle of the tree-of-life panel to match, corpses as objects (they are flecks on the ground), level of detail for far creatures, and a check of frame rate with the window in front.
 - **Not done yet:** position interpolation between ticks, the food web view, sim on its own thread, a pixel font for the UI.
 - **Checking the viewer:** `./view.sh --warmup=40000 --zoom=8 --at=100,24 --frames=40 --shot=/tmp/x.png` skips ahead 40,000 ticks, zooms in, saves a screenshot and quits. Keep `--frames` small: macOS throttles a window that is behind other windows to a few frames a second, so a long run looks like a hang.
 
@@ -691,4 +708,4 @@ Suggested order when building: canopy and dispersal first (biggest effect, small
 - **Every new gene needs a cost** in the phenotype compiler.
 - **Before finishing a change:** build with no warnings, run `./build/luca_headless --ticks 5000`, and check population behaviour, audit error and ms/tick against the baseline in 10.7. Also run `./build/test_powers` and `./build/test_life`.
 - **Matter is conserved too.** Anything that builds, kills or moves matter must keep `total_matter()` constant.
-- **The look is pixel art.** No smooth gradients, no 3D meshes for creatures; new body parts get a pixel drawing in `blob.gdshader`.
+- **The look is soft 3D** (6.7). Creatures are instanced meshes, never Godot nodes; a new body part gets a piece in `LucaWorld::get_creature_meshes()` and a shader (or a place in an existing one) in `viewer/`.

@@ -107,6 +107,12 @@ public:
     // steeper than looks good).
     godot::Dictionary get_creature_meshes(double height_scale) const;
 
+    // Drop a row of hand-made creatures (one of each body plan: sitter,
+    // walker, hopper, armoured, poisonous, a big hunter, a sleeper) starting at
+    // a ground position. For checking the art and the motion; they are
+    // ordinary creatures from then on. Returns how many were added.
+    int spawn_parade(double x, double z);
+
     // Terrain height under a ground position, smoothly interpolated.
     double height_at(double x, double z) const;
 

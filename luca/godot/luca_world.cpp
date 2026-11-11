@@ -444,6 +444,58 @@ Dictionary LucaWorld::get_creature_meshes(double height_scale) const {
     return out;
 }
 
+int LucaWorld::spawn_parade(double x, double z) {
+    if (!sim_) return 0;
+    using luca::PartType;
+    auto wander = [](luca::Genome& g, float throttle) {
+        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_WANDER), 1.0f);
+        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_INERTIA), 2.0f);
+        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_THROTTLE), throttle);
+    };
+    std::vector<luca::Genome> cast;
+    cast.push_back(luca::make_luca());                                   // a plain sitter
+    {   luca::Genome g = luca::make_luca();                              // a walker with eyes
+        g.parts.push_back({PartType::Legs, 1.5f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Sensor, 1.0f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Absorber, 0.5f, 0.0f, 0.0f});
+        wander(g, -0.42f);
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // a one-eyed hopper
+        g.core_radius = 0.8f;
+        g.parts.push_back({PartType::Flagellum, 1.0f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Sensor, 0.3f, 0.0f, 0.0f});
+        wander(g, -0.4f);
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // armoured
+        g.parts.push_back({PartType::Armour, 1.5f, 0.0f, 0.0f});
+        g.shape[0] = 0.6f;
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // fat and poisonous
+        g.parts.push_back({PartType::Poison, 1.0f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Storage, 1.5f, 0.0f, 0.0f});
+        g.pigment = 0.7f;
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // a big hunter
+        g.core_radius = 1.6f;
+        g.parts[0].size = 0.6f;
+        g.parts.push_back({PartType::Absorber, 2.0f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Legs, 3.0f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Sensor, 1.5f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Armour, 0.5f, 0.0f, 0.0f});
+        g.parts.push_back({PartType::Flagellum, 1.0f, 0.0f, 0.0f});
+        g.bite = 1.0f;
+        g.shape[1] = 0.8f;
+        wander(g, -0.44f);
+        cast.push_back(g); }
+    {   luca::Genome g = luca::make_luca();                              // sleeps at night
+        g.dormancy = 1.0f;
+        g.parts.push_back({PartType::Sensor, 0.8f, 0.0f, 0.0f});
+        cast.push_back(g); }
+    for (std::size_t k = 0; k < cast.size(); ++k)
+        sim_->add_creature(static_cast<float>(x) + 2.6f * static_cast<float>(k), static_cast<float>(z), 5000.0f, cast[k]);   // as full as each can hold
+    return static_cast<int>(cast.size());
+}
+
 double LucaWorld::height_at(double x, double z) const {
     return sim_ ? smooth_height(sim_->world(), static_cast<float>(x), static_cast<float>(z)) : 0.0;
 }
@@ -620,6 +672,7 @@ void LucaWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_climate_revision"), &LucaWorld::get_climate_revision);
     ClassDB::bind_method(D_METHOD("get_instance_buffer", "capacity"), &LucaWorld::get_instance_buffer);
     ClassDB::bind_method(D_METHOD("get_creature_meshes", "height_scale"), &LucaWorld::get_creature_meshes);
+    ClassDB::bind_method(D_METHOD("spawn_parade", "x", "z"), &LucaWorld::spawn_parade);
     ClassDB::bind_method(D_METHOD("get_daylight"), &LucaWorld::get_daylight);
     ClassDB::bind_method(D_METHOD("get_day_phase"), &LucaWorld::get_day_phase);
     ClassDB::bind_method(D_METHOD("get_day_length"), &LucaWorld::get_day_length);

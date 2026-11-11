@@ -57,7 +57,9 @@ void fragment() {
 	meadow *= 0.96 + 0.08 * (0.5 + 0.5 * sin(ground.x * 0.61 + sin(ground.y * 0.37) * 2.0) * sin(ground.y * 0.53 + sin(ground.x * 0.29) * 2.0));
 	// The dead: pale flecks where bodies lie.
 	float bones = smoothstep(20.0, 400.0, soil.g);
-	if (hash(floor(ground * 5.0)) < bones * 0.5) meadow = mix(meadow, vec3(0.97, 0.94, 0.86), 0.8);
+	vec2 fleck = ground * 3.0;
+	if (hash(floor(fleck)) < bones * 0.6 && distance(fract(fleck), vec2(0.5)) < 0.18 + 0.2 * hash(floor(fleck) + 7.0))
+		meadow = mix(meadow, vec3(0.97, 0.94, 0.86), 0.85);
 
 	vec3 col = meadow;
 	if (overlay == 1) col = ramp(clamp((temp + 10.0) / 50.0, 0.0, 1.0), vec3(0.45, 0.62, 0.95), vec3(0.95, 0.95, 0.85), vec3(0.96, 0.50, 0.38));

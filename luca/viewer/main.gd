@@ -21,6 +21,7 @@ extends Node3D
 ##   --zoom=K --at=X,Z        start zoomed in on a spot (screen pixels per sprite pixel)
 ##   --tree  or --tree=NAME   start with the tree of life open (zoomed in on a species)
 ##   --test-poison            draw every body as poisonous (to check the art)
+##   --parade                 an empty world with one hand-made creature of each body plan
 ##   --species                start with creatures coloured by species
 ##   --warmup=N               run N ticks before the first frame (skip ahead to evolved life)
 
@@ -35,7 +36,7 @@ const SPEED_NAMES := ["Pause", "1x", "4x", "16x", "Max"]
 const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead"]
 const GRADUAL_TICKS := 1000       # how long a power takes in Gradual mode
 const DAY_SKY := Color(0.62, 0.83, 0.93)
-const NIGHT_SKY := Color(0.10, 0.13, 0.26)
+const NIGHT_SKY := Color(0.20, 0.25, 0.42)
 
 enum Tool { LOOK, RAISE, LOWER, WARM, COOL }
 const TOOL_NAMES := ["Look", "Raise land", "Lower land", "Warm spot", "Cold spot"]
@@ -108,6 +109,7 @@ var warmup := 0
 var start_zoom := -1.0
 var start_at := Vector2(-1, -1)
 var start_tree := false
+var parade := false            # an empty world with one hand-made creature of each body plan
 var test_poison := false       # draw every body as poisonous, to check the art
 var start_tree_root := ""   # species name to zoom the tree into (testing)
 
@@ -124,6 +126,9 @@ func _ready() -> void:
 		elif arg == "--demo": demo = true
 		elif arg == "--species": by_species = true
 		elif arg == "--test-poison": test_poison = true
+		elif arg == "--parade":
+			parade = true
+			population = 0
 		elif arg == "--tree": start_tree = true
 		elif arg.begins_with("--tree="):
 			start_tree = true
@@ -136,6 +141,11 @@ func _ready() -> void:
 
 	world = LucaWorld.new()
 	world.setup(world_size, seed_value, population, true)
+	if parade:
+		world.spawn_parade(world.get_extent() * 0.5 - 8.0, 20.0)
+		start_at = Vector2(world.get_extent() * 0.5 - 3.0, 20.0)   # a little left, clear of the side panel
+		if start_zoom <= 0.0:
+			start_zoom = 11.0
 	if warmup > 0:
 		world.step(warmup, 1e12)
 	world_size = world.get_world_size()
@@ -279,8 +289,8 @@ func _piece_mesh(piece: String) -> Mesh:
 			limb.top_radius = 1.0
 			limb.bottom_radius = 1.0
 			limb.height = 1.0
-			limb.radial_segments = 8
-			limb.rings = 6 if piece == "tail" else 2
+			limb.radial_segments = 10
+			limb.rings = 6
 			return limb
 		"horn":
 			var cone := CylinderMesh.new()
@@ -825,8 +835,8 @@ func _update_sun() -> void:
 	var sky := NIGHT_SKY.lerp(DAY_SKY, shown_daylight * clampf(dim, 0.0, 1.0))
 	environment.background_color = sky
 	environment.fog_light_color = sky.lightened(0.2)
-	environment.ambient_light_color = Color(0.45, 0.52, 0.85).lerp(Color(0.86, 0.92, 1.0), shown_daylight)
-	environment.ambient_light_energy = lerpf(0.4, 0.5, shown_daylight) * lerpf(1.0, dim, 0.4)
+	environment.ambient_light_color = Color(0.62, 0.70, 1.0).lerp(Color(0.86, 0.92, 1.0), shown_daylight)
+	environment.ambient_light_energy = lerpf(0.62, 0.5, shown_daylight) * lerpf(1.0, dim, 0.4)
 
 
 func _update_brush_ring() -> void:
