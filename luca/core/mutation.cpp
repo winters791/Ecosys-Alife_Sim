@@ -139,7 +139,6 @@ Genome mutate(const Genome& parent, Rng& rng) {
     if (chance(P_GENE)) nudge_optional(g.bite, 0.10f, rng);
     if (chance(P_GENE)) nudge_optional(g.digestion, 0.05f, rng);
     if (chance(P_GENE)) nudge_optional(g.dormancy, 0.08f, rng);
-    if (chance(P_GENE)) nudge_optional(g.detox, 0.08f, rng);
     if (chance(P_GENE)) g.elongation += rng.normal() * 0.06f;
     if (chance(P_GENE)) g.squareness += rng.normal() * 0.06f;
     if (chance(P_GENE)) g.mutability += rng.normal() * 0.15f;

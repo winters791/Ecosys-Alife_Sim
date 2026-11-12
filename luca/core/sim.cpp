@@ -65,7 +65,7 @@ Simulation::Simulation(const SimConfig& cfg)
     const std::size_t cells = static_cast<std::size_t>(world_.num_cells());
     cell_demand_.assign(cells, 0.0f);
     cell_corpse_demand_.assign(cells, 0.0f);
-    cell_waste_demand_.assign(cells, 0.0f);
+    cell_uptake_demand_.assign(cells * NCHEM, 0.0f);
     cell_vent_demand_.assign(cells, 0.0f);
     biomass_.assign(cells, 0.0f);
 
@@ -138,7 +138,7 @@ double Simulation::stored_energy() const {
     for (const Mix& m : c_.pool) s += m.energy();
     for (const Mix& m : c_.tissue) s += m.energy();
     for (const Mix& m : soil_.corpse) s += m.energy();
-    for (float e : soil_.waste) s += e;
+    for (const Mix& m : soil_.dissolved) s += m.energy();
     return s;
 }
 
@@ -148,6 +148,7 @@ double Simulation::total_matter() const {
     for (const Mix& m : c_.tissue) s += m.mass();
     for (float m : soil_.nutrient) s += m;
     for (const Mix& m : soil_.corpse) s += m.mass();
+    for (const Mix& m : soil_.dissolved) s += m.mass();
     return s;
 }
 
@@ -309,8 +310,8 @@ void Simulation::step() {
     new_hy_.resize(n);
     corpse_want_.resize(n);
     corpse_gain_.resize(n);
-    waste_want_.resize(n);
-    waste_gain_.resize(n);
+    uptake_want_.resize(n);
+    uptake_gain_.resize(n);
     vent_want_.resize(n);
     vent_gain_.resize(n);
     drain_want_.assign(n, 0.0f);
@@ -331,7 +332,7 @@ void Simulation::step() {
     // --- Phase 1a: what everyone asks for, summed per cell --------------------
     std::fill(cell_demand_.begin(), cell_demand_.end(), 0.0f);
     std::fill(cell_corpse_demand_.begin(), cell_corpse_demand_.end(), 0.0f);
-    std::fill(cell_waste_demand_.begin(), cell_waste_demand_.end(), 0.0f);
+    std::fill(cell_uptake_demand_.begin(), cell_uptake_demand_.end(), 0.0f);
     const bool vents = world_.any_vents();
     if (vents) std::fill(cell_vent_demand_.begin(), cell_vent_demand_.end(), 0.0f);
     const bool dark = world_.daylight() <= 0.0f;
@@ -344,8 +345,11 @@ void Simulation::step() {
         cell_demand_[cell] += demand_[i];
         corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) / TOP_LEVEL * (1.0f - c_.sleep[i]) : 0.0f;   // mass a tick
         cell_corpse_demand_[cell] += corpse_want_[i];
-        waste_want_[i] = p.detox > 0.0f ? std::max(0.0f, waste_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
-        cell_waste_demand_[cell] += waste_want_[i];
+        // Through its skin, every chemical it can burn (energy.hpp).
+        uptake_want_[i] = std::max(0.0f, uptake_rate(p)) * (1.0f - c_.sleep[i]);
+        if (uptake_want_[i] > 0.0f)
+            for (int ch = CHEM_B; ch < NCHEM; ++ch)
+                if (p.can_burn(ch)) cell_uptake_demand_[static_cast<std::size_t>(cell) * NCHEM + ch] += uptake_want_[i];
         vent_want_[i] = vents && p.chemo > 0.0f ? std::max(0.0f, vent_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
         if (vent_want_[i] > 0.0f) cell_vent_demand_[cell] += vent_want_[i];
     }
@@ -424,18 +428,21 @@ void Simulation::step() {
             const float have = soil_.corpse[cell].mass(), want = cell_corpse_demand_[cell];
             corpse_gain_[i] = corpse_want_[i] * (want > have ? have / want : 1.0f);
         }
-        // Waste is shared out the same way.
         // A vent's flow is shared the same way.
         vent_gain_[i] = 0.0f;
         if (vent_want_[i] > 0.0f) {
             const float have = world_.vent_energy(cell), want = cell_vent_demand_[cell];
             vent_gain_[i] = vent_want_[i] * (want > have ? have / want : 1.0f);
         }
-        waste_gain_[i] = 0.0f;
-        if (waste_want_[i] > 0.0f) {
-            const float have = soil_.waste[cell], want = cell_waste_demand_[cell];
-            waste_gain_[i] = waste_want_[i] * (want > have ? have / want : 1.0f);
-        }
+        // Loose chemicals: each body asks for a share of the stock; if the
+        // shares come to more than all of it, they are scaled down.
+        uptake_gain_[i].clear();
+        if (uptake_want_[i] > 0.0f)
+            for (int ch = CHEM_B; ch < NCHEM; ++ch) {
+                if (!p.can_burn(ch)) continue;
+                const float asked = cell_uptake_demand_[static_cast<std::size_t>(cell) * NCHEM + ch];
+                uptake_gain_[i].v[ch] = soil_.dissolved[cell].v[ch] * uptake_want_[i] / std::max(1.0f, asked);
+            }
 
         // A dormant body burns less, whatever the weather.
         const float burning = cost_while_asleep(c_.sleep[i]);
@@ -504,55 +511,59 @@ void Simulation::step() {
         // Out: what others drained, in proportion to what its store holds.
         const float hurt = drained_[i] > 0.0f ? take_share(pool, drained_[i]).energy() : 0.0f;
 
-        // In: the living and the dead arrive as chemicals. The share lost on
-        // the way (1 - efficiency) burns: its energy is heat and its matter
-        // falls to the soil as A. What the store has no room for goes the same way.
-        float lost = 0.0f, overflow = 0.0f;
+        // In: the living and the dead arrive as chemicals. Of what it can
+        // burn it keeps `efficiency`, or what fits in its store; the rest,
+        // and everything it can't burn, spills into its cell as it is.
+        Mix& loose = soil_.dissolved[cell];
+        float spilled = 0.0f;
         auto take_in = [&](const Mix& meal) {
-            const float m = meal.mass();
-            if (m <= 0.0f) return 0.0f;
+            float usable = 0.0f;
+            for (int ch = CHEM_B; ch < NCHEM; ++ch) usable += p.can_burn(ch) ? meal.v[ch] : 0.0f;
             const float room = std::max(0.0f, p.pool_capacity - pool.mass());
-            const float keep = std::min(p.efficiency, room / m);
-            const float e = meal.energy();
-            pool.add(meal, keep);
-            soil_a += m * (1.0f - keep);
-            lost += e * (1.0f - p.efficiency);
-            overflow += e * (p.efficiency - keep);
-            return e * keep;
+            const float keep = usable > 0.0f ? std::min(p.efficiency, room / usable) : 0.0f;
+            soil_a += meal.v[CHEM_A];
+            float kept = 0.0f;
+            for (int ch = CHEM_B; ch < NCHEM; ++ch) {
+                const float in = p.can_burn(ch) ? meal.v[ch] * keep : 0.0f;
+                pool.v[ch] += in;
+                loose.v[ch] += meal.v[ch] - in;
+                kept += in * LEVEL[ch];
+                spilled += (meal.v[ch] - in) * LEVEL[ch];
+            }
+            return kept;
         };
         const float from_living = take_in(intake_[i]);
         const float from_dead = corpse_gain_[i] > 0.0f ? take_in(soil_.take_corpse(cell, corpse_gain_[i])) : 0.0f;
 
-        // Waste (still energy without matter until chemistry stage 2): a body
-        // with detox takes some up first; then it pays for living in what is
-        // left; then it adds its own.
-        float& w = soil_.waste[cell];
-        float waste_taken = 0.0f;
-        if (waste_gain_[i] > 0.0f) {
-            waste_taken = std::min(waste_gain_[i], w);
-            w -= waste_taken;
+        // Through its skin it takes up the loose chemicals it can burn, as far
+        // as its store has room.
+        float from_waste = 0.0f;
+        const float asked = uptake_gain_[i].mass();
+        if (asked > 0.0f) {
+            const float k = std::min(1.0f, std::max(0.0f, p.pool_capacity - pool.mass()) / asked);
+            for (int ch = CHEM_B; ch < NCHEM; ++ch) {
+                const float got = std::min(uptake_gain_[i].v[ch] * k, loose.v[ch]);
+                if (got <= 0.0f) continue;
+                loose.v[ch] -= got;
+                pool.v[ch] += got;
+                from_waste += got * LEVEL[ch];
+            }
         }
-        const float waste_kept = waste_taken * p.efficiency;
-        lost += waste_taken - waste_kept;
 
-        // Light, a vent's flow and waste come in as energy with no matter: the
-        // body keeps them by running its enzymes uphill, turning A from the
-        // soil into richer chemicals in its store (charge). Light and vent
-        // energy it can't keep is never taken in; waste it took is lost as heat.
-        const float offered = gain_[i] + vent_gain_[i] + waste_kept;
+        // Light and a vent's flow come in as energy with no matter: the body
+        // keeps them by running its enzymes uphill, turning A from the soil
+        // into richer chemicals in its store (charge). What it can't keep is
+        // never taken in.
+        const float offered = gain_[i] + vent_gain_[i];
         const float stored = offered > 0.0f ? charge(p, pool, soil_a, offered) : 0.0f;
         const float kept = offered > 0.0f ? stored / offered : 0.0f;
-        const float from_light = gain_[i] * kept, from_vent = vent_gain_[i] * kept, from_waste = waste_kept * kept;
-        overflow += waste_kept - from_waste;
+        const float from_light = gain_[i] * kept, from_vent = vent_gain_[i] * kept;
 
         stats_.energy_in += from_light + from_vent;
         stats_.in_vent += from_vent;
         stats_.eaten_living += from_living;
         stats_.eaten_dead += from_dead;
         stats_.eaten_waste += from_waste;
-        stats_.out_transfer += lost;
-        stats_.out_waste += overflow;
-        stats_.energy_out += lost + overflow;
         c_.fed_light[i] += from_light;
         c_.fed_vent[i] += from_vent;
         c_.fed_waste[i] += from_waste;
@@ -562,26 +573,31 @@ void Simulation::step() {
         c_.hurt[i] = hurt;
 
         // Costs, all paid by burning its store (burn): poison from what it
-        // ate, upkeep, heat, moving, and living in waste. A body that cannot
-        // pay them in full dies.
-        const float foul = std::max(0.0f, fouling_cost(p, w));
+        // ate, upkeep, heat, moving, and living among chemicals it can't burn.
+        // A body that cannot pay them in full dies. All of it is lost as heat.
+        float foul_mass = 0.0f;
+        for (int ch = CHEM_B; ch < NCHEM; ++ch) foul_mass += p.can_burn(ch) ? 0.0f : loose.v[ch];
+        const float foul = foul_mass > 0.0f ? std::max(0.0f, fouling_cost(p, foul_mass)) : 0.0f;
         const float want = poisoned_[i] + cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i] + foul;
         const float paid = want > 0.0f ? burn(p, pool, soil_a, want) : 0.0f;
         if (want > 0.0f) {
             const float f = paid / want;  // pro-rata if it couldn't pay in full
-            // Part of its upkeep leaves the body as waste, still holding energy;
-            // the rest, and every other cost, is lost as heat.
-            const float upkeep = cost_upkeep_[i] * f;
-            const float excreted = WASTE_SHARE * upkeep;
-            w += excreted;
-            stats_.excreted     += excreted;
-            stats_.energy_out   += paid - excreted;
-            stats_.out_upkeep   += upkeep - excreted;
+            stats_.energy_out   += paid;
+            stats_.out_upkeep   += cost_upkeep_[i] * f;
             stats_.out_thermal  += cost_thermal_[i] * f;
             stats_.out_movement += cost_move_[i] * f;
             stats_.out_fouling  += foul * f;
             stats_.out_poison   += poisoned_[i] * f;
         }
+        // It gives off whatever its store holds that it can't burn (made by
+        // its own enzymes, or handed down by a parent that could).
+        for (int ch = CHEM_B; ch < NCHEM; ++ch) {
+            if (p.can_burn(ch) || pool.v[ch] <= 0.0f) continue;
+            loose.v[ch] += pool.v[ch];
+            spilled += pool.v[ch] * LEVEL[ch];
+            pool.v[ch] = 0.0f;
+        }
+        stats_.excreted += spilled;
         const bool starved = paid + 1e-5f * want + 1e-7f < want;
 
         c_.moved[i] = std::hypot(new_x_[i] - c_.x[i], new_y_[i] - c_.y[i]);
@@ -688,8 +704,10 @@ void Simulation::step() {
     stats_.deaths = dead_.size();
     stats_.births = births_.size();
     ++tick_;
-    if (tick_ % FIELD_INTERVAL == 0) { weather_corpses(); spread_waste(); }
+    if (tick_ % FIELD_INTERVAL == 0) { weather_corpses(); spread_dissolved(); }
     if (tick_ % WASH_INTERVAL == 0) wash_soil();
+    // What the loose chemicals are worth, for the viewer and the metrics.
+    for (std::size_t c = 0; c < soil_.waste.size(); ++c) soil_.waste[c] = soil_.dissolved[c].energy();
     if (tick_ % SPLIT_INTERVAL == 0) check_splits();
     if (!watch_.empty() && tick_ % WATCH_INTERVAL == 0) watch_followed();
     if (tick_ % 50 == 0 || c_.size() == 0) {
@@ -791,37 +809,42 @@ void Simulation::drop_windfalls() {
     }
 }
 
-// Waste drifts: each cell hands WASTE_SPREAD of its waste to its four
+// Loose chemicals drift: each cell hands WASTE_SPREAD of them to its four
 // neighbours (a quarter each; what would fall off the edge stays put), then
-// WASTE_DECAY of what is left breaks down to heat. All taking is worked out
-// before any giving, so cell order doesn't matter.
-void Simulation::spread_waste() {
+// WASTE_DECAY of what is left breaks down to A in the soil, its energy lost as
+// heat. All taking is worked out before any giving, so cell order doesn't matter.
+void Simulation::spread_dissolved() {
     const int n = world_.size();
-    const std::size_t cells = soil_.waste.size();
-    waste_flow_.assign(cells, 0.0f);
+    const std::size_t cells = soil_.dissolved.size();
+    spread_.assign(cells, Mix{});
     for (int y = 0; y < n; ++y)
         for (int x = 0; x < n; ++x) {
             const int c = y * n + x;
-            float& w = soil_.waste[c];
-            if (w <= 0.0f) continue;
-            if (w < 1e-4f) {  // sweep up crumbs
-                stats_.out_waste_decay += w;
-                stats_.energy_out += w;
-                w = 0.0f;
+            Mix& m = soil_.dissolved[c];
+            const float mass = m.mass();
+            if (mass <= 0.0f) continue;
+            if (mass < 1e-7f) {  // sweep up crumbs
+                const double e = m.energy();
+                stats_.out_waste_decay += e;
+                stats_.energy_out += e;
+                soil_.nutrient[c] += mass;
+                m.clear();
                 continue;
             }
-            const float part = w * (WASTE_SPREAD * 0.25f);
+            const Mix part = m.scaled(WASTE_SPREAD * 0.25f);
             const int nb[4] = {x > 0 ? c - 1 : -1, x + 1 < n ? c + 1 : -1, y > 0 ? c - n : -1, y + 1 < n ? c + n : -1};
             for (int k : nb)
-                if (k >= 0) { waste_flow_[k] += part; w -= part; }
+                if (k >= 0) { spread_[k].add(part); m.add(part, -1.0f); }
         }
     for (std::size_t c = 0; c < cells; ++c) {
-        float& w = soil_.waste[c];
-        w += waste_flow_[c];
-        const float gone = w * WASTE_DECAY;
-        w -= gone;
-        stats_.out_waste_decay += gone;
-        stats_.energy_out += gone;
+        Mix& m = soil_.dissolved[c];
+        m.add(spread_[c]);
+        const Mix gone = m.scaled(WASTE_DECAY);
+        m.add(gone, -1.0f);
+        const double e = gone.energy();
+        stats_.out_waste_decay += e;
+        stats_.energy_out += e;
+        soil_.nutrient[c] += gone.mass();
     }
 }
 

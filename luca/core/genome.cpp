@@ -80,7 +80,6 @@ void clamp_genome(Genome& g) {
     g.bite              = std::clamp(g.bite, 0.0f, MAX_BITE);
     g.digestion         = std::clamp(g.digestion, 0.0f, 1.0f);
     g.dormancy          = std::clamp(g.dormancy, 0.0f, 1.0f);
-    g.detox             = std::clamp(g.detox, 0.0f, 1.0f);
     g.elongation        = std::clamp(g.elongation, 0.0f, 1.0f);
     g.squareness        = std::clamp(g.squareness, 0.0f, 1.0f);
     g.mutability        = std::clamp(g.mutability, MIN_MUTABILITY, MAX_MUTABILITY);

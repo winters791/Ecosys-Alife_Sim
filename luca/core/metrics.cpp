@@ -53,7 +53,7 @@ bool MetricsWriter::open(const std::string& path) {
             "out_transfer,out_decay,out_waste,eaten_living,eaten_dead,"
             "producers,hunters,scavengers,mixed,movers,sighted,armoured,"
             "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison,gene_transfers,gene_transfers_cross,gene_transfers_novel,"
-            "waste_total,excreted,eaten_waste,out_fouling,out_waste_decay,cleaners,mean_detox,mean_mutability,mean_repair,"
+            "waste_total,excreted,eaten_waste,out_fouling,out_waste_decay,cleaners,loose_B,loose_C,loose_D,mean_mutability,mean_repair,"
             "in_windfall,windfalls,in_vent,chemotrophs,mean_chemo,growing,mean_birth_size,grown_mass,"
             "neurons,slow_neurons,mean_tau,"
             "pool_B,pool_C,pool_D,tissue_B,tissue_C,tissue_D,mean_enzymes,rx_AB,rx_AC,rx_AD,rx_BC,rx_BD,rx_CD\n";
@@ -66,7 +66,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     const float half = sim.world().extent() * 0.5f;
 
     double sum_e = 0, sum_r = 0, sum_photo = 0, sum_parts = 0;
-    double photo_b = 0, photo_d = 0, sum_speed = 0, sum_absorb = 0, sum_armour = 0, sum_throw = 0, sum_bite = 0, sum_digest = 0, sum_neurons = 0, sum_links = 0, sum_detox = 0;
+    double photo_b = 0, photo_d = 0, sum_speed = 0, sum_absorb = 0, sum_armour = 0, sum_throw = 0, sum_bite = 0, sum_digest = 0, sum_neurons = 0, sum_links = 0;
     std::size_t brains = 0;
     // CTRNN neurons in running brains: how many, how many are slow (tau of
     // SLOW_TAU ticks or more), and their time constants' geometric mean.
@@ -105,7 +105,6 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
         sum_throw += c.pheno[i].throw_range;
         sum_bite += c.genome[i].bite;
         sum_digest += c.genome[i].digestion;
-        sum_detox += c.genome[i].detox;
         sum_dormancy += c.genome[i].dormancy;
         sum_mutability += c.genome[i].mutability;
         sum_repair += c.genome[i].repair;
@@ -137,6 +136,9 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     for (const Mix& v : sim.soil().corpse) corpse += v.mass();
     double waste = 0;
     for (float v : sim.soil().waste) waste += v;
+    double loose[NCHEM] = {};
+    for (const Mix& m : sim.soil().dissolved)
+        for (int ch = 0; ch < NCHEM; ++ch) loose[ch] += m.v[ch];
 
     const double stored = sim.stored_energy();
     const double expected = t.stored_start + t.energy_in - t.energy_out;
@@ -164,7 +166,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
          << sum_dormancy * inv << ',' << asleep << ',' << k.poisonous << ',' << t.out_poison << ','
          << t.gene_transfers << ',' << t.gene_transfers_cross << ',' << t.gene_transfers_novel << ','
          << waste << ',' << t.excreted << ',' << t.eaten_waste << ',' << t.out_fouling << ',' << t.out_waste_decay << ','
-         << k.cleaners << ',' << sum_detox * inv << ',' << sum_mutability * inv << ',' << sum_repair * inv << ','
+         << k.cleaners << ',' << loose[1] << ',' << loose[2] << ',' << loose[3] << ',' << sum_mutability * inv << ',' << sum_repair * inv << ','
          << t.in_windfall << ',' << t.windfalls << ',' << t.in_vent << ',' << k.chemotrophs << ',' << sum_chemo * inv
          << ',' << k.growing << ',' << sum_birth * inv << ',' << t.grown_mass << ','
          << neurons << ',' << slow_neurons << ',' << (neurons ? std::exp(sum_log_tau / static_cast<double>(neurons)) : 0.0) << ','
@@ -194,7 +196,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
     std::ofstream f(path);
     if (!f) return false;
     f << "x,y,energy,age,lineage,generation,core_radius,photo,parts,pigment,"
-         "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy,detox,fed_waste,"
+         "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy,burns,fed_waste,"
          "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair,chemo,fed_vent,birth_size,grown\n";
     const Creatures& c = sim.creatures();
     for (std::size_t i = 0; i < c.size(); ++i) {
@@ -205,7 +207,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
           << g.pigment;
         for (int t = 1; t < static_cast<int>(PartType::Count); ++t) f << ',' << c.pheno[i].part_total[t];
         f << ',' << c.pheno[i].max_speed << ',' << c.fed_light[i] << ',' << c.fed_living[i] << ',' << c.fed_dead[i] << ',' << c.species[i] << ',' << g.seed_throw << ',' << g.bite << ',' << g.digestion << ','
-          << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << g.detox << ',' << c.fed_waste[i] << ','
+          << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << static_cast<int>(c.pheno[i].burns) << ',' << c.fed_waste[i] << ','
           << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << ',' << g.chemo << ',' << c.fed_vent[i] << ',' << g.birth_size << ',' << c.pheno[i].grown << '\n';
     }
     return true;

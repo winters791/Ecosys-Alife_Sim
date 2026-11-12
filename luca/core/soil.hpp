@@ -8,11 +8,14 @@
 //   corpse         the chemicals locked in dead bodies until they are eaten or weather away
 //   corpse_energy  what those chemicals are worth (kept in step with `corpse`
 //                  by add_corpse / take_corpse; the brain smells it)
-//   waste          a chemical the living give off (energy, no matter; see energy.hpp):
-//                  it sickens every body in the cell and feeds the few that can take it up
+//   dissolved      chemicals loose in the cell, outside any body (never A): what
+//                  eaters spill and bodies give off (energy.hpp). Food for bodies
+//                  that can burn them, foul to the rest.
+//   waste          what the loose chemicals are worth (kept in step with
+//                  `dissolved` by Simulation::step; the viewer and metrics read it)
 //
-// Matter is conserved: nutrient + the mass of every corpse + every living
-// body and store is the same number for the whole run.
+// Matter is conserved: nutrient + the mass of every corpse + loose chemicals +
+// every living body and store is the same number for the whole run.
 
 #include <vector>
 
@@ -24,12 +27,14 @@ struct Soil {
     std::vector<float> nutrient;
     std::vector<Mix>   corpse;
     std::vector<float> corpse_energy;
+    std::vector<Mix>   dissolved;
     std::vector<float> waste;
 
     void resize(std::size_t cells) {
         nutrient.assign(cells, 0.0f);
         corpse.assign(cells, Mix{});
         corpse_energy.assign(cells, 0.0f);
+        dissolved.assign(cells, Mix{});
         waste.assign(cells, 0.0f);
     }
 

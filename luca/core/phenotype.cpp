@@ -108,7 +108,6 @@ constexpr float HEAT_LAG             = 120.0f;
 // Waste (added by Claude, 2026-11-11): taking up the chemical everyone gives
 // off. Priced so a body cleaning up only after itself loses by it (it gets
 // back ~0.03 a tick of its own waste); it pays only where many others foul a cell.
-constexpr float DETOX_UPKEEP         = 0.08f;   // upkeep at full detox
 // Chemosynthesis: paid for whether or not there is a vent, so it only pays
 // where one is. At full strength it takes a whole vent's worth (energy.cpp).
 constexpr float CHEMO_UPKEEP         = 0.1f;    // upkeep at full chemo
@@ -195,7 +194,6 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     const float bite           = std::clamp(g.bite, 0.0f, limits::MAX_BITE);
     const float digestion      = std::clamp(g.digestion, 0.0f, 1.0f);
     const float dormancy       = std::clamp(g.dormancy, 0.0f, 1.0f);
-    const float detox          = std::clamp(g.detox, 0.0f, 1.0f);
 
     // A brain only exists if there is something for it to drive.
     // Its price grows with its size: neurons, links and the strength of the links.
@@ -224,7 +222,7 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
                    + (skin - 1.0f) * r * r * SKIN_UPKEEP + stalk_upkeep
                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
                    + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP
-                   + detox * DETOX_UPKEEP + std::clamp(g.chemo, 0.0f, 1.0f) * CHEMO_UPKEEP
+                   + std::clamp(g.chemo, 0.0f, 1.0f) * CHEMO_UPKEEP
                    + std::max(0.0f, -std::clamp(g.mutability, limits::MIN_MUTABILITY, limits::MAX_MUTABILITY)) * FIDELITY_UPKEEP;
     const float repair = std::clamp(g.repair, 0.0f, 1.0f);
     // Chemistry: compile the enzymes (one per reaction slot, poorer chemical first).
@@ -237,6 +235,7 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
         p.enz_lo[p.enzymes] = static_cast<uint8_t>(lo);
         p.enz_hi[p.enzymes] = static_cast<uint8_t>(hi);
         p.enz_rate[p.enzymes] = rate;
+        p.burns |= static_cast<uint8_t>(1u << hi);
         ++p.enzymes;
         enzyme_rate += rate;
     }
@@ -276,7 +275,6 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     p.toxicity = std::min(TOXICITY_PER_SIZE * p.part_total[static_cast<int>(PartType::Poison)], MAX_TOXICITY);
     p.bite       = 1.0f + bite;
     p.efficiency = TRANSFER_EFFICIENCY + DIGEST_GAIN * digestion;
-    p.detox      = detox;
     p.chemo      = std::clamp(g.chemo, 0.0f, 1.0f);
 
     // --- 9. Storage: a body can only hold so much, and can't save up more

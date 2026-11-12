@@ -302,7 +302,7 @@ void test_contact_and_corpses() {
     for (int t = 0; t < 40; ++t) {
         sim.step();
         eaten += sim.last_stats().eaten_living;
-        lost += sim.last_stats().out_transfer;
+        lost += sim.last_stats().excreted;
     }
     const std::size_t ih = find(sim, hunter), ip = find(sim, prey), il = find(sim, loner);
     CHECK(ih < sim.creatures().size() && ip < sim.creatures().size() && il < sim.creatures().size());
@@ -312,7 +312,7 @@ void test_contact_and_corpses() {
     CHECK(c.fed_living[ih] > 0.0f && c.fed_light[ih] == 0.0f);  // it lives off its neighbour
     CHECK(c.fed_living[ip] == 0.0f && c.fed_living[il] == 0.0f);
     CHECK(c.energy[ip] < c.energy[il]);                         // and the neighbour is poorer for it
-    // What arrives is TRANSFER_EFFICIENCY of what was taken; the rest is heat.
+    // What arrives is TRANSFER_EFFICIENCY of what was taken; the rest spills into the cell.
     CHECK(std::abs(lost / (eaten + lost) - (1.0 - TRANSFER_EFFICIENCY)) < 1e-3);
 
     // Run on until bodies start to fall. The books must balance throughout.
@@ -598,7 +598,7 @@ void test_feeding_genes_and_kin_sense() {
         for (int t = 0; t < 40; ++t) {
             sim.step();
             eaten += sim.last_stats().eaten_living;
-            lost += sim.last_stats().out_transfer;
+            lost += sim.last_stats().excreted;
         }
         CHECK(eaten > 0.0 && std::abs(lost / (eaten + lost) - 0.05) < 1e-3);
         CHECK(run_audited(sim, 500) < 1e-4);
@@ -1010,58 +1010,75 @@ void test_species() {
 
 }  // namespace
 
-// Waste: living gives part of its upkeep off into the cell; it fouls whoever
-// lives there, spreads, breaks down, and feeds bodies with the detox gene.
-// The energy books still balance.
-void test_waste() {
+// Loose chemicals (chemistry stage 2): a body gives off what it can't burn;
+// a neighbour that can burn it takes it up through its skin (cross-feeding,
+// with nothing coded for it); it fouls whoever can't burn it; it spreads to
+// the next cell and breaks down. Both books balance throughout.
+void test_loose_chemicals() {
     using namespace luca;
-    Genome cleaner_g = make_luca();
-    cleaner_g.detox = 1.0f;
-    const Phenotype plain = compile_phenotype(make_luca()), cleaner = compile_phenotype(cleaner_g);
-    CHECK(cleaner.upkeep > plain.upkeep);                          // the gene has a price
-    CHECK(waste_demand(plain) == 0.0f && waste_demand(cleaner) > 0.0f);
-    CHECK(fouling_cost(plain, 0.0f) == 0.0f && fouling_cost(plain, 10.0f) > fouling_cost(plain, 5.0f));
+    Genome maker_g = make_luca(), eater_g = make_luca();
+    maker_g.enzymes = {Enzyme{CHEM_B, CHEM_D, 0.015f}};                               // burns D to B, and can't burn B
+    eater_g.enzymes = {Enzyme{CHEM_A, CHEM_B, 0.015f}, Enzyme{CHEM_A, CHEM_D, 0.015f}};  // burns B (first) and D
+    const Phenotype plain = compile_phenotype(make_luca()), maker = compile_phenotype(maker_g), eater = compile_phenotype(eater_g);
+    CHECK(plain.can_burn(CHEM_D) && !plain.can_burn(CHEM_B));
+    CHECK(maker.can_burn(CHEM_D) && !maker.can_burn(CHEM_B));
+    CHECK(eater.can_burn(CHEM_B) && eater.can_burn(CHEM_D));
+    CHECK(eater.upkeep > plain.upkeep);   // a second enzyme has a price
+    CHECK(uptake_rate(plain) > 0.0f && fouling_cost(plain, 0.0f) == 0.0f && fouling_cost(plain, 2.0f) > fouling_cost(plain, 1.0f));
 
     SimConfig cfg = small_config();
     cfg.nutrient_mean = 0.0f;  // nobody breeds
     cfg.light_mode = LightMode::Uniform;
-    auto run = [&](int crowd, bool with_cleaner, double& fouled, double& eaten, float& waste_here, double& worst) {
+    struct Result { double fouled = 0, given = 0, taken = 0, worst = 0, drift = 0; float loose_b = 0; float eater_fed = -1, plain_fed = -1; };
+    auto run = [&](bool with_eater) {
+        Result r;
         Simulation sim(cfg);
-        for (int k = 0; k < crowd; ++k) sim.add_creature(20.2f + 0.15f * k, 20.5f, 400.0f, make_luca());
-        if (with_cleaner) sim.add_creature(20.5f, 20.8f, 400.0f, cleaner_g);
-        fouled = eaten = worst = 0.0;
-        for (int t = 0; t < 600; ++t) {
+        sim.add_creature(20.3f, 20.5f, 400.0f, maker_g);
+        const uint64_t lid = sim.add_creature(20.5f, 20.2f, 400.0f, make_luca());
+        const uint64_t eid = with_eater ? sim.add_creature(20.7f, 20.5f, 400.0f, eater_g) : 0;
+        const double matter0 = sim.total_matter();
+        for (int t = 0; t < 300; ++t) {
             const double before = sim.stored_energy();
             sim.step();
             const TickStats& st = sim.last_stats();
-            fouled += st.out_fouling;
-            eaten += st.eaten_waste;
+            r.fouled += st.out_fouling;
+            r.given += st.excreted;
+            r.taken += st.eaten_waste;
             const double after = sim.stored_energy();
-            worst = std::max(worst, std::abs(after - (before + st.energy_in - st.energy_out)) / std::max(1.0, after));
+            r.worst = std::max(r.worst, std::abs(after - (before + st.energy_in - st.energy_out)) / std::max(1.0, after));
         }
-        waste_here = sim.soil().waste[sim.world().cell_index(20.5f, 20.5f)];
+        r.drift = std::abs(sim.total_matter() - matter0) / matter0;
+        r.loose_b = sim.soil().dissolved[sim.world().cell_index(20.5f, 20.5f)].v[CHEM_B];
+        const std::size_t il = find(sim, lid);
+        if (il < sim.creatures().size()) r.plain_fed = sim.creatures().fed_waste[il];
+        if (with_eater) {
+            const std::size_t ie = find(sim, eid);
+            if (ie < sim.creatures().size()) r.eater_fed = sim.creatures().fed_waste[ie];
+        }
+        return r;
     };
-    double f1, e1, w1, f4, e4, w4, fc, ec, wc;
-    float h1, h4, hc;
-    run(1, false, f1, e1, h1, w1);
-    run(4, false, f4, e4, h4, w4);
-    run(4, true, fc, ec, hc, wc);
-    CHECK(h1 > 0.0f && f1 > 0.0);                // one body fouls its own cell a little
-    CHECK(h4 > 2.0f * h1 && f4 > 6.0 * f1);      // four in one cell foul it far more, and each feels it
-    CHECK(e1 == 0.0 && e4 == 0.0);               // without the gene nobody eats it
-    CHECK(ec > 0.0 && hc < h4);                  // a cleaner takes it up and the cell is cleaner
-    CHECK(w1 < 1e-5 && w4 < 1e-5 && wc < 1e-5);  // the energy books balance throughout
+    const Result alone = run(false), shared = run(true);
+    CHECK(alone.given > 0.0 && alone.loose_b > 0.0f);     // the maker gives off B into its cell
+    CHECK(alone.fouled > 0.0);                            // which fouls bodies that can't burn it
+    CHECK(alone.taken == 0.0 && alone.plain_fed == 0.0f); // and nobody there can eat it
+    CHECK(shared.taken > 0.0 && shared.eater_fed > 0.0f); // a neighbour that burns B lives partly on it
+    CHECK(shared.plain_fed == 0.0f);
+    CHECK(shared.loose_b < alone.loose_b && shared.fouled < alone.fouled);   // and the cell is cleaner for it
+    CHECK(alone.worst < 1e-5 && shared.worst < 1e-5);    // the energy books balance
+    CHECK(alone.drift < 1e-5 && shared.drift < 1e-5);    // and so does matter
 
-    // Waste outlives its maker, spreads to the next cell, and fades.
+    // Loose chemicals outlive their maker, spread to the next cell, and fade.
     Simulation sim(cfg);
-    sim.add_creature(30.5f, 30.5f, 40.0f, with_part(PartType::Storage, 1.0f));  // can't feed: lives a while, then dies
-    for (int t = 0; t < 400 && sim.creatures().size() > 0; ++t) sim.step();
+    sim.add_creature(30.5f, 30.5f, 200.0f, maker_g);
+    for (int t = 0; t < 3000 && sim.creatures().size() > 0; ++t) sim.step();
     CHECK(sim.creatures().size() == 0);
     const int here = sim.world().cell_index(30.5f, 30.5f), next = sim.world().cell_index(31.5f, 30.5f);
     const float w0 = sim.soil().waste[here];
-    CHECK(w0 > 0.0f && sim.soil().waste[next] > 0.0f);
+    CHECK(w0 > 0.0f && sim.soil().dissolved[next].v[CHEM_B] > 0.0f);
+    const float a0 = sim.soil().nutrient[here];
     for (int t = 0; t < 800; ++t) sim.step();
     CHECK(sim.soil().waste[here] < 0.5f * w0);
+    CHECK(sim.soil().nutrient[here] > a0);   // broken down to A
 }
 
 // Wandering bends by distance, not by time: a slow wanderer turns a little
@@ -1729,7 +1746,7 @@ int main() {
     test_wander_turns_by_distance();
     test_dormancy();
     test_poison();
-    test_waste();
+    test_loose_chemicals();
     test_gene_transfer();
     test_species();
     test_part_placement();

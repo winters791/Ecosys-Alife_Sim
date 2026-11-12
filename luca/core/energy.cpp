@@ -66,11 +66,9 @@ constexpr float CLIMB_COST = 1.0f;
 // Flinging a child: mass x distance^2, like moving, but paid once per birth.
 constexpr float THROW_COST = 2.0f;
 
-// Waste (see energy.hpp). At these numbers a LUCA alone on open ground sits
-// in about 4 units of waste and loses ~0.01 a tick to it (3% of its upkeep);
-// in a crowded cell it is several times that.
-constexpr float WASTE_HARM     = 0.0025f;  // energy per tick per unit of waste per unit of skin
-constexpr float WASTE_EAT_RATE = 0.3f;     // waste taken up per tick at full detox
+// Fouling (see energy.hpp): per unit of loose chemical it can't burn, per
+// unit of skin. The old waste rule's 0.0025 per unit of energy, at 222 a unit.
+constexpr float FOUL_HARM      = 0.5f;
 constexpr float CHEMO_RATE     = 1.0f;     // vent energy taken up per tick at full chemo
 
 // Contact.
@@ -190,12 +188,12 @@ float charge(const Phenotype& p, Mix& pool, float& soil_a, float energy) {
     return stored;
 }
 
-float fouling_cost(const Phenotype& p, float waste_here) {
-    return WASTE_HARM * waste_here * p.surface_area;
+float fouling_cost(const Phenotype& p, float foul_mass) {
+    return FOUL_HARM * foul_mass * p.surface_area;
 }
 
-float waste_demand(const Phenotype& p) {
-    return WASTE_EAT_RATE * p.detox;
+float uptake_rate(const Phenotype& p) {
+    return p.burns ? UPTAKE_RATE * p.surface_area : 0.0f;
 }
 
 float vent_demand(const Phenotype& p) {

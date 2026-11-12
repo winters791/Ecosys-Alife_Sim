@@ -21,7 +21,6 @@ constexpr float W_THROW     = 0.4f;   // per cell of seed-throwing range
 constexpr float W_BITE      = 0.8f;   // per unit of bite
 constexpr float W_DIGESTION = 2.0f;   // none to full is 0..1
 constexpr float W_DORMANCY  = 1.5f;   // never sleeps to sleeps fully is 0..1
-constexpr float W_DETOX     = 1.5f;   // none to full is 0..1
 constexpr float W_ELONGATE  = 1.5f;   // round to three times as long is 0..1
 constexpr float W_SQUARE    = 1.0f;   // rounded to boxy is 0..1
 constexpr float W_MUTABILITY = 0.3f;  // per doubling of the mutation rate
@@ -78,7 +77,6 @@ float genome_distance(const Genome& a, const Genome& b) {
     term(W_REPAIR,    a.repair - b.repair);
     term(W_CHEMO,     a.chemo - b.chemo);
     term(W_BIRTH,     a.birth_size - b.birth_size);
-    term(W_DETOX,     a.detox - b.detox);
     term(W_ELONGATE,  a.elongation - b.elongation);
     term(W_SQUARE,    a.squareness - b.squareness);
 

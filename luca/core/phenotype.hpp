@@ -36,7 +36,6 @@ struct Phenotype {
     float toxicity   = 0.0f; // energy an eater loses per unit of energy it drains from this body
     float bite       = 1.0f; // multiplies its pull on living bodies (1 = plain)
     float efficiency = 0.0f; // fraction of what it pulls, from the living or the dead, that it keeps
-    float detox      = 0.0f; // 0..1: how hard it takes up waste (see energy.hpp)
     float chemo      = 0.0f; // 0..1: how hard it takes up the energy of a vent (see energy.hpp)
 
     float energy_capacity = 0.0f;  // the most energy the body can hold (a store full of D)
@@ -48,6 +47,11 @@ struct Phenotype {
     uint8_t enz_lo[limits::MAX_ENZYMES] = {};
     uint8_t enz_hi[limits::MAX_ENZYMES] = {};
     float   enz_rate[limits::MAX_ENZYMES] = {};
+    // Which chemicals it can burn: bit c is set when some enzyme has c on its
+    // richer side. It takes these up from its cell and keeps them from a meal;
+    // anything else in its store it gives off (chemistry stage 2, energy.hpp).
+    uint8_t burns = 0;
+    bool can_burn(int c) const { return (burns >> c) & 1u; }
     float reach           = 0.0f;  // touch distance from its centre, world units
 
     // Behaviour

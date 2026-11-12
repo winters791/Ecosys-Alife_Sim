@@ -124,28 +124,30 @@ float corpse_demand(const Phenotype& p);
 // digestion gene raises it for its owner (Phenotype::efficiency), at a price.
 constexpr float TRANSFER_EFFICIENCY = 0.7f;
 
-// --- Waste: the smallest piece of the chemistry layer -----------------------------
-// Living gives something off. WASTE_SHARE of every body's upkeep leaves it not
-// as heat but as a chemical in its cell, still holding that energy. Waste
-// sickens every body in the cell (fouling_cost), its maker included, so a
-// crowded cell costs more to live in. It spreads a little to the cells
-// around and slowly breaks down to heat. A body with the detox gene takes it
-// up as food (waste_demand), keeping Phenotype::efficiency of it like any meal.
-// Waste carries energy only, no matter: the matter books are untouched.
-constexpr float WASTE_SHARE = 0.2f;
-// Energy a body loses per tick per unit of waste in its cell, per unit of skin.
-float fouling_cost(const Phenotype& p, float waste_here);
-// Waste this body tries to take up per tick (before sharing within the cell).
-float waste_demand(const Phenotype& p);
-
+// --- Loose chemicals: chemistry stage 2 (2026-11-12) -----------------------------
+// A cell holds chemicals outside any body (Soil::dissolved): what eaters spill
+// and what bodies give off. There is no waste gene and no special waste: an
+// eater keeps `efficiency` of the chemicals it can burn and spills the rest,
+// with everything it can't burn, into its cell; a body gives off whatever its
+// store holds that it can't burn. Every body takes up the chemicals it can
+// burn through its skin: each tick it asks for `uptake_rate` of what the cell
+// holds, and if the cell's bodies ask for more than all of it, it is shared
+// out. Chemicals it can't burn sicken it (fouling_cost), so one body's waste
+// is another's food and a third's poison. Loose chemicals spread to the cells
+// around and slowly break down to A, their energy lost as heat.
+constexpr float UPTAKE_RATE = 0.05f;   // share of the cell's stock taken up per tick per unit of skin
+float uptake_rate(const Phenotype& p);
+// Energy a body loses per tick to `foul_mass` units of loose chemicals it
+// can't burn, in its cell.
+float fouling_cost(const Phenotype& p, float foul_mass);
 // --- Vents (2026-11-12) -------------------------------------------------------
 // A vent gives its cell a steady flow of energy, day and night (World::vent_energy).
 // Only bodies with the chemo gene take it up; they share the cell's flow like
 // the dead and keep all of it (it is a second sun, not a meal). What nobody
 // takes is lost. Booked under energy_in.
 float vent_demand(const Phenotype& p);
-// Each field update (8 ticks), this fraction of a cell's waste moves to its
-// four neighbours (a quarter each), and this fraction breaks down to heat.
+// Each field update (8 ticks), this fraction of a cell's loose chemicals moves
+// to its four neighbours (a quarter each), and this fraction breaks down to A.
 constexpr float WASTE_SPREAD = 0.2f;
 constexpr float WASTE_DECAY  = 0.04f;
 

@@ -152,7 +152,6 @@ struct Genome {
     float digestion         = 0.0f;   // 0..1: keeps more of what it eats (70% up to 95%)
     float dormancy          = 0.0f;   // 0..1: how deeply it sleeps through dark and cold
     float seed_throw        = 0.0f;   // how far it can fling a child, in cells; 0 = the child lands touching it
-    float detox             = 0.0f;   // 0..1: takes up the waste in its cell as food
     // Body outline (2026-11-11). A LUCA is round: both 0.
     float elongation        = 0.0f;   // 0 round .. 1 three times as long as it is wide
     float squareness        = 0.0f;   // 0 rounded .. 1 a box with rounded corners

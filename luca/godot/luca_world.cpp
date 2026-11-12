@@ -86,6 +86,14 @@ float smooth_height(const luca::World& w, float x, float y) {
 
 }  // namespace
 
+// The chemicals a body can burn (and so take up from its cell), e.g. "D" or "B D".
+static String burns_words(const luca::Phenotype& p) {
+    String out;
+    for (int k = 1; k < luca::NCHEM; ++k)
+        if (p.can_burn(k)) out += String(out.is_empty() ? "" : " ") + luca::chem_name(k);
+    return out.is_empty() ? String("nothing") : out;
+}
+
 void LucaWorld::setup(int size, int64_t seed, int population, bool light_gradient) {
     luca::SimConfig cfg;
     cfg.world_size = std::max(size, 2);
@@ -545,7 +553,7 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["fed_waste"] = c.fed_waste[who];
     d["fed_vent"] = c.fed_vent[who];
     d["chemo"] = p.chemo;
-    d["detox"] = p.detox;
+    d["burns"] = burns_words(p);
     d["mutability"] = g.mutability;
     d["repair"] = g.repair;
     // Chemistry (stage 1): its enzymes, and what its store and body hold.
@@ -707,7 +715,7 @@ Dictionary LucaWorld::get_species_profile(int64_t species_id) const {
     b["offspring_share"] = g.offspring_share;
     b["bite"] = g.bite;
     b["efficiency"] = p.efficiency;
-    b["detox"] = g.detox;
+    b["burns"] = burns_words(p);
     b["chemo"] = g.chemo;
     b["dormancy"] = g.dormancy;
     b["throw_range"] = p.throw_range;

@@ -535,7 +535,6 @@ func _tags() -> Array:
 			break
 	if b["canopy_lift"] > 0.2: out.append(["Frond", Color(0.5, 0.85, 0.4)])
 	if b["throw_range"] > 0.5: out.append(["Seed-flinger", Color(0.75, 0.85, 0.5)])
-	if b["detox"] > 0.3: out.append(["Recycler", Color(0.7, 0.75, 0.4)])
 	if b["chemo"] > 0.3: out.append(["Vent-feeder", Color(0.95, 0.55, 0.25)])
 	if h["count"] > 0:
 		var dt: float = h["temperature"] - profile["world_temperature"]
@@ -835,7 +834,7 @@ func _body() -> String:
 	var eats := []
 	if b["bite"] > 0.0: eats.append("bites ×%.1f" % (1.0 + b["bite"]))
 	eats.append("keeps %d%% of a meal" % roundi(100.0 * b["efficiency"]))
-	if b["detox"] > 0.0: eats.append("eats waste (%.2f)" % b["detox"])
+	eats.append("burns %s" % b["burns"])
 	if b["chemo"] > 0.0: eats.append("feeds on vents (%.2f)" % b["chemo"])
 	if b["toxicity"] > 0.0: eats.append("poisonous (%.2f)" % b["toxicity"])
 	lines.append("[color=#%s]Feeding[/color]  %s" % [faint, ", ".join(eats)])

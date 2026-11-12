@@ -32,17 +32,17 @@ struct TickStats {
     double out_upkeep      = 0.0;  // breakdown of energy_out
     double out_thermal     = 0.0;
     double out_movement    = 0.0;
-    double out_transfer    = 0.0;  // lost crossing membranes (1 - TRANSFER_EFFICIENCY)
+    double out_transfer    = 0.0;  // lost crossing membranes (0 since chemistry stage 2: the loss is spilled, not burned)
     double out_decay       = 0.0;  // corpses weathering away uneaten
-    double out_waste       = 0.0;  // taken in by a body already full
+    double out_waste       = 0.0;  // taken in by a body already full (0 since chemistry stage 2: spilled instead)
     double out_poison      = 0.0;  // burned by eaters dealing with a poisonous meal
-    double out_fouling     = 0.0;  // lost to living in waste
-    double out_waste_decay = 0.0;  // waste breaking down by itself
+    double out_fouling     = 0.0;  // lost to living among chemicals it can't burn
+    double out_waste_decay = 0.0;  // loose chemicals breaking down to A by themselves
     // Energy that changed hands inside the world (not part of in/out):
     double eaten_living    = 0.0;  // arrived from living bodies
     double eaten_dead      = 0.0;  // arrived from corpses
-    double excreted        = 0.0;  // upkeep given off as waste instead of heat
-    double eaten_waste     = 0.0;  // arrived from waste
+    double excreted        = 0.0;  // given off into the cell: meals spilled, chemicals it can't burn
+    double eaten_waste     = 0.0;  // taken up from the cell's loose chemicals
     // Blueprints taken up through contact (see Simulation::step, phase 2a):
     std::size_t gene_transfers = 0;        // all of them
     std::size_t gene_transfers_cross = 0;  // between different species
@@ -56,7 +56,7 @@ struct Census {
     std::size_t producers = 0;    // mostly light
     std::size_t hunters = 0;      // mostly taken from living bodies
     std::size_t scavengers = 0;   // mostly taken from corpses
-    std::size_t cleaners = 0;     // mostly taken from waste
+    std::size_t cleaners = 0;     // mostly taken up from loose chemicals in the cell
     std::size_t chemotrophs = 0;  // mostly taken from vents
     std::size_t mixed = 0;        // no single source above 60%
     std::size_t young = 0;        // hasn't eaten enough yet to say
@@ -155,7 +155,7 @@ private:
                Genome genome, const Phenotype& pheno, float body_temp = -1000.0f);
     void weather_corpses();
     void wash_soil();
-    void spread_waste();
+    void spread_dissolved();
     void drop_windfalls();
     void share_light_by_canopy();
     // Where a child flung `dist` from (x, y) along (ux, uy) comes down: it
@@ -217,11 +217,12 @@ private:
     std::vector<float> wash_;                // per cell: matter on its way downhill
     std::vector<float> cell_corpse_demand_;  // per cell
     std::vector<float> corpse_want_, corpse_gain_;
-    std::vector<float> cell_waste_demand_;   // per cell
-    std::vector<float> waste_want_, waste_gain_;
+    std::vector<float> cell_uptake_demand_;  // per cell and chemical (cell * NCHEM + c): shares of the stock asked for
+    std::vector<float> uptake_want_;         // share of its cell's stock of each chemical it can burn
+    std::vector<Mix>   uptake_gain_;         // what it takes up this tick
     std::vector<float> cell_vent_demand_;    // per cell
     std::vector<float> vent_want_, vent_gain_;
-    std::vector<float> waste_flow_;          // per cell: waste on its way to the neighbours
+    std::vector<Mix>   spread_;              // per cell: loose chemicals on their way to the neighbours
     std::vector<float> drain_want_, drained_, poisoned_;   // drain in mass from the store; poison in energy
     std::vector<Mix> intake_;                               // chemicals taken in from living bodies this tick
     // Who took most from each body this tick: the one credited if it dies
