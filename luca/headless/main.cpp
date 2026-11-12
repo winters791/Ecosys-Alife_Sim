@@ -10,10 +10,13 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 
+#include "laws.hpp"
 #include "metrics.hpp"
 #include "sim.hpp"
+#include "snapshot.hpp"
 
 namespace {
 
@@ -35,6 +38,14 @@ void usage() {
         "  --interval N     ticks between metrics rows    (default 100)\n"
         "  --script FILE    god-power script (format: core/powers.hpp)\n"
         "  --follow NAME    follow a species by name (from when it appears); alerts.txt\n"
+        "  --load FILE      continue a saved world (its config comes from the file;\n"
+        "                   --ticks counts on from the tick it was saved at)\n"
+        "  --save FILE      save the world to FILE at the end\n"
+        "  --save-every N   also save every N ticks, to FILE with the tick in its name\n"
+        "  --set NAME=VALUE change a law for this run (repeatable; core/laws.hpp).\n"
+        "                   With --load: applied on top of the laws it was saved under\n"
+        "  --laws FILE      change the laws listed in FILE (\"NAME VALUE\" a line)\n"
+        "  --list-laws      print every law with its value and exit\n"
         "  --out DIR        output directory              (default out)\n"
         "  --no-snapshot    skip end-of-run snapshot files\n"
         "  --quiet          no progress lines");
@@ -47,8 +58,12 @@ bool arg_is(const char* a, const char* name) { return std::strcmp(a, name) == 0;
 int main(int argc, char** argv) {
     luca::SimConfig cfg;
     long long ticks = 20000;
-    std::string out_dir = "out", script_path, follow_name;
+    std::string out_dir = "out", script_path, follow_name, load_path, save_path;
+    long long save_every = 0;
     bool snapshot = true, quiet = false;
+    std::string world_flag;   // a flag that sets the world's config (not allowed with --load)
+    bool events_given = false, interval_given = false, list_laws = false;
+    luca::LawChanges law_changes;   // --set and --laws, in the order given
 
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
@@ -56,7 +71,14 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", a); std::exit(2); }
             return argv[++i];
         };
+        for (const char* w : {"--seed", "--size", "--pop", "--sun", "--day", "--day-swing", "--windfall", "--nutrients", "--light"})
+            if (arg_is(a, w)) world_flag = a;
+        if (arg_is(a, "--events")) events_given = true;
+        if (arg_is(a, "--interval")) interval_given = true;
         if      (arg_is(a, "--ticks"))       ticks = std::atoll(next());
+        else if (arg_is(a, "--load"))        load_path = next();
+        else if (arg_is(a, "--save"))        save_path = next();
+        else if (arg_is(a, "--save-every"))  save_every = std::atoll(next());
         else if (arg_is(a, "--seed"))        cfg.seed = std::strtoull(next(), nullptr, 10);
         else if (arg_is(a, "--size"))        cfg.world_size = std::atoi(next());
         else if (arg_is(a, "--pop"))         cfg.initial_population = std::atoi(next());
@@ -68,6 +90,16 @@ int main(int argc, char** argv) {
         else if (arg_is(a, "--nutrients"))   cfg.nutrient_mean = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--interval"))    cfg.metrics_interval = std::atoi(next());
         else if (arg_is(a, "--out"))         out_dir = next();
+        else if (arg_is(a, "--set") || arg_is(a, "--laws")) {
+            const bool file = arg_is(a, "--laws");
+            const std::string v = next();
+            std::string error;
+            if (!(file ? luca::read_laws_file(v, law_changes, error) : luca::parse_law(v, law_changes, error))) {
+                std::fprintf(stderr, "%s %s: %s\n", a, v.c_str(), error.c_str());
+                return 2;
+            }
+        }
+        else if (arg_is(a, "--list-laws"))   list_laws = true;
         else if (arg_is(a, "--script"))      script_path = next();
         else if (arg_is(a, "--follow"))      follow_name = next();
         else if (arg_is(a, "--no-snapshot")) snapshot = false;
@@ -81,16 +113,87 @@ int main(int argc, char** argv) {
         else if (arg_is(a, "--help") || arg_is(a, "-h")) { usage(); return 0; }
         else { std::fprintf(stderr, "unknown option: %s\n", a); usage(); return 2; }
     }
-    if (cfg.world_size < 2 || cfg.metrics_interval < 1 || ticks < 1) {
-        std::fprintf(stderr, "size must be >= 2, interval and ticks >= 1\n");
+    if (cfg.world_size < 2 || cfg.metrics_interval < 1 || ticks < 1 || save_every < 0) {
+        std::fprintf(stderr, "size must be >= 2, interval and ticks >= 1, save-every >= 0\n");
         return 2;
+    }
+    if (!load_path.empty() && !world_flag.empty()) {
+        std::fprintf(stderr, "%s sets up a new world; a loaded world keeps the config it was saved with\n", world_flag.c_str());
+        return 2;
+    }
+    if (save_every > 0 && save_path.empty()) {
+        std::fprintf(stderr, "--save-every needs --save FILE\n");
+        return 2;
+    }
+    // world.snap -> world_12000.snap
+    auto save_at = [&](const luca::Simulation& s, bool numbered) {
+        std::string path = save_path;
+        if (numbered) {
+            const std::size_t dot = path.find_last_of('.'), slash = path.find_last_of('/');
+            const std::string tag = "_" + std::to_string(s.tick());
+            if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) path.insert(dot, tag);
+            else path += tag;
+        }
+        std::string error;
+        if (!luca::save_snapshot(s, path, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return false;
+        }
+        if (!quiet) std::printf("saved %s\n", path.c_str());
+        return true;
+    };
+
+    if (list_laws) {
+        luca::apply_laws(luca::g_laws, law_changes);
+        const luca::Laws defaults{};
+        auto default_text = [](float d) {
+            char b[48];
+            std::snprintf(b, sizeof b, " (default %g)", static_cast<double>(d));
+            return std::string(b);
+        };
+        for (const luca::LawInfo& law : luca::law_table()) {
+            const float v = luca::g_laws.*law.field, d = defaults.*law.field;
+            std::printf("%-22s %-10g %s%s\n", law.name, static_cast<double>(v), law.where,
+                        v != d ? default_text(d).c_str() : "");
+        }
+        return 0;
     }
 
     std::filesystem::create_directories(out_dir);
     const std::string metrics_path = out_dir + "/metrics.csv";
 
-    luca::Simulation sim(cfg);
-    sim.seed_population();
+
+    std::unique_ptr<luca::Simulation> owned;
+    if (load_path.empty()) {
+        luca::apply_laws(luca::g_laws, law_changes);   // before the first body is compiled
+        owned = std::make_unique<luca::Simulation>(cfg);
+        owned->seed_population();
+    } else {
+        std::string error;
+        owned = luca::load_snapshot(load_path, error, law_changes);
+        if (!owned) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
+        }
+        const float rate = cfg.event_rate;
+        const int interval = cfg.metrics_interval;
+        cfg = owned->config();
+        if (events_given) owned->set_event_rate(rate);
+        if (interval_given) cfg.metrics_interval = interval;
+        if (!quiet)
+            std::printf("loaded %s: tick %llu, %zu creatures\n", load_path.c_str(), static_cast<unsigned long long>(owned->tick()),
+                        owned->creatures().size());
+    }
+    luca::Simulation& sim = *owned;
+    {
+        // The laws in force, readable back with --laws.
+        const luca::LawChanges changed = luca::changed_laws(luca::g_laws);
+        std::ofstream f(out_dir + "/laws.txt");
+        f << "# laws that differ from this build's defaults (" << changed.size() << ")\n";
+        for (const auto& [name, value] : changed) f << name << ' ' << value << '\n';
+        if (!quiet)
+            for (const auto& [name, value] : changed) std::printf("law %s = %g\n", name.c_str(), static_cast<double>(value));
+    }
 
     if (!script_path.empty()) {
         std::ifstream script(script_path);
@@ -127,8 +230,10 @@ int main(int argc, char** argv) {
     interval.begin(sim);
     double worst_audit = 0.0, total_ms = 0.0;
 
+    long long ticks_run = 0;
     for (long long t = 0; t < ticks; ++t) {
         sim.step();
+        ++ticks_run;
         look_for_followed();
         interval.add(sim.last_stats());
         total_ms += sim.last_stats().tick_ms;
@@ -141,7 +246,7 @@ int main(int argc, char** argv) {
                 std::printf("  ! %s\n", luca::format_entry(entries[alerts_shown]).c_str());
 
         const bool last = (t + 1 == ticks);
-        if ((t + 1) % cfg.metrics_interval == 0 || last) {
+        if (sim.tick() % static_cast<uint64_t>(cfg.metrics_interval) == 0 || last) {
             const double audit = metrics.write_row(sim, interval);
             if (std::abs(audit) > std::abs(worst_audit)) worst_audit = audit;
             if (!quiet)
@@ -153,11 +258,14 @@ int main(int argc, char** argv) {
                             interval.total_ms / static_cast<double>(interval.ticks), audit);
             interval.begin(sim);
         }
+        if (save_every > 0 && sim.tick() % static_cast<uint64_t>(save_every) == 0 && !last && !save_at(sim, true)) return 1;
         if (sim.creatures().size() == 0) {
             std::printf("extinction at tick %llu\n", static_cast<unsigned long long>(sim.tick()));
             break;
         }
     }
+
+    if (!save_path.empty() && !save_at(sim, false)) return 1;
 
     if (snapshot) {
         luca::write_creature_snapshot(sim, out_dir + "/creatures.csv");
@@ -179,7 +287,7 @@ int main(int argc, char** argv) {
 
     std::printf("\ndone: %llu ticks, final population %zu, %.3f ms/tick average, worst audit error %+.2e\n",
                 static_cast<unsigned long long>(sim.tick()), sim.creatures().size(),
-                total_ms / static_cast<double>(sim.tick() ? sim.tick() : 1), worst_audit);
+                total_ms / static_cast<double>(ticks_run ? ticks_run : 1), worst_audit);
     std::printf("metrics: %s\n", metrics_path.c_str());
     return 0;
 }

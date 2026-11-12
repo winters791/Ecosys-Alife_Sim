@@ -2,6 +2,7 @@
 // The simulation: owns the world and the creatures, advances one tick at a time.
 
 #include <cstdint>
+#include <map>
 #include <vector>
 
 #include "config.hpp"
@@ -74,6 +75,7 @@ struct Census {
 };
 
 class Simulation {
+    friend struct SnapshotIO;   // snapshot.cpp: saves and restores the whole state
 public:
     explicit Simulation(const SimConfig& cfg);
 
@@ -146,6 +148,8 @@ public:
     // total_matter() - matter_brought_up() is constant.
     double total_matter() const;
     double matter_brought_up() const { return matter_brought_up_; }
+    // Living bodies whose genome holds a blueprint taken up by gene transfer (snapshot.hpp).
+    std::size_t borrowed_count() const { return borrowed_.size(); }
 
 private:
     // Population-level event detectors; they only write to the chronicle.
@@ -200,7 +204,9 @@ private:
     SimConfig   cfg_;
     World       world_;
     Creatures   c_;
-    Rng         rng_;
+    // Every random draw is keyed from this (rng.hpp, draw_key); there is no
+    // running stream, so draws do not depend on the order bodies are visited.
+    uint64_t    draw_seed_ = 0;
     SpatialGrid grid_;
     uint64_t    tick_ = 0;
     uint32_t    next_lineage_ = 0;
@@ -215,6 +221,16 @@ private:
     double arrived_matter_ = 0.0;
     Chronicle   chronicle_;
     SpeciesRegistry species_;
+
+    // Bodies whose genome has taken up a blueprint by gene transfer since they
+    // were built, by creature id. Their stats were compiled from an earlier
+    // genome (and their brain and body plans from the one they were born
+    // with), so a snapshot needs both to rebuild them exactly. No rule reads it.
+    struct Borrowed {
+        Genome birth;   // the genome it was born with: its brain and body plans
+        Genome built;   // the genome its stats were last compiled from (birth, or its genome at its last growth step)
+    };
+    std::map<uint64_t, Borrowed> borrowed_;
 
     struct Watch {
         uint32_t species = 0;

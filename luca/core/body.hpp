@@ -16,18 +16,19 @@
 // draws the same arcs and must match the constants here.
 
 #include "genome.hpp"
+#include "laws.hpp"
 
 namespace luca {
 
 constexpr int   BODY_DIRS = 16;              // directions in a body plan's tables
-constexpr float MOUTH_ARC_BASE     = 0.5f;   // a mouth's half-width in radians, at size 0 ...
-constexpr float MOUTH_ARC_PER_SIZE = 0.8f;   // ... plus this per unit of size, up to all round
-constexpr float COVER_ARC          = 1.5707963f;  // armour, photo, poison: half-width per unit of size (size 2 covers everything)
+inline const float& MOUTH_ARC_BASE     = g_laws.MOUTH_ARC_BASE;  // law, 0.5f: a mouth's half-width in radians, at size 0 ...
+inline const float& MOUTH_ARC_PER_SIZE = g_laws.MOUTH_ARC_PER_SIZE;  // law, 0.8f: ... plus this per unit of size, up to all round
+inline const float& COVER_ARC          = g_laws.COVER_ARC;  // law, 1.5707963f: armour, photo, poison: half-width per unit of size (size 2 covers everything)
 
 // Contact resistance (moved here from phenotype.cpp).
-constexpr float MEMBRANE_BASE = 0.3f;  // every body resists a little, from every side
-constexpr float ARMOUR_RESIST = 2.0f;  // resistance per unit of armour, where it covers
-constexpr float ARMOUR_CLOGS  = 0.5f;  // armour lying over a mouth or a tail slows it
+inline const float& MEMBRANE_BASE = g_laws.MEMBRANE_BASE;  // law, 0.3f: every body resists a little, from every side
+inline const float& ARMOUR_RESIST = g_laws.ARMOUR_RESIST;  // law, 2.0f: resistance per unit of armour, where it covers
+inline const float& ARMOUR_CLOGS  = g_laws.ARMOUR_CLOGS;  // law, 0.5f: armour lying over a mouth or a tail slows it
 
 float mouth_halfwidth(float size);
 float cover_halfwidth(float size);
@@ -54,8 +55,8 @@ float thrust_facing(PartType type, float theta);
 // add skin: more room for sun patches, but faster heat loss, more fouling,
 // and skin to keep up. A long body slips through the world more easily; a
 // boxy one drags. The viewer draws the same outline (blob.gdshader).
-constexpr float BOX_SKIN = 0.24f;   // a cube has 24% more skin than a ball of the same volume
-constexpr float BOX_DRAG = 0.3f;    // and drags this much more
+inline const float& BOX_SKIN = g_laws.BOX_SKIN;  // law, 0.24f: a cube has 24% more skin than a ball of the same volume
+inline const float& BOX_DRAG = g_laws.BOX_DRAG;  // law, 0.3f: and drags this much more
 
 // Length over width: 1 round, 3 at elongation 1.
 float aspect(float elongation);
@@ -65,7 +66,7 @@ float skin_factor(float elongation, float squareness);
 float drag_factor(float elongation, float squareness);
 
 // A mouth on a stalk this long or longer clears any armour beside it.
-constexpr float STALK_CLEARS = 0.25f;
+inline const float& STALK_CLEARS = g_laws.STALK_CLEARS;  // law, 0.25f
 
 struct BodyPlan {
     float mouth[BODY_DIRS]  = {};  // pull towards each direction (clogging included)

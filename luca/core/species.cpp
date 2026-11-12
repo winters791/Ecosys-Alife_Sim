@@ -1,4 +1,5 @@
 #include "species.hpp"
+#include "laws.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -11,30 +12,30 @@ namespace {
 // --- Distance weights (tune here) ---------------------------------------------
 // Each term is scaled so that "clearly a different creature" in that one
 // respect alone comes to roughly 1.
-constexpr float W_RADIUS    = 2.0f;   // per e-fold of body size (x1.65 radius alone = 1)
-constexpr float W_PIGMENT   = 2.0f;   // pale to dark is 0..1
-constexpr float W_HUE       = 1.0f;   // per turn of the colour wheel (the most apart two can be is half a turn)
-constexpr float W_OPTIMUM   = 0.1f;   // per degree: 10 degrees apart = 1
-constexpr float W_TOLERANCE = 0.05f;  // per degree
-constexpr float W_THRESHOLD = 1.0f;   // per e-fold of reproduction threshold
-constexpr float W_SHARE     = 1.0f;
-constexpr float W_THROW     = 0.4f;   // per cell of seed-throwing range
-constexpr float W_BITE      = 0.8f;   // per unit of bite
-constexpr float W_DORMANCY  = 1.5f;   // never sleeps to sleeps fully is 0..1
-constexpr float W_ELONGATE  = 1.5f;   // round to three times as long is 0..1
-constexpr float W_SQUARE    = 1.0f;   // rounded to boxy is 0..1
-constexpr float W_MUTABILITY = 0.3f;  // per doubling of the mutation rate
-constexpr float W_REPAIR    = 1.5f;   // none to full is 0..1
-constexpr float W_BIRTH     = 1.5f;   // a tenth to full size is 0.1..1
-constexpr float W_STALK     = 0.8f;   // per world unit of stalk, summed over a kind of part
-constexpr float W_ENZ_KIND  = 0.6f;   // one can run a reaction the other cannot
-constexpr float W_ENZ_RATE  = 0.4f;   // per e-fold between the rates of a reaction both run
-constexpr float W_PART_KIND = 0.6f;   // one has a kind of part the other lacks entirely
-constexpr float W_PART_SIZE = 0.5f;   // per unit of total size of one kind
-constexpr float W_BRAIN     = 0.4f;   // one has a brain, the other none
-constexpr float W_WEIGHTS   = 0.06f;  // per unit of link weight that differs (a link one lacks counts in full)
-constexpr float W_NEURON    = 0.3f;   // per hidden neuron one has and the other lacks
-constexpr float W_TAU       = 0.05f;  // per e-fold between the time constants of neurons both have
+inline const float& W_RADIUS    = g_laws.W_RADIUS;  // law, 2.0f: per e-fold of body size (x1.65 radius alone = 1)
+inline const float& W_PIGMENT   = g_laws.W_PIGMENT;  // law, 2.0f: pale to dark is 0..1
+inline const float& W_HUE       = g_laws.W_HUE;  // law, 1.0f: per turn of the colour wheel (the most apart two can be is half a turn)
+inline const float& W_OPTIMUM   = g_laws.W_OPTIMUM;  // law, 0.1f: per degree: 10 degrees apart = 1
+inline const float& W_TOLERANCE = g_laws.W_TOLERANCE;  // law, 0.05f: per degree
+inline const float& W_THRESHOLD = g_laws.W_THRESHOLD;  // law, 1.0f: per e-fold of reproduction threshold
+inline const float& W_SHARE     = g_laws.W_SHARE;  // law, 1.0f
+inline const float& W_THROW     = g_laws.W_THROW;  // law, 0.4f: per cell of seed-throwing range
+inline const float& W_BITE      = g_laws.W_BITE;  // law, 0.8f: per unit of bite
+inline const float& W_DORMANCY  = g_laws.W_DORMANCY;  // law, 1.5f: never sleeps to sleeps fully is 0..1
+inline const float& W_ELONGATE  = g_laws.W_ELONGATE;  // law, 1.5f: round to three times as long is 0..1
+inline const float& W_SQUARE    = g_laws.W_SQUARE;  // law, 1.0f: rounded to boxy is 0..1
+inline const float& W_MUTABILITY = g_laws.W_MUTABILITY;  // law, 0.3f: per doubling of the mutation rate
+inline const float& W_REPAIR    = g_laws.W_REPAIR;  // law, 1.5f: none to full is 0..1
+inline const float& W_BIRTH     = g_laws.W_BIRTH;  // law, 1.5f: a tenth to full size is 0.1..1
+inline const float& W_STALK     = g_laws.W_STALK;  // law, 0.8f: per world unit of stalk, summed over a kind of part
+inline const float& W_ENZ_KIND  = g_laws.W_ENZ_KIND;  // law, 0.6f: one can run a reaction the other cannot
+inline const float& W_ENZ_RATE  = g_laws.W_ENZ_RATE;  // law, 0.4f: per e-fold between the rates of a reaction both run
+inline const float& W_PART_KIND = g_laws.W_PART_KIND;  // law, 0.6f: one has a kind of part the other lacks entirely
+inline const float& W_PART_SIZE = g_laws.W_PART_SIZE;  // law, 0.5f: per unit of total size of one kind
+inline const float& W_BRAIN     = g_laws.W_BRAIN;  // law, 0.4f: one has a brain, the other none
+inline const float& W_WEIGHTS   = g_laws.W_WEIGHTS;  // law, 0.06f: per unit of link weight that differs (a link one lacks counts in full)
+inline const float& W_NEURON    = g_laws.W_NEURON;  // law, 0.3f: per hidden neuron one has and the other lacks
+inline const float& W_TAU       = g_laws.W_TAU;  // law, 0.05f: per e-fold between the time constants of neurons both have
 // The eight lump genes (shape[]) are left out: they only change the drawing.
 // Where parts sit (theta) is left out too: it drifts within a species.
 

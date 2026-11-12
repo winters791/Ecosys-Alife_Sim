@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include "laws.hpp"
 // Energy rules: how much a creature gains and pays each tick, and the one
 // rule for what happens when two bodies touch.
 //
@@ -40,8 +41,8 @@ float light_while_moving(float moved);
 // UNFOLD_TICKS (a day) to open again, catching light in proportion. A body
 // that moves now and then (to flee) loses a little; one that creeps every few
 // ticks stays folded. 0 = off.
-constexpr float FOLD_STRIDE  = 0.001f;
-constexpr float UNFOLD_TICKS = 600.0f;
+inline const float& FOLD_STRIDE  = g_laws.FOLD_STRIDE;  // law, 0.001f
+inline const float& UNFOLD_TICKS = g_laws.UNFOLD_TICKS;  // law, 600.0f
 inline float next_unfold(float unfold, float moved) {
     if (UNFOLD_TICKS <= 0.0f) return 1.0f;
     return moved > FOLD_STRIDE ? 0.0f : std::min(1.0f, unfold + 1.0f / UNFOLD_TICKS);
@@ -133,7 +134,7 @@ float corpse_demand(const Phenotype& p);
 // heat. This is why every step up a food chain supports fewer creatures. The
 // same for every body since chemistry stage 3 (the digestion gene is gone);
 // since stage 2 the rest spills into the cell rather than burning.
-constexpr float TRANSFER_EFFICIENCY = 0.7f;
+inline const float& TRANSFER_EFFICIENCY = g_laws.TRANSFER_EFFICIENCY;  // law, 0.7f
 
 // --- Loose chemicals: chemistry stage 2 (2026-11-12) -----------------------------
 // A cell holds chemicals outside any body (Soil::dissolved): what eaters spill
@@ -146,7 +147,7 @@ constexpr float TRANSFER_EFFICIENCY = 0.7f;
 // out. Chemicals it can't burn sicken it (fouling_cost), so one body's waste
 // is another's food and a third's poison. Loose chemicals spread to the cells
 // around and slowly break down to A, their energy lost as heat.
-constexpr float UPTAKE_RATE = 0.05f;   // share of the cell's stock taken up per tick per unit of skin
+inline const float& UPTAKE_RATE = g_laws.UPTAKE_RATE;  // law, 0.05f: share of the cell's stock taken up per tick per unit of skin
 float uptake_rate(const Phenotype& p);
 // Energy a body loses per tick to `foul_mass` units of loose chemicals it
 // can't burn, in its cell.
@@ -160,12 +161,12 @@ float fouling_cost(const Phenotype& p, float foul_mass);
 constexpr int VENT_CHEM = CHEM_C;
 // Each field update (8 ticks), this fraction of a cell's loose chemicals moves
 // to its four neighbours (a quarter each), and this fraction breaks down to A.
-constexpr float WASTE_SPREAD = 0.2f;
-constexpr float WASTE_DECAY  = 0.04f;
+inline const float& WASTE_SPREAD = g_laws.WASTE_SPREAD;  // law, 0.2f
+inline const float& WASTE_DECAY  = g_laws.WASTE_DECAY;  // law, 0.04f
 
 // Fraction of every corpse that weathers away each field update even if
 // nothing eats it: its energy is lost as heat, its matter returns to the soil.
 // Slow on purpose, so whatever breaks corpses down faster has a niche.
-constexpr float CORPSE_WEATHERING = 0.004f;
+inline const float& CORPSE_WEATHERING = g_laws.CORPSE_WEATHERING;  // law, 0.004f
 
 }  // namespace luca

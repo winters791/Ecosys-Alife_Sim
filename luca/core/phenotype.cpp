@@ -1,4 +1,5 @@
 #include "phenotype.hpp"
+#include "laws.hpp"
 
 #include "body.hpp"
 #include "energy.hpp"
@@ -20,92 +21,92 @@ constexpr float COST_PER_SIZE[NUM_PARTS] = { 0.1f,  0.15f,   0.2f,     0.2f, 0.0
 // there is: seeing one cell cost 0.15 a tick, ~40% of a LUCA's whole upkeep,
 // so movers went blind and their brains were a fixed wander urge.
 
-constexpr float BASE_UPKEEP    = 0.3f;
-constexpr float PHOTO_PER_AREA = 1.0f;   // max photo patch size per unit of skin
+inline const float& BASE_UPKEEP    = g_laws.BASE_UPKEEP;  // law, 0.3f
+inline const float& PHOTO_PER_AREA = g_laws.PHOTO_PER_AREA;  // law, 1.0f: max photo patch size per unit of skin
 
 // Thrust was 0.5 / 0.4 before anything moved; at 60 ticks a second that crossed
 // the map in five seconds. These give a one-flagellum LUCA about 6 cells/s.
-constexpr float FLAGELLUM_THRUST = 0.125f; // world units per tick, per unit size, per unit mass
-constexpr float LEGS_THRUST      = 0.10f;
-constexpr float MAX_SPEED        = 0.5f;   // hard physical ceiling (a law, not a population cap)
+inline const float& FLAGELLUM_THRUST = g_laws.FLAGELLUM_THRUST;  // law, 0.125f: world units per tick, per unit size, per unit mass
+inline const float& LEGS_THRUST      = g_laws.LEGS_THRUST;  // law, 0.10f
+inline const float& MAX_SPEED        = g_laws.MAX_SPEED;  // law, 0.5f: hard physical ceiling (a law, not a population cap)
 // A body built to move (a motor and a brain to drive it) catches only this
 // share of the light its patches could take, moving or not. It was 0.5 from
 // 2026-11-12 to stop slow sun-fed creepers taking over worlds; folding
 // (UNFOLD_TICKS in energy.hpp) replaced it the same day at Uday's call, since
 // it stops creepers without taxing a plant that moves only now and then.
 // 1 = off; kept as a lever.
-constexpr float MOVER_SUN        = 1.0f;
+inline const float& MOVER_SUN        = g_laws.MOVER_SUN;  // law, 1.0f
 
 // Contact. MEMBRANE_BASE, ARMOUR_RESIST and ARMOUR_CLOGS are in body.hpp:
 // where a plate sits decides what it protects and what it clogs.
-constexpr float ARMOUR_SHADES   = 0.5f;  // skin under a plate catches no light
-constexpr float REACH_PER_RADIUS = 0.5f;
+inline const float& ARMOUR_SHADES   = g_laws.ARMOUR_SHADES;  // law, 0.5f: skin under a plate catches no light
+inline const float& REACH_PER_RADIUS = g_laws.REACH_PER_RADIUS;  // law, 0.5f
 // Poison: light to carry but dear to keep up (see the table above). Unlike
 // armour it does not slow the eater down; it makes the meal cost more than it gives.
-constexpr float TOXICITY_PER_SIZE = 1.0f;  // energy lost per unit drained, per unit of poison part
-constexpr float MAX_TOXICITY      = 2.0f;
+inline const float& TOXICITY_PER_SIZE = g_laws.TOXICITY_PER_SIZE;  // law, 1.0f: energy lost per unit drained, per unit of poison part
+inline const float& MAX_TOXICITY      = g_laws.MAX_TOXICITY;  // law, 2.0f
 
 // Storage and building.
-constexpr float CAPACITY_PER_VOLUME = 650.0f;   // energy a core blob of radius 1 can hold (450 before bodies cost 244 to build)
-constexpr float CAPACITY_PER_STORE  = 600.0f;  // extra per unit of storage part
+inline const float& CAPACITY_PER_VOLUME = g_laws.CAPACITY_PER_VOLUME;  // law, 650.0f: energy a core blob of radius 1 can hold (450 before bodies cost 244 to build)
+inline const float& CAPACITY_PER_STORE  = g_laws.CAPACITY_PER_STORE;  // law, 600.0f: extra per unit of storage part
 // A body is worth eating: a LUCA (mass 1.1) takes 244 to build, and leaves
 // that much behind as a corpse. It was 40 (a 44-energy corpse nobody bothered with).
 
 // Behaviour.
-constexpr float SENSE_CELLS_PER_SIZE = 2.0f;
+inline const float& SENSE_CELLS_PER_SIZE = g_laws.SENSE_CELLS_PER_SIZE;  // law, 2.0f
 constexpr int   MAX_SENSE_CELLS      = 4;
 // Thinking is nearly free (2026-11-12, Uday's call): all four brain costs
 // are a hundredth of what they were (0.01 / 0.012 / 0.002 / 0.002), so a full
 // brain (8 neurons, 48 links, weights near 1) costs about 0.007 a tick, about
 // 2% of a LUCA's upkeep. Not zero, so dead wiring still drifts away; the size
 // caps (MAX_HIDDEN, MAX_LINKS) bound it.
-constexpr float BRAIN_COST           = 0.0001f;   // upkeep per unit of total weight
-constexpr float NEURON_COST          = 0.00012f;  // upkeep per hidden neuron
-constexpr float LINK_COST            = 0.00002f;  // upkeep per link, however weak
+inline const float& BRAIN_COST           = g_laws.BRAIN_COST;  // law, 0.0001f: upkeep per unit of total weight
+inline const float& NEURON_COST          = g_laws.NEURON_COST;  // law, 0.00012f: upkeep per hidden neuron
+inline const float& LINK_COST            = g_laws.LINK_COST;  // law, 0.00002f: upkeep per link, however weak
 // A slow neuron holds on to what it felt: memory, which costs upkeep per
 // e-fold of its time constant (a neuron with tau 1000 pays about 0.00014
 // more, a little over one more neuron). Its bias is paid for like a weight.
-constexpr float MEMORY_COST          = 0.00002f;
-constexpr float TOLERANCE_COST       = 0.004f;  // upkeep per °C of tolerance: generalists pay
+inline const float& MEMORY_COST          = g_laws.MEMORY_COST;  // law, 0.00002f
+inline const float& TOLERANCE_COST       = g_laws.TOLERANCE_COST;  // law, 0.004f: upkeep per °C of tolerance: generalists pay
 
 // Dispersal: the means to fling a child costs upkeep whether or not it is used
 // (each throw also costs energy; see throw_cost in energy.cpp).
-constexpr float THROW_UPKEEP         = 0.015f;  // upkeep per cell of range
+inline const float& THROW_UPKEEP         = g_laws.THROW_UPKEEP;  // law, 0.015f: upkeep per cell of range
 
 // Shape (body.hpp): skin beyond a ball's costs upkeep to keep.
-constexpr float SKIN_UPKEEP          = 0.1f;    // upkeep per unit of extra skin (in r^2)
+inline const float& SKIN_UPKEEP          = g_laws.SKIN_UPKEEP;  // law, 0.1f: upkeep per unit of extra skin (in r^2)
 
 // Stalks (mouths and sun patches only, genome.hpp): mass and upkeep per world
 // unit of length, whatever the part's size. A stalked mouth reaches further
 // and is never clogged by armour (body.hpp); stalked sun patches stand higher
 // in the canopy.
-constexpr float STALK_MASS   = 0.1f;
+inline const float& STALK_MASS   = g_laws.STALK_MASS;  // law, 0.1f
 
 // Copying and repair (2026-11-12). Faithful copying needs proofreading: each
 // halving of the mutation rate below the usual costs FIDELITY_UPKEEP. Copying
 // more sloppily than usual is free; its price is broken children. Repair
 // stretches the wear clock (energy.cpp) up to 1 + REPAIR_GAIN times longer,
 // for up to REPAIR_SHARE more upkeep: a bigger body has more to repair.
-constexpr float FIDELITY_UPKEEP = 0.02f;
-constexpr float REPAIR_GAIN     = 2.0f;
-constexpr float REPAIR_SHARE    = 0.15f;
-constexpr float STALK_UPKEEP = 0.06f;
+inline const float& FIDELITY_UPKEEP = g_laws.FIDELITY_UPKEEP;  // law, 0.02f
+inline const float& REPAIR_GAIN     = g_laws.REPAIR_GAIN;  // law, 2.0f
+inline const float& REPAIR_SHARE    = g_laws.REPAIR_SHARE;  // law, 0.15f
+inline const float& STALK_UPKEEP = g_laws.STALK_UPKEEP;  // law, 0.06f
 
 // Feeding specialisation: pure cost to a body that eats nothing.
-constexpr float BITE_UPKEEP          = 0.06f;   // upkeep per unit of bite (each unit adds the plain pull again)
+inline const float& BITE_UPKEEP          = g_laws.BITE_UPKEEP;  // law, 0.06f: upkeep per unit of bite (each unit adds the plain pull again)
 
 // Dormancy: the machinery for shutting down costs a little all the time.
 // Its real price is paid in energy.cpp: a sleeper is helpless and slow to wake.
-constexpr float DORMANCY_UPKEEP      = 0.02f;   // upkeep at full depth
+inline const float& DORMANCY_UPKEEP      = g_laws.DORMANCY_UPKEEP;  // law, 0.02f: upkeep at full depth
 // Cold nights (added by Claude, 2026-11-11): a body holds heat for mass /
 // surface area x HEAT_LAG ticks (heat is stored in bulk and lost through skin).
 // A LUCA lags the air by ~130 ticks, so it feels about 60% of the night's
 // chill; a body of radius 2 feels about 30%; a small thin one nearly all of it.
 // Not a new gene: size and fat already cost upkeep.
-constexpr float HEAT_LAG             = 120.0f;
+inline const float& HEAT_LAG             = g_laws.HEAT_LAG;  // law, 120.0f
 // Enzymes (chemistry layer): upkeep per unit of rate, paid whether or not
 // there is anything to turn over. LUCA's 0.015 costs 0.015 (4% of its upkeep).
-constexpr float ENZYME_UPKEEP        = 1.0f;
+inline const float& ENZYME_UPKEEP        = g_laws.ENZYME_UPKEEP;  // law, 1.0f
 
 // Gene ranges live in genome.hpp (limits::); mutation enforces them through
 // clamp_genome(). The clamps below are a second line of defence for genomes

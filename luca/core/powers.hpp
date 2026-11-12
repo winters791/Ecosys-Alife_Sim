@@ -50,6 +50,7 @@ struct PowerCommand {
 };
 
 class PowerSystem {
+    friend struct SnapshotIO;   // snapshot.cpp: saves and restores the whole state
 public:
     // Queue a command. A tick in the past means "start now".
     void cast(const PowerCommand& cmd);

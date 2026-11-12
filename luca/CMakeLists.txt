@@ -41,6 +41,8 @@ add_library(luca_core STATIC
   core/creature_file.cpp
   core/design.cpp
   core/sim.cpp
+  core/snapshot.cpp
+  core/laws.cpp
   core/metrics.cpp
 )
 target_include_directories(luca_core PUBLIC core)

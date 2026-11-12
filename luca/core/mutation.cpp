@@ -1,4 +1,5 @@
 #include "mutation.hpp"
+#include "laws.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -28,33 +29,33 @@ namespace luca {
 
 namespace {
 
-constexpr float P_GENE      = 0.20f;   // chance each ordinary gene is nudged
-constexpr float HUE_STEP    = 0.08f;   // sd of a nudge to skin hue, in turns of the colour wheel
-constexpr float P_ADD       = 0.030f;
-constexpr float P_DELETE    = 0.020f;
-constexpr float P_DUPLICATE = 0.020f;
-constexpr float P_RETYPE    = 0.005f;
-constexpr float P_MOUTH_FRONT = 0.3f;  // a new mouth lands within this many radians of the front
-constexpr float P_WEIGHT    = 0.15f;   // chance each brain weight is nudged
-constexpr float P_ADD_LINK   = 0.06f;  // a new connection between two nodes
-constexpr float P_DEL_LINK   = 0.04f;  // a connection is lost
-constexpr float P_ADD_NEURON = 0.015f; // a new hidden neuron grows in the middle of a link
-constexpr float P_DEL_NEURON = 0.010f; // a hidden neuron dies, with its links
-constexpr float P_TAU        = 0.15f;  // chance each neuron's time constant is nudged
-constexpr float TAU_STEP     = 0.5f;   // sd of a nudge, in e-folds (x1.65)
-constexpr float P_BIAS       = 0.15f;  // chance each neuron's bias is nudged
+inline const float& P_GENE      = g_laws.P_GENE;  // law, 0.20f: chance each ordinary gene is nudged
+inline const float& HUE_STEP    = g_laws.HUE_STEP;  // law, 0.08f: sd of a nudge to skin hue, in turns of the colour wheel
+inline const float& P_ADD       = g_laws.P_ADD;  // law, 0.030f
+inline const float& P_DELETE    = g_laws.P_DELETE;  // law, 0.020f
+inline const float& P_DUPLICATE = g_laws.P_DUPLICATE;  // law, 0.020f
+inline const float& P_RETYPE    = g_laws.P_RETYPE;  // law, 0.005f
+inline const float& P_MOUTH_FRONT = g_laws.P_MOUTH_FRONT;  // law, 0.3f: a new mouth lands within this many radians of the front
+inline const float& P_WEIGHT    = g_laws.P_WEIGHT;  // law, 0.15f: chance each brain weight is nudged
+inline const float& P_ADD_LINK   = g_laws.P_ADD_LINK;  // law, 0.06f: a new connection between two nodes
+inline const float& P_DEL_LINK   = g_laws.P_DEL_LINK;  // law, 0.04f: a connection is lost
+inline const float& P_ADD_NEURON = g_laws.P_ADD_NEURON;  // law, 0.015f: a new hidden neuron grows in the middle of a link
+inline const float& P_DEL_NEURON = g_laws.P_DEL_NEURON;  // law, 0.010f: a hidden neuron dies, with its links
+inline const float& P_TAU        = g_laws.P_TAU;  // law, 0.15f: chance each neuron's time constant is nudged
+inline const float& TAU_STEP     = g_laws.TAU_STEP;  // law, 0.5f: sd of a nudge, in e-folds (x1.65)
+inline const float& P_BIAS       = g_laws.P_BIAS;  // law, 0.15f: chance each neuron's bias is nudged
 // Enzymes (chemistry layer): a new one, a lost one, a copy, and one end of a
 // reaction swapped for another chemical (a copy then a swap is how a new
 // reaction appears beside the old one).
-constexpr float P_ENZ_ADD    = 0.010f;
-constexpr float P_ENZ_DELETE = 0.010f;
-constexpr float P_ENZ_COPY   = 0.010f;
-constexpr float P_ENZ_SWAP   = 0.010f;
+inline const float& P_ENZ_ADD    = g_laws.P_ENZ_ADD;  // law, 0.010f
+inline const float& P_ENZ_DELETE = g_laws.P_ENZ_DELETE;  // law, 0.010f
+inline const float& P_ENZ_COPY   = g_laws.P_ENZ_COPY;  // law, 0.010f
+inline const float& P_ENZ_SWAP   = g_laws.P_ENZ_SWAP;  // law, 0.010f
 // Stage 4: a one-to-one enzyme gains a second input and output (random
 // chemicals), or a two-input one loses them.
-constexpr float P_ENZ_PAIR   = 0.010f;
-constexpr float P_NEW_TRAIT = 0.10f;   // of the times a missing optional trait is touched, how often it appears
-constexpr float P_LOSE_BRAIN = 0.05f;  // a brain with nothing to drive withers
+inline const float& P_ENZ_PAIR   = g_laws.P_ENZ_PAIR;  // law, 0.010f
+inline const float& P_NEW_TRAIT = g_laws.P_NEW_TRAIT;  // law, 0.10f: of the times a missing optional trait is touched, how often it appears
+inline const float& P_LOSE_BRAIN = g_laws.P_LOSE_BRAIN;  // law, 0.05f: a brain with nothing to drive withers
 
 constexpr int NUM_TYPES = static_cast<int>(PartType::Count);
 

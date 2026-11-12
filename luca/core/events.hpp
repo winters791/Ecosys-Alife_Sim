@@ -8,10 +8,11 @@
 // log, so a run's powers.txt replays them exactly (with events off, or they
 // would happen twice). Events never touch a creature.
 //
-// The dice come from a stream of their own, seeded from the world seed, not
-// from the sim's Rng: turning events off (rate 0) then leaves a world exactly
-// as it was before events existed, and replaying a power log reproduces a run
-// whether or not its events came from this class.
+// The dice are keyed from a draw seed of their own (made from the world seed)
+// and the tick (rng.hpp, draw_key), apart from the sim's: turning events off
+// (rate 0) then leaves a world exactly as it was before events existed, and
+// replaying a power log reproduces a run whether or not its events came from
+// this class.
 //
 // Rate: `rate` scales a base table of how often each kind happens (events.cpp);
 // 1 = about one event every 5,000 ticks, 0 = never.
@@ -30,6 +31,7 @@ namespace luca {
 enum class EventKind : uint8_t { Storm, Eruption, Meteor, ClimateDrift, Count };
 
 class WorldEvents {
+    friend struct SnapshotIO;   // snapshot.cpp: saves and restores the whole state
 public:
     explicit WorldEvents(uint64_t seed, float rate = 0.0f);
 
@@ -54,8 +56,9 @@ private:
         std::string text;
     };
     void later(uint64_t tick, std::string text);
+    void start(EventKind kind, uint64_t tick, Rng& rng, const World& world, PowerSystem& powers, Chronicle& chronicle);
 
-    Rng   rng_;
+    uint64_t seed_ = 0;   // every draw is keyed from this and the tick (rng.hpp, draw_key)
     float rate_ = 0.0f;
     std::vector<Note> notes_;   // chronicle lines still to come, in no particular order
     uint32_t counts_[static_cast<int>(EventKind::Count)] = {};

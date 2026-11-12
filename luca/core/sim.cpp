@@ -1,4 +1,5 @@
 #include "sim.hpp"
+#include "laws.hpp"
 
 #include "creature_file.hpp"
 
@@ -27,14 +28,14 @@ constexpr float    TWO_PI         = 6.28318531f;
 // stays fairly straight for about WANDER_PATH world units whatever its speed.
 // (It used to turn ~0.5 rad every tick however far it went; a body creeping
 // 0.01 a tick then spun in place, its loops smaller than a pixel.)
-constexpr float    WANDER_PATH    = 1.0f;
+inline const float& WANDER_PATH    = g_laws.WANDER_PATH;  // law, 1.0f
 // Growing up (2026-11-12): how fast a young body may build itself, and how
 // much of what it holds it keeps back rather than turning into body.
-constexpr float    GROW_STEP      = 0.05f;  // most of its adult mass it can add in one go (every 8 ticks)
-constexpr float    GROW_MIN       = 0.01f;  // least worth stopping to build (except the last bit)
-constexpr float    GROW_RESERVE   = 0.3f;   // of what it can hold, kept back for the night
+inline const float& GROW_STEP      = g_laws.GROW_STEP;  // law, 0.05f: most of its adult mass it can add in one go (every 8 ticks)
+inline const float& GROW_MIN       = g_laws.GROW_MIN;  // law, 0.01f: least worth stopping to build (except the last bit)
+inline const float& GROW_RESERVE   = g_laws.GROW_RESERVE;  // law, 0.3f: of what it can hold, kept back for the night
 constexpr int      SOCIAL_CELLS   = 2;     // the danger / kin sense looks this many cells out at most
-constexpr float    SOCIAL_FAST    = 0.25f; // a body covering this much a tick counts as fully "moving"
+inline const float& SOCIAL_FAST    = g_laws.SOCIAL_FAST;  // law, 0.25f: a body covering this much a tick counts as fully "moving"
 
 // Species splits (check_splits). A species is looked at only when it has at
 // least twice SPLIT_MIN alive; a sample of up to SPLIT_SAMPLE members is cut
@@ -62,7 +63,7 @@ constexpr int      MOVING_TRAIT     = static_cast<int>(PartType::Count);
 }  // namespace
 
 Simulation::Simulation(const SimConfig& cfg)
-    : cfg_(cfg), rng_(cfg.seed * 0x2545F4914F6CDD1Dull + 1), events_(cfg.seed, cfg.event_rate) {
+    : cfg_(cfg), draw_seed_(mix64(cfg.seed * 0x2545F4914F6CDD1Dull + 1)), events_(cfg.seed, cfg.event_rate) {
     world_.generate(cfg_);
     const std::size_t cells = static_cast<std::size_t>(world_.num_cells());
     cell_demand_.assign(cells, 0.0f);
@@ -92,8 +93,9 @@ void Simulation::seed_population() {
     const float ext = world_.extent();
     c_.reserve(static_cast<std::size_t>(cfg_.initial_population) * 4);
     for (int k = 0; k < cfg_.initial_population; ++k) {
-        const float x = world_.clamp_coord(rng_.uniform(0.0f, ext));
-        const float y = world_.clamp_coord(rng_.uniform(0.0f, ext));
+        Rng rng(draw_key(draw_seed_, Draw::Start, tick_, static_cast<uint64_t>(k)));
+        const float x = world_.clamp_coord(rng.uniform(0.0f, ext));
+        const float y = world_.clamp_coord(rng.uniform(0.0f, ext));
         // The first LUCAs are identical: one species.
         const uint32_t sp = species_.all().empty() ? species_.found_root(luca, tick_, "Luca")
                                                    : species_.classify_newcomer(luca, tick_);
@@ -258,7 +260,8 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     const float throttle = std::clamp(0.5f + w[OUT_THROTTLE], 0.0f, 1.0f);
     const float dist = throttle * p.max_speed;
     float& angle = c_.wander[i];
-    angle += std::sqrt(2.0f * dist / WANDER_PATH) * rng_.normal();
+    Rng rng(draw_key(draw_seed_, Draw::Wander, tick_, c_.id[i]));
+    angle += std::sqrt(2.0f * dist / WANDER_PATH) * rng.normal();
     if (angle > TWO_PI) angle -= TWO_PI; else if (angle < 0.0f) angle += TWO_PI;
     dx += w[OUT_WANDER] * std::cos(angle) + w[OUT_INERTIA] * c_.hx[i];
     dy += w[OUT_WANDER] * std::sin(angle) + w[OUT_INERTIA] * c_.hy[i];
@@ -493,11 +496,18 @@ void Simulation::step() {
         // taken up as a blueprint. It goes into the taker's genome only: its
         // own body is already built and does not change, but its children
         // are built from the new plan (and pay for the extra part).
-        if (cfg_.gene_transfer_chance > 0.0f && rng_.chance(cfg_.gene_transfer_chance)) {
+        const uint64_t transfer_key = cfg_.gene_transfer_chance > 0.0f
+            ? draw_key(draw_seed_, Draw::Transfer, tick_, c_.id[k.taker], c_.id[k.giver]) : 0;
+        if (cfg_.gene_transfer_chance > 0.0f && key_uniform(transfer_key) < cfg_.gene_transfer_chance) {
+            Rng rng(transfer_key);   // which part: the same key, drawn on
             float before[static_cast<int>(PartType::Count)] = {};
             for (const Part& part : c_.genome[k.taker].parts) before[static_cast<int>(part.type)] += part.size;
             PartType copied = PartType::Photo;
-            if (transfer_part(c_.genome[k.giver], c_.genome[k.taker], rng_, copied)) {
+            const uint64_t taker_id = c_.id[k.taker];
+            const bool first_borrow = borrowed_.find(taker_id) == borrowed_.end();
+            Genome as_built = first_borrow ? c_.genome[k.taker] : Genome{};
+            if (transfer_part(c_.genome[k.giver], c_.genome[k.taker], rng, copied)) {
+                if (first_borrow) borrowed_.emplace(taker_id, Borrowed{as_built, std::move(as_built)});
                 const bool cross = c_.species[k.taker] != c_.species[k.giver];
                 const bool novel = before[static_cast<int>(copied)] <= 0.0f;
                 ++stats_.gene_transfers;
@@ -673,6 +683,8 @@ void Simulation::step() {
                     c_.tissue[i].add(take_share(pool, matter));
                     stats_.grown_mass += matter;
                     c_.pheno[i] = bigger;   // `p` refers to this slot, so it now reads the bigger body
+                    if (!borrowed_.empty())
+                        if (auto b = borrowed_.find(c_.id[i]); b != borrowed_.end()) b->second.built = c_.genome[i];
                 }
             }
         }
@@ -685,12 +697,13 @@ void Simulation::step() {
         // own (mutated) genome, and grows the rest itself.
         if (p.grown >= 1.0f && pool.energy() >= p.repro_threshold && (c_.age[i] & 7u) == 0 && c_.sleep[i] < AWAKE &&
             pool.mass() > p.mass * 0.75f * p.birth_size) {
-            Genome g = mutate(c_.genome[i], rng_);
+            Rng rng(draw_key(draw_seed_, Draw::Birth, tick_, c_.id[i]));
+            Genome g = mutate(c_.genome[i], rng);
             const Phenotype cp = compile_phenotype(g, g.birth_size);
             // Dispersal is paid for: a child lands touching its parent, unless
             // the parent has the means to fling it further, which costs energy.
-            const float ang = rng_.uniform(0.0f, TWO_PI);
-            const float flung = rng_.uniform() * p.throw_range;
+            const float ang = rng.uniform(0.0f, TWO_PI);
+            const float flung = rng.uniform() * p.throw_range;
             const float thrown = flung > 0.0f ? std::max(0.0f, throw_cost(cp.mass, flung)) : 0.0f;
             if (pool.mass() > cp.mass && pool.energy() - cp.mass * pool.density() - thrown > 0.0f) {
                 Mix body = take_share(pool, cp.mass);
@@ -720,6 +733,7 @@ void Simulation::step() {
             if (s.established) chronicle_.add(tick_, text);
             alert(sp, "Your " + text);
         }
+        if (!borrowed_.empty()) borrowed_.erase(c_.id[*it]);
         c_.remove_swap(*it);
     }
     for (Birth& b : births_)
@@ -817,9 +831,10 @@ void Simulation::drop_windfalls() {
     float lumps = static_cast<float>(cells) * cfg_.windfall_rate / cfg_.windfall_size;
     int count = static_cast<int>(lumps);
     lumps -= static_cast<float>(count);
-    if (rng_.uniform() < lumps) ++count;
+    Rng rng(draw_key(draw_seed_, Draw::Windfall, tick_));
+    if (rng.uniform() < lumps) ++count;
     for (int k = 0; k < count; ++k) {
-        const int cell = std::min(static_cast<int>(rng_.uniform() * static_cast<float>(cells)), cells - 1);
+        const int cell = std::min(static_cast<int>(rng.uniform() * static_cast<float>(cells)), cells - 1);
         // The lump is D made from the cell's own A (no matter arrives from
         // outside), as much as the cell holds, up to windfall_size of energy.
         const std::size_t at = static_cast<std::size_t>(cell);

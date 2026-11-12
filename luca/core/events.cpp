@@ -80,7 +80,7 @@ PowerCommand global(PowerKind kind, uint64_t tick, float amount, uint32_t durati
 }  // namespace
 
 WorldEvents::WorldEvents(uint64_t seed, float rate)
-    : rng_(seed * 0x9E3779B97F4A7C15ull + 0x5EED), rate_(rate > 0.0f ? rate : 0.0f) {}
+    : seed_(mix64(seed * 0x9E3779B97F4A7C15ull + 0x5EED)), rate_(rate > 0.0f ? rate : 0.0f) {}
 
 void WorldEvents::later(uint64_t tick, std::string text) { notes_.push_back({tick, std::move(text)}); }
 
@@ -99,29 +99,37 @@ void WorldEvents::update(uint64_t tick, const World& world, PowerSystem& powers,
     // One draw a tick decides whether anything happens, and which.
     float total = 0.0f;
     for (float p : PER_100K) total += p;
-    const float u = rng_.uniform() * 100000.0f / rate_;
+    Rng rng(draw_key(seed_, Draw::Event, tick));
+    const float u = rng.uniform() * 100000.0f / rate_;
     if (u >= total) return;
     float acc = 0.0f;
     for (int k = 0; k < static_cast<int>(EventKind::Count); ++k) {
         acc += PER_100K[k];
         if (u < acc) {
-            trigger(static_cast<EventKind>(k), tick, world, powers, chronicle);
+            start(static_cast<EventKind>(k), tick, rng, world, powers, chronicle);
             return;
         }
     }
 }
 
 void WorldEvents::trigger(EventKind kind, uint64_t tick, const World& world, PowerSystem& powers, Chronicle& chronicle) {
+    uint64_t so_far = 0;
+    for (uint32_t c : counts_) so_far += c;
+    Rng rng(draw_key(seed_, Draw::EventTrigger, tick, so_far));
+    start(kind, tick, rng, world, powers, chronicle);
+}
+
+void WorldEvents::start(EventKind kind, uint64_t tick, Rng& rng, const World& world, PowerSystem& powers, Chronicle& chronicle) {
     ++counts_[static_cast<int>(kind)];
-    const float x = rng_.uniform(0.0f, world.extent());
-    const float y = rng_.uniform(0.0f, world.extent());
+    const float x = rng.uniform(0.0f, world.extent());
+    const float y = rng.uniform(0.0f, world.extent());
     const std::string where = region_name(world, x, y);
 
     switch (kind) {
         case EventKind::Storm: {
-            const float r = rng_.uniform(STORM_RADIUS_MIN, STORM_RADIUS_MAX);
-            const float cold = rng_.uniform(STORM_COLD_MIN, STORM_COLD_MAX);
-            const uint32_t hold = between(rng_, STORM_HOLD_MIN, STORM_HOLD_MAX);
+            const float r = rng.uniform(STORM_RADIUS_MIN, STORM_RADIUS_MAX);
+            const float cold = rng.uniform(STORM_COLD_MIN, STORM_COLD_MAX);
+            const uint32_t hold = between(rng, STORM_HOLD_MIN, STORM_HOLD_MAX);
             powers.cast(brush(PowerKind::Heat, tick, x, y, r, -cold, STORM_IN));
             powers.cast(brush(PowerKind::Heat, tick + STORM_IN + hold, x, y, r, cold, STORM_OUT));
             chronicle.add(tick, "A cold storm gathers over " + where + ".");
@@ -129,9 +137,9 @@ void WorldEvents::trigger(EventKind kind, uint64_t tick, const World& world, Pow
             break;
         }
         case EventKind::Eruption: {
-            const float r = rng_.uniform(ERUPT_RADIUS_MIN, ERUPT_RADIUS_MAX);
-            const float h = rng_.uniform(ERUPT_HEIGHT_MIN, ERUPT_HEIGHT_MAX);
-            const uint32_t cool = between(rng_, ERUPT_COOL_MIN, ERUPT_COOL_MAX);
+            const float r = rng.uniform(ERUPT_RADIUS_MIN, ERUPT_RADIUS_MAX);
+            const float h = rng.uniform(ERUPT_HEIGHT_MIN, ERUPT_HEIGHT_MAX);
+            const uint32_t cool = between(rng, ERUPT_COOL_MIN, ERUPT_COOL_MAX);
             powers.cast(brush(PowerKind::Terrain, tick, x, y, r, h, ERUPT_RISE));
             powers.cast(brush(PowerKind::Heat, tick, x, y, 1.5f * r, ERUPT_HEAT, ERUPT_RISE));
             powers.cast(brush(PowerKind::Vent, tick, x, y, 0.6f * r, ERUPT_VENT, ERUPT_RISE));
@@ -143,15 +151,15 @@ void WorldEvents::trigger(EventKind kind, uint64_t tick, const World& world, Pow
             break;
         }
         case EventKind::Meteor: {
-            const float r = rng_.uniform(METEOR_RADIUS_MIN, METEOR_RADIUS_MAX);
+            const float r = rng.uniform(METEOR_RADIUS_MIN, METEOR_RADIUS_MAX);
             const float depth = METEOR_DEPTH_PER_RADIUS * r;
-            const bool great = rng_.uniform() < GREAT_METEOR_CHANCE;
+            const bool great = rng.uniform() < GREAT_METEOR_CHANCE;
             powers.cast(brush(PowerKind::Terrain, tick, x, y, r, -depth, 0));
             powers.cast(brush(PowerKind::Terrain, tick, x, y, 1.7f * r, 0.35f * depth, 0));   // the rim
             powers.cast(brush(PowerKind::Heat, tick, x, y, 2.0f * r, METEOR_HEAT, 0));
             powers.cast(brush(PowerKind::Heat, tick + 1, x, y, 2.0f * r, -METEOR_HEAT, METEOR_COOL));
             if (great) {
-                const uint32_t clear = between(rng_, WINTER_CLEAR_MIN, WINTER_CLEAR_MAX);
+                const uint32_t clear = between(rng, WINTER_CLEAR_MIN, WINTER_CLEAR_MAX);
                 powers.cast(global(PowerKind::Sun, tick, -WINTER_DIM, WINTER_FALL));
                 powers.cast(global(PowerKind::Sun, tick + WINTER_FALL, WINTER_DIM, clear));
                 chronicle.add(tick, "A great meteor strikes " + where + ". Dust darkens the sky.");
@@ -162,8 +170,8 @@ void WorldEvents::trigger(EventKind kind, uint64_t tick, const World& world, Pow
             break;
         }
         case EventKind::ClimateDrift: {
-            const float step = std::clamp(DRIFT_SD * rng_.normal() - DRIFT_PULL * world.climate_offset(), -DRIFT_MAX_STEP, DRIFT_MAX_STEP);
-            const uint32_t over = between(rng_, DRIFT_MIN, DRIFT_MAX);
+            const float step = std::clamp(DRIFT_SD * rng.normal() - DRIFT_PULL * world.climate_offset(), -DRIFT_MAX_STEP, DRIFT_MAX_STEP);
+            const uint32_t over = between(rng, DRIFT_MIN, DRIFT_MAX);
             powers.cast(global(PowerKind::Climate, tick, step, over));
             const std::string way = step >= 0.0f ? "warm" : "cool";
             chronicle.add(tick, "The climate begins to " + way + ".");

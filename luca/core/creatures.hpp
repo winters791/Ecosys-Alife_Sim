@@ -111,7 +111,7 @@ struct Creatures {
     }
 
     // A starting wander angle from the id alone (a splitmix64 hash), so births
-    // draw nothing from the sim Rng and every lineage doesn't set off one way.
+    // need no draw and every lineage doesn't set off one way.
     static float initial_wander(uint64_t uid) {
         uint64_t z = uid + 0x9e3779b97f4a7c15ull;
         z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;

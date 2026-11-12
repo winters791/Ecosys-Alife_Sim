@@ -15,8 +15,10 @@
 #include "design.hpp"
 #include "powers.hpp"
 #include "energy.hpp"
+#include "laws.hpp"
 #include "mutation.hpp"
 #include "sim.hpp"
+#include "snapshot.hpp"
 
 namespace {
 
@@ -1168,6 +1170,181 @@ void test_creature_files_and_meteors() {
     }
 }
 
+// Snapshots (design doc 14.6.1): a world saved and loaded goes on exactly as
+// if it had never stopped, ramps, events, followed species, gene transfer and all.
+// Laws (14.6.2): the tunable numbers can be changed without a rebuild, take
+// effect where the constants were used, and travel with a snapshot.
+// Counter-based draws (14.10.4): a key depends on its inputs only, every
+// input matters, and the numbers drawn from keys are evenly spread.
+void test_keyed_draws() {
+    using namespace luca;
+    const uint64_t k = draw_key(42, Draw::Birth, 1000, 7);
+    CHECK(k == draw_key(42, Draw::Birth, 1000, 7));
+    CHECK(k != draw_key(43, Draw::Birth, 1000, 7));
+    CHECK(k != draw_key(42, Draw::Wander, 1000, 7));
+    CHECK(k != draw_key(42, Draw::Birth, 1001, 7));
+    CHECK(k != draw_key(42, Draw::Birth, 1000, 8));
+    CHECK(k != draw_key(42, Draw::Birth, 1000, 7, 1));
+    CHECK(draw_key(42, Draw::Transfer, 5, 1, 2) != draw_key(42, Draw::Transfer, 5, 2, 1));   // taker and giver are not the same pair
+    // Neighbouring ids and ticks give unrelated numbers.
+    double sum = 0.0, sq = 0.0, lag = 0.0;
+    float prev = 0.5f;
+    const int N = 200000;
+    for (int i = 0; i < N; ++i) {
+        const float u = key_uniform(draw_key(7, Draw::Wander, static_cast<uint64_t>(i / 100), static_cast<uint64_t>(i % 100)));
+        CHECK(u >= 0.0f && u < 1.0f);
+        sum += u;
+        sq += u * u;
+        lag += (u - 0.5) * (prev - 0.5);
+        prev = u;
+    }
+    CHECK(std::abs(sum / N - 0.5) < 0.005);
+    CHECK(std::abs(sq / N - 1.0 / 3.0) < 0.005);
+    CHECK(std::abs(lag / N) < 0.002);
+    double nsum = 0.0, nsq = 0.0;
+    for (int i = 0; i < 20000; ++i) {
+        Rng r(draw_key(9, Draw::Wander, 3, static_cast<uint64_t>(i)));
+        const float x = r.normal();
+        nsum += x;
+        nsq += x * x;
+    }
+    CHECK(std::abs(nsum / 20000) < 0.03 && std::abs(nsq / 20000 - 1.0) < 0.05);
+}
+
+void test_laws() {
+    using namespace luca;
+    const Laws defaults{};
+    CHECK(law_table().size() > 100);
+    CHECK(changed_laws(g_laws).empty());
+
+    // Parsing: names in any case, numbers only.
+    LawChanges ch;
+    std::string err;
+    CHECK(parse_law("transfer_efficiency = 0.5", ch, err));
+    CHECK(ch.size() == 1 && ch[0].first == "TRANSFER_EFFICIENCY" && ch[0].second == 0.5f);
+    CHECK(!parse_law("NO_SUCH_LAW=1", ch, err));
+    CHECK(!parse_law("UPTAKE_RATE=fast", ch, err));
+    CHECK(!parse_law("UPTAKE_RATE", ch, err));
+    CHECK(ch.size() == 1);
+
+    // A law reaches the rules that read it: dearer bodies, a smaller share of a meal.
+    const Genome g = make_luca();
+    const float upkeep = compile_phenotype(g).upkeep;
+    CHECK(std::abs(compile_phenotype(g).efficiency - 0.7f) < 1e-6f);
+    g_laws.BASE_UPKEEP = 2.0f * defaults.BASE_UPKEEP;
+    apply_laws(g_laws, ch);
+    CHECK(compile_phenotype(g).upkeep > upkeep * 1.5f);
+    CHECK(compile_phenotype(g).efficiency == 0.5f);
+    CHECK(changed_laws(g_laws).size() == 2);
+    g_laws = defaults;
+    CHECK(compile_phenotype(g).upkeep == upkeep);
+
+    // A world saved under other laws loads under them, whatever the laws of the
+    // process loading it, and continues exactly.
+    SimConfig cfg;
+    cfg.world_size = 48;
+    cfg.initial_population = 150;
+    g_laws.METABOLIC_RATE = 0.7f;
+    Simulation a(cfg);
+    a.seed_population();
+    for (int t = 0; t < 1500; ++t) a.step();
+    const std::string bytes = snapshot_bytes(a);
+    CHECK(bytes.find("\nlaw METABOLIC_RATE 0.699999988\n") != std::string::npos);
+    g_laws = defaults;
+    auto b = snapshot_from_bytes(bytes, err);
+    CHECK(b != nullptr);
+    if (!b) return;
+    CHECK(g_laws.METABOLIC_RATE == 0.7f && changed_laws(g_laws).size() == 1);
+    CHECK(snapshot_bytes(*b) == bytes);
+    std::vector<float> loaded_upkeep;
+    for (std::size_t i = 0; i < b->creatures().size(); ++i) loaded_upkeep.push_back(b->creatures().pheno[i].upkeep);
+    for (int t = 0; t < 500; ++t) {
+        a.step();
+        b->step();
+    }
+    CHECK(snapshot_bytes(*b) == snapshot_bytes(a));
+
+    // Loaded with a change: the change wins, bodies are recompiled under it,
+    // and the chronicle says so.
+    g_laws = defaults;
+    auto c = snapshot_from_bytes(bytes, err, {{"METABOLIC_RATE", 0.75f}, {"BASE_UPKEEP", 0.4f}});
+    CHECK(c != nullptr);
+    if (!c) return;
+    CHECK(g_laws.METABOLIC_RATE == 0.75f && g_laws.BASE_UPKEEP == 0.4f);
+    const std::string& note = c->chronicle().entries().back().text;
+    CHECK(note.find("METABOLIC_RATE 0.7 to 0.75") != std::string::npos && note.find("BASE_UPKEEP 0.3 to 0.4") != std::string::npos);
+    bool dearer = c->creatures().size() > 0;
+    for (std::size_t i = 0; i < c->creatures().size(); ++i)
+        dearer = dearer && c->creatures().pheno[i].upkeep > loaded_upkeep[i];
+    CHECK(dearer);
+    g_laws = defaults;
+}
+
+void test_snapshot_round_trip() {
+    using namespace luca;
+    SimConfig cfg;
+    cfg.world_size = 64;
+    cfg.initial_population = 300;
+    cfg.event_rate = 4.0f;              // storms and meteors part-way through
+    cfg.gene_transfer_chance = 0.02f;   // bodies carrying borrowed blueprints
+    Simulation a(cfg);
+    a.seed_population();
+    // Rooted mouths among the plants, so blueprints are taken up early.
+    Genome biter = make_luca();
+    biter.parts.push_back({PartType::Absorber, 1.5f, 0.0f, 0.0f, 0.0f});
+    for (int k = 0; k < 40; ++k) a.add_creature(4.0f + 1.4f * static_cast<float>(k), 20.0f, 400.0f, biter);
+    a.cast(PowerCommand{0, PowerKind::Vent, 32.0f, 32.0f, 5.0f, 2.0f});
+    a.cast(PowerCommand{3000, PowerKind::Climate, 0.0f, 0.0f, 0.0f, -3.0f, 4000});   // still ramping at the save
+    a.cast(PowerCommand{3500, PowerKind::Sun, 0.0f, 0.0f, 0.0f, 0.2f, 0});           // still pending at the save
+    a.follow(0);
+    for (int t = 0; t < 3300; ++t) a.step();
+    CHECK(a.creatures().size() > 100);
+    CHECK(a.borrowed_count() > 0);
+
+    const std::string bytes = snapshot_bytes(a);
+    std::string err;
+    auto b = snapshot_from_bytes(bytes, err);
+    CHECK(b != nullptr);
+    if (!b) { std::printf("  %s\n", err.c_str()); return; }
+
+    // Loaded, every body is rebuilt exactly as it was.
+    CHECK(b->tick() == a.tick() && b->creatures().size() == a.creatures().size());
+    CHECK(b->stored_energy() == a.stored_energy() && b->total_matter() == a.total_matter());
+    CHECK(b->borrowed_count() == a.borrowed_count());
+    const Creatures& ca = a.creatures();
+    const Creatures& cb = b->creatures();
+    bool same = true;
+    for (std::size_t i = 0; i < ca.size(); ++i) {
+        const Phenotype &pa = ca.pheno[i], &pb = cb.pheno[i];
+        same = same && pa.mass == pb.mass && pa.upkeep == pb.upkeep && pa.grown == pb.grown && pa.max_speed == pb.max_speed &&
+               pa.absorb == pb.absorb && pa.light_capture == pb.light_capture && pa.burns == pb.burns && pa.has_brain == pb.has_brain;
+        same = same && ca.brain[i].links == cb.brain[i].links && ca.brain[i].hidden == cb.brain[i].hidden;
+        same = same && ca.body[i].mouth[0] == cb.body[i].mouth[0] && ca.body[i].armour[3] == cb.body[i].armour[3];
+        same = same && ca.energy[i] == cb.energy[i];
+    }
+    CHECK(same);
+    CHECK(b->world().light(100) == a.world().light(100) && b->world().temperature(100) == a.world().temperature(100));
+    CHECK(snapshot_bytes(*b) == bytes);   // saving what was loaded gives the same file
+
+    // And it goes on tick for tick.
+    for (int t = 0; t < 2500; ++t) {
+        a.step();
+        b->step();
+    }
+    CHECK(a.creatures().size() == b->creatures().size());
+    CHECK(a.stored_energy() == b->stored_energy() && a.total_matter() == b->total_matter());
+    CHECK(a.last_stats().energy_in == b->last_stats().energy_in && a.last_stats().births == b->last_stats().births);
+    CHECK(a.chronicle().entries().size() == b->chronicle().entries().size());
+    CHECK(snapshot_bytes(a) == snapshot_bytes(*b));
+
+    // A damaged or foreign file is refused, not half-read.
+    CHECK(snapshot_from_bytes(bytes.substr(0, bytes.size() - 1000), err) == nullptr);
+    CHECK(snapshot_from_bytes("hello\n\n", err) == nullptr);
+    std::string newer = bytes;
+    newer.replace(newer.find(' ') + 1, 1, "9");
+    CHECK(snapshot_from_bytes(newer, err) == nullptr);
+}
+
 }  // namespace
 
 // Loose chemicals (chemistry stage 2): a body gives off what it can't burn;
@@ -2078,6 +2255,9 @@ int main() {
     test_windfalls();
     test_two_input_reactions();
     test_creature_files_and_meteors();
+    test_snapshot_round_trip();
+    test_laws();
+    test_keyed_draws();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;
 }

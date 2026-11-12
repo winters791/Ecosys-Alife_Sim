@@ -18,11 +18,11 @@
 // three times as long as wide, and up to a box with rounded corners. Each part
 // is drawn where it sits on the outline (its angle from the front, which is
 // the way the creature faces), and out on a stalk if it has one:
-//   photo      red leaf pixels over the arc of skin it covers; a frond on a stalk
+//   photo      green leaf pixels over the arc of skin it covers; a frond on a stalk
 //   absorber   a dark red mouth (teeth when big); a toothed ring on a tentacle
 // Skin is coloured by the hue and pigment genes exactly as core/colour.hpp
 // works it out (skin_colour), since hunters sense bodies by that colour
-// against the ground. Mouths and leaves are always red, whatever the skin.
+// against the ground. Leaves are always green and mouths red, whatever the skin.
 //   flagellum  a wiggling tail
 //   legs       a pair of stubs, mirrored on both sides, that step
 //   sensor     an eye (two when large); on an eyestalk if stalked
@@ -144,8 +144,8 @@ void fragment() {
 		skin = mix(vec3(1.0), sk, 0.7) * 0.92;
 	}
 	vec3 rim = skin * 0.55;
-	// Leaves are always red: scarlet when the body is full, deep crimson when hungry.
-	vec3 leaf = mix(vec3(0.76, 0.14, 0.14), vec3(0.96, 0.30, 0.22), traits.b);
+	// Leaves are always green, whatever the skin: bright when the body is full, dark when hungry.
+	vec3 leaf = mix(vec3(0.16, 0.45, 0.16), vec3(0.36, 0.72, 0.22), traits.b);
 	vec3 mouth_col = vec3(0.55, 0.08, 0.10);
 	vec3 tooth = vec3(0.96, 0.94, 0.88);
 

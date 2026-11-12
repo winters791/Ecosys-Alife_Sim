@@ -1,6 +1,7 @@
 #pragma once
 // Mutation: parent genome -> child genome. YOURS TO WRITE (see mutation.cpp).
-// Must use only the Rng passed in, so the sim stays deterministic.
+// Must use only the Rng passed in, so the sim stays deterministic. The sim
+// seeds it from a key (rng.hpp, draw_key: the parent's id and the tick).
 
 #include "genome.hpp"
 #include "rng.hpp"

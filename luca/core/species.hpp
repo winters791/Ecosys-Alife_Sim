@@ -94,6 +94,7 @@ struct Species {
 };
 
 class SpeciesRegistry {
+    friend struct SnapshotIO;   // snapshot.cpp: saves and restores the whole state
 public:
     // A species with no ancestor in this world (the first LUCAs).
     uint32_t found_root(const Genome& g, uint64_t tick, std::string name = {});

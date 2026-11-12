@@ -14,6 +14,7 @@ namespace luca {
 enum class BrushField { Height, Heat, Vent };
 
 class World {
+    friend struct SnapshotIO;   // snapshot.cpp: saves and restores the whole state
 public:
     void generate(const SimConfig& cfg);
 

@@ -1,4 +1,5 @@
 #include "energy.hpp"
+#include "laws.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,38 +20,38 @@ namespace {
 // One knob for the pace of life: upkeep from the phenotype compiler is
 // multiplied by this. At 0.75 a LUCA burns ~0.35 a tick against at most 1 a tick
 // of sunlight, and a night costs it ~95.
-constexpr float METABOLIC_RATE = 0.75f;  // was 1.0; tuned 2026-11-11 for a fuller world (three-seed sweep)
+inline const float& METABOLIC_RATE = g_laws.METABOLIC_RATE;  // law, 0.75f: was 1.0; tuned 2026-11-11 for a fuller world (three-seed sweep)
 
 // Energy gained per unit of light capture under full sun.
-constexpr float PHOTO_EFFICIENCY = 1.0f;
+inline const float& PHOTO_EFFICIENCY = g_laws.PHOTO_EFFICIENCY;  // law, 1.0f
 
 // A patch only works spread out and held still. A body that covered
 // FULL_STRIDE or more last tick catches just (1 - MOVING_SHADE) of its light;
 // in between it is proportional. This is what makes a lineage choose between
 // staying put in the sun and going to find food.
-constexpr float MOVING_SHADE = 0.8f;
+inline const float& MOVING_SHADE = g_laws.MOVING_SHADE;  // law, 0.8f
 // Was 0.08; 0.02 since wandering became a drifting direction (2026-11-11).
 // At 0.08 a slow drifter kept 90% of its light, so roaming grazers lost
 // almost nothing by moving and overgrazed the world to a quarter of its size.
-constexpr float FULL_STRIDE  = 0.005f;  // world units per tick
+inline const float& FULL_STRIDE  = g_laws.FULL_STRIDE;  // law, 0.005f: world units per tick
 
 // Dormancy. A night is about 240 ticks of a 600-tick day, so at full depth a
 // sleeper saves most of a night's upkeep and loses roughly the first hour and
 // a half of morning light while it wakes.
-constexpr float DORMANT_SAVING = 0.9f;        // fraction of upkeep saved at full depth
-constexpr float FALL_ASLEEP    = 1.0f / 20.0f;  // sleep gained per tick while it is dark or too cold
-constexpr float WAKE_UP        = 1.0f / 90.0f;  // sleep lost per tick once it is light and warm enough
+inline const float& DORMANT_SAVING = g_laws.DORMANT_SAVING;  // law, 0.9f: fraction of upkeep saved at full depth
+inline const float& FALL_ASLEEP    = g_laws.FALL_ASLEEP;  // law, 1.0f / 20.0f: sleep gained per tick while it is dark or too cold
+inline const float& WAKE_UP        = g_laws.WAKE_UP;  // law, 1.0f / 90.0f: sleep lost per tick once it is light and warm enough
 
 // Wear: upkeep is multiplied by 1 + wear x (age / AGE_SCALE)^2, where wear is 1
 // for an unrepaired body and less with the repair gene (phenotype.cpp). Nothing
 // dies "of old age"; an old body just costs more than it can earn, and its
 // matter is freed.
-constexpr float AGE_SCALE = 10000.0f;  // was 5000: a body now costs 244 to build, so it should last
+inline const float& AGE_SCALE = g_laws.AGE_SCALE;  // law, 10000.0f: was 5000: a body now costs 244 to build, so it should last
 
 // Dark skin under sun feels warmer: °C per unit of heat_absorption per unit light.
-constexpr float PIGMENT_WARMTH = 8.0f;
+inline const float& PIGMENT_WARMTH = g_laws.PIGMENT_WARMTH;  // law, 8.0f
 // Being this many °C outside the comfort range doubles upkeep; it grows as the square.
-constexpr float THERMAL_SCALE = 8.0f;
+inline const float& THERMAL_SCALE = g_laws.THERMAL_SCALE;  // law, 8.0f
 
 // Moving costs mass x (TRANSPORT_COST x distance + MOVE_COST x speed^2) a
 // tick, and climbing costs mass x height gained. Coming downhill gives
@@ -59,27 +60,27 @@ constexpr float THERMAL_SCALE = 8.0f;
 // creeping a cell costs nearly as much as walking it. With only speed^2,
 // going a distance d at speed v cost mass x MOVE_COST x v x d, so creeping
 // was almost free and slow drifting plants out-competed real movers.
-constexpr float TRANSPORT_COST = 2.0f;  // per unit of mass per world unit
-constexpr float MOVE_COST  = 3.0f;
-constexpr float CLIMB_COST = 1.0f;
+inline const float& TRANSPORT_COST = g_laws.TRANSPORT_COST;  // law, 2.0f: per unit of mass per world unit
+inline const float& MOVE_COST  = g_laws.MOVE_COST;  // law, 3.0f
+inline const float& CLIMB_COST = g_laws.CLIMB_COST;  // law, 1.0f
 
 // Flinging a child: mass x distance^2, like moving, but paid once per birth.
-constexpr float THROW_COST = 2.0f;
+inline const float& THROW_COST = g_laws.THROW_COST;  // law, 2.0f
 
 // Fouling (see energy.hpp): per unit of loose chemical it can't burn, per
 // unit of skin. The old waste rule's 0.0025 per unit of energy, at 222 a unit.
-constexpr float FOUL_HARM      = 0.5f;
+inline const float& FOUL_HARM      = g_laws.FOUL_HARM;  // law, 0.5f
 
 // Contact.
-constexpr float CONTACT_RATE = 1.5f;  // energy per tick for a pull of 1 against no membrane
-constexpr float CORPSE_RATE  = 2.0f;  // the dead have no membrane left
+inline const float& CONTACT_RATE = g_laws.CONTACT_RATE;  // law, 1.5f: energy per tick for a pull of 1 against no membrane
+inline const float& CORPSE_RATE  = g_laws.CORPSE_RATE;  // law, 2.0f: the dead have no membrane left
 
 // Size matters at the mouth: the pull is scaled by (taker radius / giver
 // radius)^SIZE_POWER, up to SIZE_EDGE_MAX. Equal bodies are unchanged; a body
 // half its victim's size pulls a quarter as hard, so being bigger than your
 // neighbours is protection, and a small thing on a big host can only sip.
-constexpr float SIZE_POWER    = 2.0f;
-constexpr float SIZE_EDGE_MAX = 2.0f;
+inline const float& SIZE_POWER    = g_laws.SIZE_POWER;  // law, 2.0f
+inline const float& SIZE_EDGE_MAX = g_laws.SIZE_EDGE_MAX;  // law, 2.0f
 
 }  // namespace
 
@@ -135,7 +136,11 @@ float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, f
     // little out of a big host, and armour never makes anything immune.
     const float a = pull;
     if (a <= 0.0f) return 0.0f;
-    const float edge = std::min(std::pow(taker.radius / giver.radius, SIZE_POWER), SIZE_EDGE_MAX);
+    // A square is worked out as one multiply, as the compiler did when
+    // SIZE_POWER was a constant: powf(r, 2) rounds differently from r * r for
+    // about one r in 160, and runs must not change with the law at its default.
+    const float ratio = taker.radius / giver.radius;
+    const float edge = std::min(SIZE_POWER == 2.0f ? ratio * ratio : std::pow(ratio, SIZE_POWER), SIZE_EDGE_MAX);
     return CONTACT_RATE * taker.bite * edge * a * a / (a + membrane);
 }
 
