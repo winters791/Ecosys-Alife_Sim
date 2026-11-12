@@ -113,6 +113,7 @@ private:
     void detect_events();
 
     void take_census();
+    void take_habits();
     // Add a creature and keep the species books; all arrivals go through here.
     // body_temp < -273 means "as warm as the ground it lands on" (newcomers).
     void admit(float x, float y, float energy, uint32_t lineage, uint32_t species, uint32_t generation,
@@ -175,6 +176,10 @@ private:
     std::vector<float> waste_want_, waste_gain_;
     std::vector<float> waste_flow_;          // per cell: waste on its way to the neighbours
     std::vector<float> drain_want_, drained_, intake_, poisoned_;
+    // Who took most from each body this tick: the one credited if it dies
+    // (the record book only; nothing in the sim reads it).
+    std::vector<uint32_t> top_taker_;
+    std::vector<float>    top_take_;
     struct Contact { uint32_t taker, giver; float flow; };
     std::vector<Contact> contacts_;
     struct Near { float x, y, reach; uint32_t who; };  // one creature, in cell order

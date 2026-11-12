@@ -1,484 +1,709 @@
 extends Control
-## The tree of life, drawn as a tree.
+## The tree of life, as a scrollable cladogram.
 ##
-## Time runs upward from the ground. The trunk is the oldest species; every
-## species that branched from it leaves the wood at the height (tick) it was
-## born and climbs until now, or until it died out. A living branch ends in a
-## crown of leaves in its species colour, bigger for a bigger population; a
-## dead one is a bare grey stub. A branch is as thick as the life it carries.
+## One row per species. Time runs left to right: a species' line starts at the
+## tick it branched off and runs to now, or to the tick it died out. A short
+## stem drops from the parent's line to each branch. Children are listed
+## newest first under their parent, so no stem ever crosses another line.
+## Names, and how many are alive, sit in a column on the right.
 ##
-## Hover a branch to read about it. Click it to zoom in: it becomes the trunk
-## and only its descendants are shown. Click the trunk, or right-click
-## anywhere, to step back out.
+##   Mouse    hover a row to read about it; click to select it (its line of
+##            descent lights up, the rest dims); double-click to open its
+##            branch on its own; click the triangle to fold its branches;
+##            wheel, trackpad or drag to scroll; right-click to step back out.
+##   Keys     Up/Down move, Left/Right fold or go up/down a generation,
+##            Enter opens a branch, Backspace steps out, E hides dead ends,
+##            Esc closes.
 ##
-## Everything is drawn in chunky pixels (ART screen pixels each) from
-## LucaWorld.get_species_tree(); nothing here feeds back into the world.
+## Drawn in plain pixel rectangles from LucaWorld.get_species_tree(); nothing
+## here feeds back into the world.
 
-const ART := 3                # screen pixels per art pixel
-const GROUND := 9             # art pixels of soil under the tree
-const TOP_SPACE := 20         # art pixels of sky kept clear above the canopy
-const SIDE := 14              # art pixels of margin left and right
-const MAX_SLOT := 30.0        # widest gap between neighbouring branches, art pixels
-const GROW_TIME := 0.45       # seconds a tree takes to grow in after a zoom
+signal close_requested
+signal selection_changed(species_id: int)   # -1 when nothing is selected
 
-const SKY := [Color(0.07, 0.08, 0.14), Color(0.09, 0.11, 0.19), Color(0.12, 0.15, 0.25)]
-const SOIL := Color(0.24, 0.17, 0.12)
-const SOIL_DARK := Color(0.17, 0.12, 0.09)
-const GRASS := Color(0.36, 0.62, 0.27)
-const BARK := Color(0.45, 0.31, 0.20)
-const DEAD := Color(0.36, 0.35, 0.39)
+const ROW := 18          # pixels per species row
+const HEAD := 30         # breadcrumbs and buttons
+const AXIS := 20         # tick labels
+const FOOT := 62         # the info bar
+const PAD := 12
+const NAMES := 236       # width of the name column
+const GAP := 18          # between the plot and the names
+
+const BG := Color(0.065, 0.072, 0.095)
+const STRIPE := Color(0.085, 0.094, 0.122)
+const BAR := Color(0.045, 0.05, 0.068)
+const GRID := Color(1, 1, 1, 0.05)
+const DEAD := Color(0.42, 0.43, 0.48)
 const INK := Color(0.93, 0.94, 0.96)
-const FAINT := Color(0.62, 0.67, 0.75)
+const FAINT := Color(0.58, 0.63, 0.71)
+const DIM := 0.72        # how far an unlit row fades into the background
 
-var species: Array = []       # as given by get_species_tree(), in drawing order
+var species: Array = []  # as given by get_species_tree(): depth-first, parents first
 var now := 1
-var root_id := -1             # the species shown as the trunk; -1 = the oldest
-var hover := -1               # index into `species`, or -1
-var clock := 0.0
-var grown := 1.0              # 0..1 while a freshly shown tree grows in
-var redraw_clock := 0.0
 
-# Layout, rebuilt whenever the data or the zoom changes. Indexed like `species`.
-var root := -1
-var kids: Array[PackedInt32Array] = []
-var shown := PackedByteArray()             # 1 if under the current trunk
-var slot := PackedFloat32Array()           # horizontal position, in slots
-var slots := 1.0                           # width of the whole tree, in slots
-var carried := PackedInt32Array()          # living creatures on this branch and all above it
-var t0 := 0                                # tick at the ground
+# Per species, indexed like `species`; rebuilt when new data arrives.
+var index_of := {}                         # species id -> index
+var kids: Array[PackedInt32Array] = []     # children, oldest first
+var clade_count := PackedInt32Array()      # species in its clade, itself included
+var clade_alive := PackedInt32Array()      # creatures alive in its clade
+var lives_on := PackedByteArray()          # 1 if it or anything after it is alive
+
+# View state, kept across updates by species id.
+var focus_id := -1                         # branch shown on its own; -1 = all life
+var selected_id := -1
+var collapsed := {}                        # species id -> true
+var hide_extinct := false
+var scroll := 0.0
+
+# Layout.
+var rows := PackedInt32Array()             # species index on each row, top down
+var row_of := PackedInt32Array()           # species index -> row, or -1
+var lit := PackedByteArray()               # 1 if on the selected line of descent
+var t0 := 0
+var hover := -1
+var mouse := Vector2(-1, -1)
+var buttons: Array = []                    # [Rect2, Callable], rebuilt each draw
+var press_at := Vector2.ZERO
+var press_scroll := 0.0
+var pressing := false
+var dragged := false
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	focus_mode = Control.FOCUS_ALL
 	clip_contents = true
 
 
 func show_tree(tree: Array, tick: int) -> void:
 	species = tree
 	now = maxi(tick, 1)
+	_index()
 	_layout()
+	hover = _row_at(mouse)
 	queue_redraw()
 
 
-func _process(delta: float) -> void:
-	if not is_visible_in_tree():
-		return
-	clock += delta
-	grown = minf(grown + delta / GROW_TIME, 1.0)
-	redraw_clock += delta
-	if redraw_clock >= 0.08:   # leaves sway at about twelve frames a second
-		redraw_clock = 0.0
-		queue_redraw()
+# --- Data --------------------------------------------------------------------------
 
-
-# --- Layout ------------------------------------------------------------------------
-
-func _layout() -> void:
+func _index() -> void:
 	var n := species.size()
+	index_of.clear()
 	kids.clear()
 	for i in n:
 		kids.append(PackedInt32Array())
-	root = -1
 	for i in n:
+		index_of[int(species[i]["id"])] = i
 		var p: int = species[i]["row_parent"]
 		if p >= 0:
 			kids[p].append(i)
-		if species[i]["id"] == root_id:
-			root = i
-	if root < 0:
-		root = 0 if n > 0 else -1
-		root_id = -1
-	shown.resize(n)
-	shown.fill(0)
-	slot.resize(n)
-	carried.resize(n)
-	if root < 0:
-		return
-
-	# Parents come before their children in the array, so a backwards pass
-	# sums each branch's own life and everything growing from it.
-	var width := PackedFloat32Array()
-	width.resize(n)
+	clade_count.resize(n)
+	clade_alive.resize(n)
+	lives_on.resize(n)
+	# Parents come before children, so one backwards pass sums each clade.
 	for i in range(n - 1, -1, -1):
-		var w := 1.0
-		var c: int = species[i]["population"]
+		var count := 1
+		var alive: int = species[i]["population"] if _alive(i) else 0
+		var on := 1 if _alive(i) else 0
 		for k: int in kids[i]:
-			w += width[k]
-			c += carried[k]
-		width[i] = w
-		carried[i] = c
+			count += clade_count[k]
+			alive += clade_alive[k]
+			on = on | lives_on[k]
+		clade_count[i] = count
+		clade_alive[i] = alive
+		lives_on[i] = on
+	if not index_of.has(focus_id):
+		focus_id = -1
+	if not index_of.has(selected_id):
+		selected_id = -1
 
-	# Each branch owns a run of slots. Its children are dealt to whichever
-	# side is lighter; on each side the earliest born sits furthest out, so a
-	# later branch never has to cross an older sibling.
-	t0 = species[root]["born"]
-	slots = width[root]
-	var stack: Array = [[root, 0.0]]
+
+func _layout() -> void:
+	var n := species.size()
+	rows.clear()
+	row_of.resize(n)
+	row_of.fill(-1)
+	var roots: Array[int] = []
+	if focus_id >= 0:
+		roots.append(index_of[focus_id])
+	else:
+		for i in n:
+			if species[i]["row_parent"] < 0:
+				roots.append(i)
+	t0 = now
+	for r in roots:
+		t0 = mini(t0, species[r]["born"])
+	# Depth first. Children go on the stack oldest first, so the newest comes
+	# off first and sits right under its parent.
+	var stack: Array[int] = []
+	for k in range(roots.size() - 1, -1, -1):
+		stack.append(roots[k])
 	while not stack.is_empty():
-		var item: Array = stack.pop_back()
-		var i: int = item[0]
-		var left_edge: float = item[1]
-		shown[i] = 1
-		var left: Array[int] = []
-		var right: Array[int] = []
-		var lw := 0.0
-		var rw := 0.0
+		var i: int = stack.pop_back()
+		row_of[i] = rows.size()
+		rows.append(i)
+		if collapsed.has(int(species[i]["id"])):
+			continue
 		for k: int in kids[i]:
-			if lw <= rw:
-				left.append(k)
-				lw += width[k]
-			else:
-				right.append(k)
-				rw += width[k]
-		var x := left_edge
-		for k in left:
-			stack.append([k, x])
-			x += width[k]
-		slot[i] = x + 0.5
-		x = left_edge + width[i]
-		for k in right:
-			x -= width[k]
-			stack.append([k, x])
-	if hover >= n or (hover >= 0 and shown[hover] == 0):
-		hover = -1
+			if _listed(k):
+				stack.append(k)
+	if selected_id >= 0 and row_of[index_of[selected_id]] < 0:
+		selected_id = -1
+	_light()
+	_clamp_scroll()
 
 
-## Art-pixel grid size.
-func _cols() -> int:
-	return int(size.x) / ART
+func _light() -> void:
+	lit.resize(species.size())
+	if selected_id < 0:
+		lit.fill(1)
+		return
+	lit.fill(0)
+	var s: int = index_of[selected_id]
+	# Depth-first order keeps a clade in one run of indices.
+	for i in range(s, s + clade_count[s]):
+		lit[i] = 1
+	var up: int = species[s]["row_parent"]
+	while up >= 0:
+		lit[up] = 1
+		up = species[up]["row_parent"]
 
-func _rows() -> int:
-	return int(size.y) / ART
 
-func _ground_y() -> int:
-	return _rows() - GROUND
+func _listed(i: int) -> bool:
+	return not hide_extinct or lives_on[i] == 1
 
-func _x(i: int) -> int:
-	var usable := float(_cols() - 2 * SIDE)
-	var step := minf(usable / slots, MAX_SLOT)
-	return int(round(_cols() * 0.5 + (slot[i] - slots * 0.5) * step))
 
-func _y(tick: int) -> int:
-	var span := float(maxi(now - t0, 1))
-	var height := float(_ground_y() - TOP_SPACE) * grown
-	return _ground_y() - int(round(height * clampf(float(tick - t0) / span, 0.0, 1.0)))
+func _shown_kids(i: int) -> int:
+	var c := 0
+	for k: int in kids[i]:
+		if _listed(k):
+			c += 1
+	return c
+
 
 func _alive(i: int) -> bool:
 	return species[i]["extinct"] < 0
 
+
 func _end_tick(i: int) -> int:
 	return now if _alive(i) else int(species[i]["extinct"])
 
-func _thickness(i: int) -> int:
-	return clampi(1 + int(log(1.0 + carried[i]) / log(5.0)), 1, 5)
 
-func _wood(i: int) -> Color:
-	if carried[i] == 0:
-		return DEAD
-	var c := BARK.lerp(_leaf(i), 0.35 if _alive(i) else 0.0)
-	return c.lightened(0.35) if i == hover else c
+func _color(i: int) -> Color:
+	var c := Color.from_hsv(species[i]["hue"], 0.62, 0.92) if _alive(i) else DEAD
+	return c if lit[i] == 1 else c.lerp(BG, DIM)
 
-func _leaf(i: int) -> Color:
-	return Color.from_hsv(species[i]["hue"], 0.62, 0.92)
 
-## Where a branch turns from reaching outward to climbing: (x, y) in art pixels.
-func _elbow(i: int) -> Vector2i:
-	var parent: int = species[i]["row_parent"]
-	var yb := _y(species[i]["born"])
-	var ye := _y(_end_tick(i))
-	var reach := absi(_x(i) - _x(parent))
-	return Vector2i(_x(i), yb - mini(mini(reach / 2, 36), maxi(yb - ye, 0)))
+# --- Geometry ----------------------------------------------------------------------
+
+func _plot_left() -> float:
+	return PAD + 2.0
+
+func _plot_right() -> float:
+	return size.x - NAMES - GAP
+
+func _names_left() -> float:
+	return size.x - NAMES
+
+func _rows_top() -> float:
+	return HEAD + AXIS
+
+func _rows_bottom() -> float:
+	return size.y - FOOT
+
+func _tx(tick: int) -> float:
+	var f := clampf(float(tick - t0) / float(maxi(now - t0, 1)), 0.0, 1.0)
+	return roundf(_plot_left() + (_plot_right() - _plot_left()) * f)
+
+func _ry(row: int) -> float:
+	return _rows_top() + row * ROW - scroll
+
+func _max_scroll() -> float:
+	return maxf(0.0, rows.size() * ROW - (_rows_bottom() - _rows_top()) + 6.0)
+
+func _clamp_scroll() -> void:
+	scroll = clampf(scroll, 0.0, _max_scroll())
+
+func _row_at(p: Vector2) -> int:
+	if p.y < _rows_top() or p.y >= _rows_bottom() or p.x < 0 or p.x >= size.x:
+		return -1
+	var r := int(floor((p.y - _rows_top() + scroll) / ROW))
+	return rows[r] if r >= 0 and r < rows.size() else -1
+
+func _fold_rect(row: int) -> Rect2:
+	return Rect2(_names_left() - 4, _ry(row), 18, ROW)
 
 
 # --- Drawing -----------------------------------------------------------------------
 
-func _px(x: int, y: int, w: int, h: int, color: Color) -> void:
-	draw_rect(Rect2(x * ART, y * ART, w * ART, h * ART), color)
-
-func _hash(a: int, b: int) -> float:
-	var h := (a * 374761393 + b * 668265263) & 0x7fffffff
-	h = ((h ^ (h >> 13)) * 1274126177) & 0x7fffffff
-	return float(h & 0xffff) / 65536.0
-
-
 func _draw() -> void:
-	var cols := _cols()
-	var rows := _rows()
-	var ground := _ground_y()
-
-	# Sky in three flat bands with a dithered seam, and a few fixed stars.
-	var band := ground / 3
-	for b in 3:
-		_px(0, b * band, cols, band + (ground - 3 * band if b == 2 else 0), SKY[b])
-		if b > 0:
-			for x in range(b % 2, cols, 2):
-				_px(x, b * band - 1, 1, 1, SKY[b])
-	for s in 70:
-		var sx := int(_hash(s, 11) * cols)
-		var sy := int(_hash(s, 29) * (ground - 30))
-		if _hash(s, int(clock * 0.7) + 5) > 0.12:   # an occasional twinkle
-			_px(sx, sy, 1, 1, Color(0.80, 0.84, 0.95, 0.55))
-
-	# The ground.
-	_px(0, ground, cols, GROUND, SOIL)
-	for x in cols:
-		if _hash(x, 3) < 0.35:
-			_px(x, ground + 2 + int(_hash(x, 7) * (GROUND - 3)), 1, 1, SOIL_DARK)
-		_px(x, ground - (1 if _hash(x, 5) < 0.3 else 0), 1, 2, GRASS)
-
-	if root < 0:
-		draw_string(get_theme_default_font(), Vector2(16, 30), "Nothing has taken hold yet.", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, FAINT)
-		return
-
-	# Height marks: when things happened.
 	var font := get_theme_default_font()
-	for k in range(1, 5):
-		var tick := t0 + int((now - t0) * k / 4.0)
-		var y := _y(tick)
-		for x in range(2, cols - 2, 4):
-			_px(x, y, 1, 1, Color(1, 1, 1, 0.07))
-		draw_string(font, Vector2(6, y * ART - 3), "tick " + _short(tick), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.55, 0.60, 0.70, 0.8))
-
-	# Wood: thin branches first, so thick ones sit in front.
-	var order: Array[int] = []
-	for i in species.size():
-		if shown[i] == 1:
-			order.append(i)
-	order.sort_custom(func(a: int, b: int) -> bool: return carried[a] < carried[b] if carried[a] != carried[b] else a > b)
-	for i in order:
-		_draw_branch(i)
-	# Leaves over all the wood, small crowns last so they are not buried.
-	order.reverse()
-	for i in order:
-		if _alive(i):
-			_draw_crown(i)
-	_draw_labels(font, order)
-	_draw_card(font)
-
-
-func _draw_branch(i: int) -> void:
-	var wood := _wood(i)
-	var shade := wood.darkened(0.3)
-	var t := _thickness(i)
-	var x := _x(i)
-	var top := _y(_end_tick(i))
-	if i == root:
-		# The trunk, with a flared foot and two roots.
-		var ground := _ground_y()
-		_px(x - t / 2, top, t, ground - top, wood)
-		_px(x - t / 2 + t - 1, top, 1, ground - top, shade)
-		_px(x - t / 2 - 1, ground - 3, t + 2, 3, wood)
-		_px(x - t / 2 - 2, ground - 1, t + 4, 2, shade)
+	buttons.clear()
+	draw_rect(Rect2(Vector2.ZERO, size), BG)
+	if species.is_empty():
+		draw_string(font, Vector2(PAD, HEAD + 24), "Nothing has taken hold yet: a species shows here once 10 are alive at once.", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, FAINT)
 		return
-	var parent: int = species[i]["row_parent"]
-	var x0 := _x(parent)
-	var y0 := _y(species[i]["born"])
-	var elbow := _elbow(i)
-	# Reaching outward: a stepped diagonal from the parent's wood to the elbow.
-	var steps := absi(elbow.x - x0)
-	var dir := signi(elbow.x - x0)
-	for s in steps + 1:
-		var y := y0 - int(round(float(y0 - elbow.y) * s / maxf(steps, 1.0)))
-		_px(x0 + dir * s, y - t / 2, 1, t, wood)
-		_px(x0 + dir * s, y - t / 2 + t - 1, 1, 1, shade)
-	# Climbing.
-	if elbow.y > top:
-		_px(x - t / 2, top, t, elbow.y - top + 1, wood)
-		if t > 1:
-			_px(x - t / 2 + t - 1, top, 1, elbow.y - top + 1, shade)
-	if not _alive(i):
-		_px(x, top - 1, 1, 1, wood.lightened(0.25))   # a snapped tip
 
+	var top := _rows_top()
+	var bottom := _rows_bottom()
+	var first := maxi(0, int(floor(scroll / ROW)))
+	var last := mini(rows.size() - 1, int(ceil((scroll + bottom - top) / ROW)))
 
-func _draw_crown(i: int) -> void:
-	var leaf := _leaf(i)
-	if i == hover:
-		leaf = leaf.lightened(0.3)
-	var light := leaf.lightened(0.28)
-	var dark := leaf.darkened(0.32)
-	var r := clampi(2 + int(sqrt(float(species[i]["population"])) / 3.0), 2, 10)
-	var cx := _x(i)
-	var cy := _y(now) - r / 2
-	var id: int = species[i]["id"]
-	var sway := int(round(sin(clock * 1.4 + id * 1.7)))
-	for dy in range(-r, r + 1):
-		var half := int(sqrt(float(r * r - dy * dy)))
-		half += int(_hash(id, dy + 40) * 2.0) - (1 if r > 2 else 0)   # a ragged, leafy edge
-		if half < 0:
+	# Row backgrounds: stripes so a line can be followed to its name.
+	for r in range(first, last + 1):
+		var i: int = rows[r]
+		var y := _ry(r)
+		var band := STRIPE if r % 2 == 1 else BG
+		if species[i]["id"] == selected_id:
+			band = Color(0.17, 0.2, 0.27)
+		elif i == hover:
+			band = Color(0.12, 0.14, 0.19)
+		if band != BG:
+			draw_rect(Rect2(0, y, size.x, ROW), band)
+
+	# Time grid.
+	var step := _nice_step(now - t0)
+	var tick := int(ceil(float(t0) / step)) * step
+	while tick <= now:
+		draw_rect(Rect2(_tx(tick), top, 1, bottom - top), GRID)
+		tick += step
+
+	# Stems: from the parent's line down to each child. A stem may span the
+	# view with neither end on it, so look at every row, not just visible ones.
+	for r in rows.size():
+		var i: int = rows[r]
+		var p: int = species[i]["row_parent"]
+		if p < 0 or row_of[p] < 0:
 			continue
-		var ox := cx + (sway if dy < 0 else 0)   # only the top of the crown moves
-		_px(ox - half, cy + dy, 2 * half + 1, 1, leaf)
-		if dy < 0 and half > 1:
-			_px(ox - half + 1, cy + dy, half, 1, light)
-		if dy > 0:
-			_px(ox, cy + dy, half + 1, 1, dark)
-	# A few loose leaves, so no two crowns are the same.
+		var y0 := _ry(row_of[p]) + ROW * 0.5
+		var y1 := _ry(r) + ROW * 0.5
+		if y1 < top or y0 > bottom:
+			continue
+		var a := maxf(y0, top)
+		var b := minf(y1, bottom)
+		draw_rect(Rect2(_tx(species[i]["born"]), a, 2, b - a + 1), _color(i).darkened(0.15))
+
+	# Lines, caps, leaders and names.
+	for r in range(first, last + 1):
+		_draw_row(font, r)
+
+	# Scrollbar.
+	if _max_scroll() > 0.0:
+		var track := bottom - top
+		var h := maxf(24.0, track * track / (rows.size() * ROW))
+		var y := top + (track - h) * scroll / _max_scroll()
+		draw_rect(Rect2(size.x - 4, y, 3, h), Color(1, 1, 1, 0.22))
+
+	# Header, axis and footer go over anything that scrolled under them.
+	draw_rect(Rect2(0, 0, size.x, top), BG)
+	draw_rect(Rect2(0, top - 1, size.x, 1), Color(1, 1, 1, 0.08))
+	_draw_header(font)
+	tick = int(ceil(float(t0) / step)) * step
+	while tick <= now:
+		var x := _tx(tick)
+		var text := "tick " + _short(tick) if tick == 0 else _short(tick)
+		var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+		if x + w * 0.5 < _plot_right() - 30:
+			draw_string(font, Vector2(clampf(x - w * 0.5, 2, size.x), top - 6), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, FAINT)
+			draw_rect(Rect2(x, top - 3, 1, 3), FAINT)
+		tick += step
+	var now_x := _tx(now)
+	draw_string(font, Vector2(now_x - 22, top - 6), "now", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, INK)
+	draw_rect(Rect2(now_x, top - 3, 1, 3), INK)
+	draw_string(font, Vector2(_names_left() + 14, top - 6), "SPECIES", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, FAINT)
+	draw_string(font, Vector2(size.x - 52, top - 6), "ALIVE", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, FAINT)
+	_draw_footer(font)
+
+
+func _draw_row(font: Font, r: int) -> void:
+	var i: int = rows[r]
+	var y := _ry(r)
+	var cy := y + ROW * 0.5
+	var col := _color(i)
+	var x0 := _tx(species[i]["born"])
+	var x1 := maxf(_tx(_end_tick(i)), x0 + 2)
+	var alive := _alive(i)
+	var th := 4.0 if alive else 2.0
+
+	draw_rect(Rect2(x0, cy - th * 0.5, x1 - x0, th), col)
+	draw_rect(Rect2(x0 - 1, cy - 2, 4, 4), col)
+	if alive:
+		draw_rect(Rect2(x1 - 2, cy - 4, 6, 8), col)
+		draw_rect(Rect2(x1 - 2, cy - 4, 6, 2), col.lightened(0.3))
+	else:
+		draw_rect(Rect2(x1, cy - 3, 2, 6), col)
+	# A dotted leader from the end of the line to its name.
+	var lead := Color(1, 1, 1, 0.16 if lit[i] == 1 else 0.05)
+	var x := x1 + 8
+	while x < _names_left() - 8:
+		draw_rect(Rect2(x, cy, 1, 1), lead)
+		x += 4
+
+	# The name column.
+	var nl := _names_left()
+	if _shown_kids(i) > 0:
+		_triangle(Vector2(nl, cy), collapsed.has(int(species[i]["id"])), FAINT if lit[i] == 1 else FAINT.lerp(BG, DIM))
+	draw_rect(Rect2(nl + 14, cy - 4, 8, 8), col)
+	var ink := (INK if alive else FAINT)
+	if lit[i] == 0:
+		ink = ink.lerp(BG, DIM)
+	var name: String = species[i]["name"]
+	draw_string(font, Vector2(nl + 28, cy + 5), name, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)
+	if collapsed.has(int(species[i]["id"])) and clade_count[i] > 1:
+		var nw := font.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		draw_string(font, Vector2(nl + 34 + nw, cy + 5), "+%d" % (clade_count[i] - 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ink.lerp(BG, 0.3))
+	var count := _commas(species[i]["population"]) if alive else "died " + _short(species[i]["extinct"])
+	var cw := font.get_string_size(count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	draw_string(font, Vector2(size.x - 10 - cw, cy + 5), count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ink if alive else ink.lerp(BG, 0.25))
+
+
+## A small pixel triangle: pointing right when folded, down when open.
+func _triangle(at: Vector2, folded: bool, color: Color) -> void:
 	for k in 4:
-		var lx := cx + int((_hash(id, k) - 0.5) * 2.2 * r) + sway
-		var ly := cy + int((_hash(id, k + 9) - 0.6) * 1.8 * r)
-		_px(lx, ly, 1, 1, light if k % 2 == 0 else dark)
+		if folded:
+			draw_rect(Rect2(at.x + k, at.y - 3 + k, 1, 7 - 2 * k), color)
+		else:
+			draw_rect(Rect2(at.x - 3 + k + 3, at.y - 2 + k, 7 - 2 * k, 1), color)
 
 
-func _draw_labels(font: Font, order: Array[int]) -> void:
-	# Name the biggest living crowns, the trunk, and whatever is hovered.
-	var named: Array[int] = []
-	var living: Array[int] = []
-	for i in order:
-		if _alive(i):
-			living.append(i)
-	living.sort_custom(func(a: int, b: int) -> bool: return species[a]["population"] > species[b]["population"])
-	for i in living.slice(0, 7):
-		named.append(i)
-	if hover >= 0 and not named.has(hover):
-		named.append(hover)
-	var taken: Array[Rect2] = []
-	for i in named:
-		var text: String = species[i]["name"]
-		var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
-		var y := (_y(_end_tick(i)) - 14) * ART if _alive(i) else (_y(_end_tick(i)) - 3) * ART
-		var box := Rect2(clampf(_x(i) * ART - w * 0.5, 4.0, size.x - w - 4.0), y - 11, w, 14)
-		var clash := false
-		for other in taken:
-			clash = clash or other.intersects(box.grow(2))
-		if clash and i != hover:
-			continue
-		taken.append(box)
-		draw_string(font, box.position + Vector2(1, 12), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0, 0, 0, 0.7))
-		draw_string(font, box.position + Vector2(0, 11), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, INK if i == hover else _leaf(i).lightened(0.45))
+func _draw_header(font: Font) -> void:
+	# Breadcrumbs: where the view is in the whole tree. Each one is a way back.
+	var trail: Array[int] = []
+	if focus_id >= 0:
+		var up: int = index_of[focus_id]
+		while up >= 0:
+			trail.push_front(up)
+			up = species[up]["row_parent"]
+	var x := float(PAD)
+	var y := 20.0
+	x = _button(font, x, y, "All life", focus_id < 0, func() -> void: _open(-1))
+	for k in trail.size():
+		var i := trail[k]
+		draw_string(font, Vector2(x + 2, y), "›", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, FAINT)
+		x += 14
+		var id: int = species[i]["id"]
+		x = _button(font, x, y, species[i]["name"], k == trail.size() - 1, func() -> void: _open(id))
+
+	# Buttons on the right.
+	var labels := ["Unfold all", "Fold all", "Dead ends: %s  (E)" % ("hidden" if hide_extinct else "shown")]
+	var calls := [_unfold_all, _fold_all, _toggle_extinct]
+	var right := size.x - PAD
+	for k in labels.size():
+		var w := font.get_string_size(labels[k], HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 16
+		right -= w
+		_button(font, right, y, labels[k], false, calls[k])
+		right -= 6
 
 
-## The card in the corner: the hovered branch, or the trunk.
-func _draw_card(font: Font) -> void:
-	var i := hover if hover >= 0 else root
+## A flat pill with a label; returns the x just past it.
+func _button(font: Font, x: float, baseline: float, text: String, on: bool, call: Callable) -> float:
+	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 16
+	var rect := Rect2(x, baseline - 15, w, 21)
+	var hot := rect.has_point(mouse)
+	var fill := Color(0.2, 0.24, 0.32) if on else (Color(0.16, 0.18, 0.24) if hot else Color(0.11, 0.125, 0.165))
+	draw_rect(rect, fill)
+	draw_string(font, Vector2(x + 8, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, INK if on or hot else FAINT)
+	buttons.append([rect, call])
+	return x + w + 4
+
+
+func _draw_footer(font: Font) -> void:
+	var top := _rows_bottom()
+	draw_rect(Rect2(0, top, size.x, FOOT), BAR)
+	draw_rect(Rect2(0, top, size.x, 1), Color(1, 1, 1, 0.08))
+	var hint := "Click: select    Double-click or Enter: open branch    Right-click or Backspace: back    Arrows: move and fold    Esc: close"
+	var i: int = hover if hover >= 0 else (index_of[selected_id] if selected_id >= 0 else -1)
+	if i < 0:
+		var alive := 0
+		for k in species.size():
+			if _alive(k):
+				alive += 1
+		draw_string(font, Vector2(PAD, top + 24), "%d species have taken hold, %d still alive. Hover a row to read about it." % [species.size(), alive], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, INK)
+		draw_string(font, Vector2(PAD, top + 46), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, FAINT)
+		return
 	var s: Dictionary = species[i]
-	var parent: int = s["row_parent"]
-	var lines: Array[String] = []
+	var col := Color.from_hsv(s["hue"], 0.62, 0.92) if _alive(i) else DEAD
+	draw_rect(Rect2(PAD, top + 12, 10, 10), col)
+	draw_string(font, Vector2(PAD + 18, top + 22), s["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, INK)
+	var nw := font.get_string_size(s["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
+	var status := ""
 	if _alive(i):
-		lines.append("%s alive   (most ever: %s)" % [_commas(s["population"]), _commas(s["peak"])])
+		status = "%s alive now, most ever %s" % [_commas(s["population"]), _commas(s["peak"])]
 	else:
-		lines.append("Extinct at tick %s, after %s ticks" % [_commas(s["extinct"]), _commas(s["extinct"] - s["born"])])
-	if parent >= 0:
-		lines.append("Branched from %s at tick %s" % [species[parent]["name"], _commas(s["born"])])
-	else:
-		lines.append("The first of its line, from tick %s" % _commas(s["born"]))
-	var branches: int = kids[i].size()
-	lines.append("%d %s grew from it   %s creatures on this limb" % [branches, "branch" if branches == 1 else "branches", _commas(carried[i])])
-	if hover < 0:
-		lines.append("Click a branch to zoom in." if root_id < 0 else "Click a branch to zoom in. Right-click to go back.")
-	elif i == root:
-		lines.append("This is the trunk." if parent < 0 else "Click to step back out to %s." % species[parent]["name"])
-	else:
-		lines.append("Click to make this the trunk.")
-
-	var w := font.get_string_size(s["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
-	for line in lines:
-		w = maxf(w, font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x)
-	w += 26.0
-	var h := 30.0 + 16.0 * lines.size()
-	# Low in the corner: the oldest part of a tree is the barest.
-	var at := Vector2(10, (_ground_y() - 3) * ART - h)
-	draw_rect(Rect2(at, Vector2(w, h)), Color(0.05, 0.06, 0.09, 0.88))
-	draw_rect(Rect2(at, Vector2(4, h)), _leaf(i) if _alive(i) else DEAD)
-	draw_string(font, at + Vector2(14, 20), s["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, INK)
-	for k in lines.size():
-		draw_string(font, at + Vector2(14, 40 + 16 * k), lines[k], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, FAINT)
-
-	# Where we are: the line of descent down to the trunk on show.
-	var trail: Array[String] = []
-	var up := root
-	while up >= 0:
-		trail.push_front(species[up]["name"])
-		up = species[up]["row_parent"]
-	if trail.size() > 1:
-		var text := "  ›  ".join(trail)
-		var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
-		draw_rect(Rect2(size.x - tw - 22, (_ground_y() - 3) * ART - 24, tw + 14, 22), Color(0.05, 0.06, 0.09, 0.88))
-		draw_string(font, Vector2(size.x - tw - 15, (_ground_y() - 3) * ART - 8), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, FAINT)
+		status = "extinct at tick %s after %s ticks, most ever %s" % [_commas(s["extinct"]), _commas(s["extinct"] - s["born"]), _commas(s["peak"])]
+	draw_string(font, Vector2(PAD + 30 + nw, top + 22), status, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, FAINT)
+	var p: int = s["row_parent"]
+	var origin := "Branched from %s at tick %s" % [species[p]["name"], _commas(s["born"])] if p >= 0 else "The first of its line, from tick %s" % _commas(s["born"])
+	var below := ""
+	if clade_count[i] > 1:
+		below = "    %d direct %s, %d species in its clade, %s creatures alive in it" % [kids[i].size(), "branch" if kids[i].size() == 1 else "branches", clade_count[i], _commas(clade_alive[i])]
+	draw_string(font, Vector2(PAD, top + 46), origin + below, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, FAINT)
 
 
 # --- Input -------------------------------------------------------------------------
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
-		var found := _pick(event.position)
-		if found != hover:
-			hover = found
-			queue_redraw()
-	elif event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			var found := _pick(event.position)
-			if found < 0:
-				return
-			if found == root:
-				_zoom_out()
-			else:
-				_zoom_to(found)
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			_zoom_out()
+		mouse = event.position
+		if pressing and (dragged or absf(mouse.y - press_at.y) > 4.0):
+			dragged = true
+			scroll = press_scroll - (mouse.y - press_at.y)
+			_clamp_scroll()
+		hover = _row_at(mouse)
+		queue_redraw()
+	elif event is InputEventMouseButton:
+		_mouse_button(event)
+	elif event is InputEventPanGesture:
+		_scroll_by(event.delta.y * 14.0)
 		accept_event()
+	elif event is InputEventKey and event.pressed:
+		if _key(event.keycode):
+			accept_event()
+
+
+func _mouse_button(event: InputEventMouseButton) -> void:
+	match event.button_index:
+		MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
+			if event.pressed:
+				var f := event.factor if event.factor > 0.0 else 1.0
+				_scroll_by((-1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0) * ROW * 3.0 * f)
+		MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				grab_focus()
+				pressing = true
+				dragged = false
+				press_at = event.position
+				press_scroll = scroll
+				if event.double_click:
+					var i := _row_at(event.position)
+					if i >= 0:
+						_open(species[i]["id"])
+			else:
+				pressing = false
+				if not dragged:
+					_click(event.position)
+		MOUSE_BUTTON_RIGHT:
+			if event.pressed:
+				_back()
+	accept_event()
+
+
+func _click(at: Vector2) -> void:
+	for b: Array in buttons:
+		if (b[0] as Rect2).has_point(at):
+			(b[1] as Callable).call()
+			return
+	var i := _row_at(at)
+	if i < 0:
+		if at.y >= _rows_top() and at.y < _rows_bottom():
+			_select(-1)
+		return
+	if _shown_kids(i) > 0 and _fold_rect(row_of[i]).has_point(at):
+		_fold(i, not collapsed.has(int(species[i]["id"])))
+		return
+	_select(species[i]["id"])
+
+
+## Returns true if the key was used here.
+func _key(code: Key) -> bool:
+	var row := row_of[index_of[selected_id]] if selected_id >= 0 else -1
+	var page := maxi(1, int((_rows_bottom() - _rows_top()) / ROW) - 1)
+	match code:
+		KEY_DOWN: _select_row(row + 1 if row >= 0 else 0)
+		KEY_UP: _select_row(row - 1 if row >= 0 else 0)
+		KEY_PAGEDOWN: _select_row(row + page if row >= 0 else page)
+		KEY_PAGEUP: _select_row(row - page)
+		KEY_HOME: _select_row(0)
+		KEY_END: _select_row(rows.size() - 1)
+		KEY_LEFT:
+			if row < 0:
+				return true
+			var i: int = rows[row]
+			if _shown_kids(i) > 0 and not collapsed.has(int(species[i]["id"])):
+				_fold(i, true)
+			elif species[i]["row_parent"] >= 0 and row_of[species[i]["row_parent"]] >= 0:
+				_select_row(row_of[species[i]["row_parent"]])
+		KEY_RIGHT:
+			if row < 0:
+				return true
+			var i: int = rows[row]
+			if collapsed.has(int(species[i]["id"])):
+				_fold(i, false)
+			elif _shown_kids(i) > 0:
+				_select_row(row + 1)
+		KEY_ENTER, KEY_KP_ENTER:
+			if selected_id >= 0:
+				_open(selected_id)
+		KEY_BACKSPACE: _back()
+		KEY_E: _toggle_extinct()
+		KEY_ESCAPE: close_requested.emit()
+		_: return false
+	return true
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_MOUSE_EXIT and hover >= 0:
+	if what == NOTIFICATION_MOUSE_EXIT:
+		mouse = Vector2(-1, -1)
 		hover = -1
+		pressing = false
 		queue_redraw()
+	elif what == NOTIFICATION_RESIZED:
+		_clamp_scroll()
 
 
-func _zoom_to(i: int) -> void:
-	root_id = species[i]["id"]
-	hover = -1
-	grown = 0.0
+# --- Actions -----------------------------------------------------------------------
+
+func _scroll_by(amount: float) -> void:
+	scroll += amount
+	_clamp_scroll()
+	hover = _row_at(mouse)
+	queue_redraw()
+
+
+func _select(id: int, center := false) -> void:
+	var changed := id != selected_id
+	selected_id = id
+	_light()
+	if changed:
+		selection_changed.emit(id)
+	if id >= 0:
+		_reveal(row_of[index_of[id]], center)
+	queue_redraw()
+
+
+func _select_row(row: int) -> void:
+	if rows.is_empty():
+		return
+	_select(species[rows[clampi(row, 0, rows.size() - 1)]]["id"])
+
+
+## Scroll just enough to show a row, or put it in the middle of the view.
+func _reveal(row: int, center := false) -> void:
+	if row < 0:
+		return
+	var y := row * ROW
+	var view := _rows_bottom() - _rows_top()
+	if center:
+		scroll = y - (view - ROW) * 0.5
+	elif y < scroll:
+		scroll = y
+	elif y + ROW > scroll + view:
+		scroll = y + ROW - view
+	_clamp_scroll()
+
+
+func _fold(i: int, fold: bool) -> void:
+	if fold:
+		collapsed[int(species[i]["id"])] = true
+	else:
+		collapsed.erase(int(species[i]["id"]))
 	_layout()
 	queue_redraw()
 
 
-func _zoom_out() -> void:
-	if root < 0 or species[root]["row_parent"] < 0:
-		return
-	_zoom_to(species[root]["row_parent"])
-
-
-## The branch under the mouse (screen pixels), or -1.
-func _pick(at: Vector2) -> int:
-	if root < 0:
-		return -1
-	var p := at / float(ART)
-	var best := -1
-	var best_d := 4.0   # art pixels: how close counts as "on" a branch
+func _fold_all() -> void:
+	# Fold everything below the top level, so the tree reads as its main limbs.
+	collapsed.clear()
+	var top: int = index_of[focus_id] if focus_id >= 0 else -1
 	for i in species.size():
-		if shown[i] == 0:
-			continue
-		var x := float(_x(i))
-		var top := float(_y(_end_tick(i)))
-		var d := 1e9
-		if i == root:
-			d = _to_segment(p, Vector2(x, top), Vector2(x, _ground_y()))
-		else:
-			var parent: int = species[i]["row_parent"]
-			var elbow := Vector2(_elbow(i))
-			d = minf(_to_segment(p, Vector2(_x(parent), _y(species[i]["born"])), elbow),
-					_to_segment(p, elbow, Vector2(x, top)))
-		d -= _thickness(i) * 0.5
-		if _alive(i):
-			var r := clampi(2 + int(sqrt(float(species[i]["population"])) / 3.0), 2, 10)
-			d = minf(d, p.distance_to(Vector2(x, _y(now) - r / 2)) - r)
-		if d < best_d:
-			best_d = d
-			best = i
-	return best
+		if kids[i].size() > 0 and i != top and (top >= 0 or species[i]["row_parent"] >= 0):
+			collapsed[int(species[i]["id"])] = true
+	_layout()
+	queue_redraw()
 
 
-func _to_segment(p: Vector2, a: Vector2, b: Vector2) -> float:
-	var ab := b - a
-	var t := 0.0 if ab.length_squared() < 1e-6 else clampf((p - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
-	return p.distance_to(a + ab * t)
+func _unfold_all() -> void:
+	collapsed.clear()
+	_layout()
+	if selected_id >= 0:
+		_reveal(row_of[index_of[selected_id]])
+	queue_redraw()
+
+
+func _toggle_extinct() -> void:
+	hide_extinct = not hide_extinct
+	_layout()
+	if selected_id >= 0:
+		_reveal(row_of[index_of[selected_id]])
+	queue_redraw()
+
+
+## Show one branch on its own (-1 = all life).
+func _open(id: int) -> void:
+	focus_id = id
+	if id >= 0:
+		collapsed.erase(id)
+	scroll = 0.0
+	_layout()
+	if selected_id >= 0 and row_of[index_of[selected_id]] >= 0:
+		_reveal(row_of[index_of[selected_id]])
+	hover = _row_at(mouse)
+	queue_redraw()
+
+
+## Step out to the branch this one grew from, keeping it in view.
+func _back() -> void:
+	if focus_id < 0:
+		return
+	var was := focus_id
+	var p: int = species[index_of[focus_id]]["row_parent"]
+	_open(species[p]["id"] if p >= 0 else -1)
+	_select(was, true)
+
+
+## For main.gd: open the tree on one species (by index), as its own branch.
+func _zoom_to(i: int) -> void:
+	_open(species[i]["id"])
+	_select(species[i]["id"])
+
+
+## For main.gd: select a species by name, unfolding and widening the view as
+## needed so it can be seen.
+func select_name(name: String) -> void:
+	for i in species.size():
+		if species[i]["name"] == name:
+			select_id(species[i]["id"])
+			return
+
+
+## For main.gd: select a species by id, the same way. Returns false if the
+## tree does not list it (it never had 10 alive at once).
+func select_id(id: int) -> bool:
+	if not index_of.has(id):
+		return false
+	var i: int = index_of[id]
+	if hide_extinct and lives_on[i] == 0:
+		hide_extinct = false
+	var up: int = species[i]["row_parent"]
+	while up >= 0:
+		collapsed.erase(int(species[up]["id"]))
+		up = species[up]["row_parent"]
+	if focus_id >= 0:
+		var f: int = index_of[focus_id]
+		if i < f or i >= f + clade_count[f]:
+			focus_id = -1
+	_layout()
+	_select(species[i]["id"], true)
+	return true
+
+
+# --- Text --------------------------------------------------------------------------
+
+## A round tick interval giving about eight marks across `span`.
+func _nice_step(span: int) -> int:
+	var raw := maxf(float(span) / 8.0, 1.0)
+	var mag := pow(10.0, floor(log(raw) / log(10.0)))
+	for m: float in [1.0, 2.0, 5.0, 10.0]:
+		if m * mag >= raw:
+			return maxi(int(m * mag), 1)
+	return maxi(int(10.0 * mag), 1)
 
 
 func _short(tick: int) -> String:
 	if tick >= 1000000:
 		return "%.1fM" % (tick / 1000000.0)
 	if tick >= 1000:
-		return "%dk" % (tick / 1000)
+		return "%dk" % (tick / 1000) if tick % 1000 == 0 else "%.1fk" % (tick / 1000.0)
 	return str(tick)
 
 

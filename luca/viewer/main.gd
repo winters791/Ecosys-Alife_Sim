@@ -13,6 +13,7 @@ extends Node3D
 ##   Space                pause / resume           1-5: speed
 ##   Tab                  next overlay             [ ]: brush size
 ##   C                    colour creatures by species      T: tree of life
+##   P                    the followed creature's species, in the tree and its card
 ##
 ## Command line (after `--`):  --size=128 --seed=42 --pop=600
 ##   --shot=PATH --frames=N   save a screenshot after N frames and quit
@@ -83,6 +84,7 @@ var species_box: RichTextLabel
 var tree_panel: PanelContainer
 var tree_view: Control
 var tree_title: Label
+var species_card: PanelContainer   # the species profile beside the tree (species_card.gd)
 var by_species := false
 var inspector_label: Label
 var chronicle_box: RichTextLabel
@@ -376,7 +378,8 @@ func _build_ui() -> void:
 	species_box.bbcode_enabled = true
 	species_box.fit_content = true
 	species_box.scroll_active = false
-	species_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	species_box.mouse_filter = Control.MOUSE_FILTER_PASS
+	species_box.meta_clicked.connect(func(meta: Variant) -> void: _open_species(int(str(meta))))
 	species_box.add_theme_font_size_override("normal_font_size", 13)
 	top.add_child(species_box)
 	var speeds := HBoxContainer.new()
@@ -448,16 +451,27 @@ func _build_ui() -> void:
 	tree_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	tree_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	tree_panel.visible = false
-	(tree_panel.get_theme_stylebox("panel") as StyleBoxFlat).bg_color = Color(0.08, 0.09, 0.11, 0.96)
+	(tree_panel.get_theme_stylebox("panel") as StyleBoxFlat).bg_color = Color(0.065, 0.072, 0.095, 1.0)
 	tree_title = Label.new()
 	tree_title.add_theme_color_override("font_color", Color(0.65, 0.72, 0.80))
 	tree_title.add_theme_font_size_override("font_size", 12)
 	tree_box.add_child(tree_title)
+	# The tree on the left, the selected species' card on the right.
+	var tree_row := HBoxContainer.new()
+	tree_row.add_theme_constant_override("separation", 8)
+	tree_box.add_child(tree_row)
 	tree_view = Control.new()
 	tree_view.set_script(load("res://tree_view.gd"))
 	tree_view.custom_minimum_size = Vector2(900, 570)
+	tree_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tree_view.close_requested.connect(_toggle_tree)
-	tree_box.add_child(tree_view)
+	tree_row.add_child(tree_view)
+	species_card = PanelContainer.new()
+	species_card.set_script(load("res://species_card.gd"))
+	species_card.world = world
+	tree_row.add_child(species_card)
+	tree_view.selection_changed.connect(func(id: int) -> void: species_card.show_species(id))
+	species_card.species_link.connect(_open_species)
 
 	# Bottom right: the inspected creature.
 	var inspector := _panel(Control.PRESET_BOTTOM_RIGHT, Vector2(280, 0))
@@ -465,6 +479,7 @@ func _build_ui() -> void:
 	inspector_label = Label.new()
 	inspector_label.text = "Pick Look, then click a blob."
 	inspector.add_child(inspector_label)
+	_button(inspector, "Its species (P)", _open_inspected_species)
 
 
 func _set_speed(index: int) -> void:
@@ -491,16 +506,47 @@ func _toggle_tree() -> void:
 		return
 	# Nearly the whole window, over the other panels: it is a view of its own.
 	var win := get_viewport().get_visible_rect().size
-	tree_view.custom_minimum_size = Vector2(maxf(win.x - 80.0, 560.0), maxf(win.y - 90.0, 360.0))
+	var card_w: float = species_card.custom_minimum_size.x + 8.0
+	tree_view.custom_minimum_size = Vector2(maxf(win.x - 80.0 - card_w, 480.0), maxf(win.y - 90.0, 360.0))
 	tree_panel.reset_size()
+	tree_panel.position = ((win - tree_panel.size) * 0.5).floor()
 	tree_panel.move_to_front()
 	_update_tree()
 	tree_view.grab_focus()
-	# Open on the species of the creature being followed, if any.
+	# Open on the species of the creature being followed, if any; otherwise on
+	# whatever was picked last, or the most numerous species alive.
 	if inspected_id >= 0:
 		var info: Dictionary = world.inspect_id(inspected_id)
 		if not info.is_empty():
-			tree_view.select_name(info["species"])
+			tree_view.select_id(info["species_id"])
+			species_card.show_species(info["species_id"])
+			return
+	if tree_view.selected_id < 0:
+		var top: Array = world.get_top_species(1)
+		if not top.is_empty():
+			tree_view.select_id(top[0]["id"])
+
+
+## Open the tree and the card on one species (from the card's food web, the
+## species list, or the inspector).
+func _open_species(id: int) -> void:
+	if id < 0:
+		return
+	if not tree_panel.visible:
+		var keep := inspected_id
+		inspected_id = -1      # don't let opening jump to the followed creature's species
+		_toggle_tree()
+		inspected_id = keep
+	tree_view.select_id(id)
+	species_card.show_species(id)   # also for species the tree doesn't list (never 10 alive)
+
+
+func _open_inspected_species() -> void:
+	if inspected_id < 0:
+		return
+	var info: Dictionary = world.inspect_id(inspected_id)
+	if not info.is_empty():
+		_open_species(info["species_id"])
 
 
 func _update_tree() -> void:
@@ -513,6 +559,7 @@ func _update_tree() -> void:
 			alive += 1
 	tree_title.text = "TREE OF LIFE    %d species have taken hold, %d still alive    T or Esc to close" % [tree.size(), alive]
 	tree_view.show_tree(tree, world.get_tick())
+	species_card.refresh()
 
 
 func _set_by_species(on: bool) -> void:
@@ -666,6 +713,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_5: _set_speed(4)
 			KEY_TAB: _set_overlay(overlay + 1)
 			KEY_T: _toggle_tree()
+			KEY_P: _open_inspected_species()
 			KEY_C: (find_child("SpeciesCheck", true, false) as CheckBox).button_pressed = not by_species
 			KEY_MINUS: _zoom(-1, cam_target)
 			KEY_EQUAL: _zoom(1, cam_target)
@@ -818,7 +866,7 @@ func _update_ui() -> void:
 	if frame % 15 == 1:
 		var lines: PackedStringArray = ["Species %d  (%d with 10 or more)" % [world.get_species_count(1), world.get_species_count(10)]]
 		for s: Dictionary in world.get_top_species(6):
-			lines.append("[color=#%s]██[/color] %s  %s" % [_species_color(s["hue"]).to_html(false), s["name"], _commas(s["population"])])
+			lines.append("[url=%d][color=#%s]██[/color] %s[/url]  %s" % [s["id"], _species_color(s["hue"]).to_html(false), s["name"], _commas(s["population"])])
 		species_box.text = "\n".join(lines)
 
 	if frame % 30 == 2:

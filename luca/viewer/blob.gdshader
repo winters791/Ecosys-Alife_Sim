@@ -36,6 +36,7 @@ uniform float extent = 128.0;
 uniform vec3 tint = vec3(1.0);       // day / night
 uniform float poison_test = 0.0;      // testing only: draw every body as if it carried this much poison
 uniform bool by_species = false;     // paint skin in the species colour instead of the pigment
+uniform float stone = 0.0;           // 1 = drawn as a fossil (the species card, for the extinct)
 uniform sampler2D parts_tex : filter_nearest, repeat_disable;
 uniform int parts_width = 1024;
 
@@ -268,5 +269,9 @@ void fragment() {
 
 	// Asleep: the colours drain a little.
 	col = mix(col, vec3(dot(col, vec3(0.3, 0.5, 0.2))) * 0.85, 0.5 * sleep);
+	// A fossil: the body in stone, in three flat tones.
+	float lum = dot(col, vec3(0.3, 0.5, 0.2));
+	vec3 rock = lum < 0.3 ? vec3(0.30, 0.28, 0.25) : (lum < 0.55 ? vec3(0.52, 0.49, 0.44) : vec3(0.70, 0.67, 0.60));
+	col = mix(col, rock, stone);
 	ALBEDO = col * tint;
 }

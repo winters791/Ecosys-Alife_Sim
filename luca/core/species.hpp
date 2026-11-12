@@ -20,7 +20,9 @@
 // (9.3 step 3), e.g. either side of a mountain.
 
 #include <cstdint>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "genome.hpp"
@@ -36,6 +38,34 @@ constexpr float    SPECIES_THRESHOLD   = 1.0f;  // distance at which a newborn l
 constexpr uint32_t SPECIES_ESTABLISHED = 10;    // alive at once before the chronicle takes notice
 constexpr uint32_t NO_SPECIES          = 0xFFFFFFFFu;
 
+// The best single member a species has had, for the record book.
+struct Record {
+    uint32_t value = 0;   // ticks lived, bodies finished off, children
+    uint64_t who = 0;     // its creature id
+    uint64_t tick = 0;    // when it died (the record stands from then)
+};
+
+// What a species' members are like, averaged over the living at a census
+// (every 50 ticks). Kept after extinction as the last word on it.
+struct Habits {
+    uint32_t count = 0;        // members counted; 0 = never censused
+    uint64_t tick = 0;
+    float diet[4] = {};        // share of food from light, the living, the dead, waste (members old enough to say)
+    float movers = 0.0f;       // shares of members, 0..1
+    float sighted = 0.0f;
+    float sleepers = 0.0f;     // dormancy gene above 0.1
+    float armoured = 0.0f;
+    float poisonous = 0.0f;
+    float radius = 0.0f;       // means
+    float age = 0.0f;
+    float speed = 0.0f;        // top speed of its movers
+    float light = 0.0f;        // where they live: noon light, daily mean temperature and height of their cells
+    float temperature = 0.0f;
+    float height = 0.0f;
+    float x = 0.0f, y = 0.0f;  // the centre of their range
+    float spread = 0.0f;       // how far from that centre they live, on average
+};
+
 struct Species {
     uint32_t    id = 0;
     uint32_t    parent = NO_SPECIES;   // the species it branched from; none for LUCA and newcomers
@@ -47,6 +77,14 @@ struct Species {
     uint32_t    peak = 0;              // most alive at once
     bool        established = false;   // ever reached SPECIES_ESTABLISHED
     std::vector<uint32_t> living_daughters;  // branched from this one and not yet extinct (pruned lazily)
+
+    // The record book. Observation only: the viewer reads it, no rule of life does.
+    uint64_t ever_born = 0;
+    uint64_t died_eaten = 0;   // died while something was draining it
+    uint64_t died_other = 0;   // starved, froze or wore out
+    uint64_t kills = 0;        // bodies its members finished off, of any species
+    Record   eldest, deadliest, most_children;   // among members that have died
+    Habits   habits;
 
     bool alive() const { return population > 0; }
 };
@@ -68,6 +106,14 @@ public:
     bool born(uint32_t species);
     bool died(uint32_t species, uint64_t tick);
 
+    // The record book (observation only). note_death() takes the dead body's
+    // life story; note_kill() that one species' member finished off another's.
+    void note_death(uint32_t species, uint64_t who, uint32_t age, uint32_t kills, uint32_t children, bool eaten, uint64_t tick);
+    void note_kill(uint32_t killer, uint32_t victim);
+    Habits& habits(uint32_t species) { return species_[species].habits; }
+    // Kills by (killer species, victim species), for the food web.
+    const std::map<std::pair<uint32_t, uint32_t>, uint64_t>& kill_web() const { return kill_web_; }
+
     const std::vector<Species>& all() const { return species_; }
     const Species& get(uint32_t id) const { return species_[id]; }
     std::size_t living() const { return living_; }
@@ -78,10 +124,15 @@ private:
 
     std::vector<Species> species_;
     std::size_t living_ = 0;
+    std::map<std::pair<uint32_t, uint32_t>, uint64_t> kill_web_;
 };
 
 // A pronounceable name, unique per id for the first 51,200 species ("Velox").
 std::string species_name(uint32_t id);
+
+// A short given name for one creature, from its id ("Tobi"): flavour for
+// record holders. Not unique; species names are.
+std::string creature_name(uint64_t id);
 
 // A part type in plain words: "a mouth", "armour".
 const char* part_noun(PartType t);
