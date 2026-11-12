@@ -135,6 +135,7 @@ std::vector<std::pair<std::string, Genome>> design_templates() {
         g.parts.push_back(part(PartType::Flagellum, 1.2f, PI));
         g.parts.push_back(part(PartType::Absorber, 0.5f, 0.0f));
         g.parts.push_back(part(PartType::Sensor, 0.6f, 0.0f));
+        g.hue = 0.55f;                                                   // teal
         wander(g, -0.3f);
         cast.emplace_back("Swimmer", g); }
     {   Genome g = make_luca();                                          // an armoured box: plates all round but the mouth and tail
@@ -147,6 +148,7 @@ std::vector<std::pair<std::string, Genome>> design_templates() {
         g.parts.push_back(part(PartType::Flagellum, 1.0f, PI));
         g.parts.push_back(part(PartType::Sensor, 0.3f, 0.3f));
         g.bite = 1.0f;
+        g.hue = 0.25f;                                                   // olive
         wander(g, -0.35f);
         cast.emplace_back("Tank", g); }
     {   Genome g = make_luca();                                          // a tentacle monster: mouths out on stalks, armoured body
@@ -156,12 +158,14 @@ std::vector<std::pair<std::string, Genome>> design_templates() {
         g.parts.push_back(part(PartType::Armour, 2.0f, 0.0f));
         g.parts.push_back(part(PartType::Sensor, 0.8f, 0.0f));
         g.pigment = 0.6f;
+        g.hue = 0.78f;                                                   // dusty mauve
         cast.emplace_back("Tentacles", g); }
     {   Genome g = make_luca();                                          // a frond: sun patches held up on stalks
         g.parts[0].stalk = 0.7f;
         g.parts.push_back(part(PartType::Photo, 0.8f, PI * 0.66f, 0.9f));
         g.parts.push_back(part(PartType::Photo, 0.8f, -PI * 0.66f, 0.5f));
         g.pigment = 0.15f;
+        g.hue = 0.36f;                                                   // pale green
         cast.emplace_back("Frond", g); }
     {   Genome g = make_luca();                                          // a walker with legs along both sides
         g.elongation = 0.5f;
@@ -169,6 +173,7 @@ std::vector<std::pair<std::string, Genome>> design_templates() {
         g.parts.push_back(part(PartType::Legs, 1.0f, PI * 0.7f));
         g.parts.push_back(part(PartType::Sensor, 1.0f, 0.0f));
         g.parts.push_back(part(PartType::Absorber, 0.4f, 0.0f));
+        g.hue = 0.66f;                                                   // blue
         wander(g, -0.42f);
         cast.emplace_back("Walker", g); }
     {   Genome g = make_luca();                                          // fat and poisonous on one side
@@ -176,6 +181,7 @@ std::vector<std::pair<std::string, Genome>> design_templates() {
         g.parts.push_back(part(PartType::Storage, 1.5f, 0.0f));
         g.pigment = 0.7f;
         g.squareness = 0.5f;
+        g.hue = 0.95f;                                                   // muted rose
         cast.emplace_back("Puffball", g); }
     {   Genome g = make_luca();                                          // a hunter that feels its way: stops on prey, runs when bitten
         g.parts.clear();
@@ -185,6 +191,7 @@ std::vector<std::pair<std::string, Genome>> design_templates() {
         g.parts.push_back(part(PartType::Sensor, 0.8f, 0.0f));
         g.bite = 0.8f;
         g.pigment = 0.55f;
+        g.hue = 0.02f;                                                   // rust
         g.brain.connect(input_node(IN_BIAS), output_node(OUT_BIOMASS), 1.5f);
         g.brain.connect(input_node(IN_BIAS), output_node(OUT_INERTIA), 1.0f);
         g.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.2f);

@@ -23,6 +23,7 @@ Genome make_luca() {
     Genome g;
     g.core_radius       = 1.0f;
     g.pigment           = 0.3f;
+    g.hue               = 0.09f;   // tan
     g.thermal_optimum   = 20.0f;
     g.thermal_tolerance = 10.0f;
     g.repro_threshold   = 600.0f;  // a child's body costs 244; this leaves both enough to last a night
@@ -106,6 +107,7 @@ void clamp_genome(Genome& g) {
     g.core_radius = std::clamp(g.core_radius, MIN_RADIUS, MAX_RADIUS);
     for (float& s : g.shape) s = std::clamp(s, -1.0f, 1.0f);
     g.pigment           = std::clamp(g.pigment, 0.0f, 1.0f);
+    g.hue               = std::isfinite(g.hue) ? g.hue - std::floor(g.hue) : 0.09f;   // a wheel: wraps round
     g.thermal_optimum   = std::clamp(g.thermal_optimum, -60.0f, 80.0f);
     g.thermal_tolerance = std::clamp(g.thermal_tolerance, MIN_TOLERANCE, MAX_TOLERANCE);
     g.repro_threshold   = std::clamp(g.repro_threshold, MIN_THRESHOLD, MAX_THRESHOLD);

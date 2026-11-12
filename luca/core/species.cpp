@@ -13,6 +13,7 @@ namespace {
 // respect alone comes to roughly 1.
 constexpr float W_RADIUS    = 2.0f;   // per e-fold of body size (x1.65 radius alone = 1)
 constexpr float W_PIGMENT   = 2.0f;   // pale to dark is 0..1
+constexpr float W_HUE       = 1.0f;   // per turn of the colour wheel (the most apart two can be is half a turn)
 constexpr float W_OPTIMUM   = 0.1f;   // per degree: 10 degrees apart = 1
 constexpr float W_TOLERANCE = 0.05f;  // per degree
 constexpr float W_THRESHOLD = 1.0f;   // per e-fold of reproduction threshold
@@ -63,6 +64,11 @@ float genome_distance(const Genome& a, const Genome& b) {
 
     term(W_RADIUS,    std::log(a.core_radius / b.core_radius));
     term(W_PIGMENT,   a.pigment - b.pigment);
+    {
+        float dh = std::fabs(a.hue - b.hue);
+        dh -= std::floor(dh);
+        term(W_HUE, std::min(dh, 1.0f - dh));
+    }
     term(W_OPTIMUM,   a.thermal_optimum - b.thermal_optimum);
     term(W_TOLERANCE, a.thermal_tolerance - b.thermal_tolerance);
     term(W_THRESHOLD, std::log(a.repro_threshold / b.repro_threshold));
@@ -297,6 +303,16 @@ const char* part_noun(PartType t) {
     return i >= 0 && i < NUM_TYPES ? noun[i] : "something";
 }
 
+namespace {
+// A rough name for a skin hue (colour.hpp), for the chronicle.
+const char* colour_word(float hue) {
+    static const char* const words[12] = {"redder", "more orange", "yellower", "more olive", "greener", "greener",
+                                          "more teal", "bluer", "bluer", "more violet", "more purple", "pinker"};
+    const float h = hue - std::floor(hue);
+    return words[std::clamp(static_cast<int>(h * 12.0f + 0.5f) % 12, 0, 11)];
+}
+}  // namespace
+
 std::string describe_difference(const Genome& child, const Genome& parent) {
     static const char* const lost[NUM_TYPES] = {"its sun patch", "its mouth", "its tail", "its legs",
                                                 "its eyes", "its armour", "its fat store", "its poison"};
@@ -315,6 +331,9 @@ std::string describe_difference(const Genome& child, const Genome& parent) {
     const float dp = child.pigment - parent.pigment;
     if (dp > 0.15f) return "is darker";
     if (dp < -0.15f) return "is paler";
+    float dh = child.hue - parent.hue;
+    dh -= std::floor(dh + 0.5f);   // shortest way round the wheel
+    if (std::fabs(dh) > 0.08f) return std::string("is ") + colour_word(child.hue);
     return {};
 }
 

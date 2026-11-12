@@ -7,7 +7,7 @@
 // carries data instead (see LucaWorld::get_instance_buffer):
 //   MODEL_MATRIX[0].xyz = (core radius, elongation, squareness)
 //   MODEL_MATRIX[1].xyz = (storage, sleep, number of parts)
-//   MODEL_MATRIX[2].xyz = (unused, heading x, heading z)
+//   MODEL_MATRIX[2].xyz = (skin hue, heading x, heading z)
 //   MODEL_MATRIX[3].xyz = position (x, z); y carries the species hue, 0..1
 //   COLOR               = (pigment, photo cover, energy fullness, speed)
 //   INSTANCE_CUSTOM     = (phase, lump gene 0, lump gene 1, poison)
@@ -18,8 +18,11 @@
 // three times as long as wide, and up to a box with rounded corners. Each part
 // is drawn where it sits on the outline (its angle from the front, which is
 // the way the creature faces), and out on a stalk if it has one:
-//   photo      green pixels over the arc of skin it covers; a frond on a stalk
+//   photo      red leaf pixels over the arc of skin it covers; a frond on a stalk
 //   absorber   a dark red mouth (teeth when big); a toothed ring on a tentacle
+// Skin is coloured by the hue and pigment genes exactly as core/colour.hpp
+// works it out (skin_colour), since hunters sense bodies by that colour
+// against the ground. Mouths and leaves are always red, whatever the skin.
 //   flagellum  a wiggling tail
 //   legs       a pair of stubs, mirrored on both sides, that step
 //   sensor     an eye (two when large); on an eyestalk if stalked
@@ -54,6 +57,7 @@ varying flat vec4 extra;             // storage, sleep, part count, poison
 varying flat vec2 lumps;
 varying flat vec2 heading;
 varying flat float species_hue;
+varying flat float skin_hue;
 varying flat int first_texel;
 
 float hash(vec2 p) {
@@ -73,6 +77,7 @@ void vertex() {
 
 	traits = COLOR;
 	species_hue = origin.y;
+	skin_hue = c.x;
 	lumps = clamp(INSTANCE_CUSTOM.yz, -1.0, 1.0);
 	// Fat is visible: a full blob is plump, a starving one has shrunk.
 	float radius = max(a.x, 0.05) * px_per_radius * mix(0.85, 1.1, traits.b);
@@ -129,14 +134,18 @@ void fragment() {
 	float d = length(q);
 	float edge = rho > 1e-3 ? d * (1.0 / rho - 1.0) : r;   // pixels inside the outline (negative outside)
 
-	// Pigment: pale cream to dark brown.
-	vec3 skin = mix(vec3(0.93, 0.84, 0.66), vec3(0.20, 0.13, 0.10), traits.r);
+	// Skin: a hue from the hue gene, as bright as the pigment allows
+	// (core/colour.hpp skin_colour: chroma 0.28, pulled 40% towards tan so it stays
+	// earthy, brightness 0.92 pale to 0.20 dark).
+	vec3 hk = clamp(abs(fract(skin_hue + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+	vec3 skin = mix(mix(vec3(1.0), hk, 0.28), vec3(1.0, 0.82, 0.60), 0.40) * mix(0.92, 0.20, traits.r);
 	if (by_species) {
-		vec3 hk = clamp(abs(fract(species_hue + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
-		skin = mix(vec3(1.0), hk, 0.7) * 0.92;
+		vec3 sk = clamp(abs(fract(species_hue + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+		skin = mix(vec3(1.0), sk, 0.7) * 0.92;
 	}
 	vec3 rim = skin * 0.55;
-	vec3 leaf = by_species ? skin * 0.78 : mix(vec3(0.16, 0.45, 0.16), vec3(0.36, 0.72, 0.22), traits.b);
+	// Leaves are always red: scarlet when the body is full, deep crimson when hungry.
+	vec3 leaf = mix(vec3(0.76, 0.14, 0.14), vec3(0.96, 0.30, 0.22), traits.b);
 	vec3 mouth_col = vec3(0.55, 0.08, 0.10);
 	vec3 tooth = vec3(0.96, 0.94, 0.88);
 

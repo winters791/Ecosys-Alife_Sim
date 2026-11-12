@@ -917,6 +917,7 @@ func _show_creature(info: Dictionary) -> void:
 		"Enzymes: %s" % (", ".join(info["enzymes"]) if info["enzymes"].size() > 0 else "none"),
 		"Holds %s   body of %s" % [info["store_chemicals"] if info["store_chemicals"] != "" else "nothing", info["body_chemicals"]],
 		"Radius %.2f   mass %.2f   %s" % [info["radius"], info["mass"], _shape_words(info)],
+		"Skin %s, %s   %s" % [_skin_hue_word(info["hue"]), "pale" if info["pigment"] < 0.3 else ("dark" if info["pigment"] > 0.7 else "mid-toned"), "blends into the ground here" if info["shows"] < 0.5 else ("stands out a little here" if info["shows"] < 0.85 else "stands out here")],
 		"Upkeep %.2f / tick   speed %.2f" % [info["upkeep"], info["max_speed"]],
 		("Young land touching it" if info["throw_range"] < 0.05 else "Flings its young up to %.1f cells" % info["throw_range"]) + ", born at %d%% of its mass" % roundi(100.0 * info["birth_size"]),
 		"Fully grown" if info["grown"] >= 1.0 else "Still growing: %d%% of its adult mass, can't breed yet" % roundi(100.0 * info["grown"]),
@@ -1191,3 +1192,9 @@ func _run_demo() -> void:
 		40: world.cast_power(LucaWorld.POWER_TERRAIN, c * 0.5, c * 1.3, extent * 0.12, -30.0, 0, false)
 		60: world.cast_power(LucaWorld.POWER_CLIMATE, 0.0, 0.0, 0.0, -9.0, 400, false)
 		80: world.cast_power(LucaWorld.POWER_HEAT, c * 1.5, c * 0.5, extent * 0.1, 15.0, 0, false)
+
+
+# A rough name for a skin hue (core/colour.hpp keeps every hue earthy).
+func _skin_hue_word(v: float) -> String:
+	var words := ["rust", "tan", "ochre", "olive", "sage", "sage", "grey-green", "slate", "slate", "dusky", "mauve", "rose"]
+	return words[int(round(fposmod(v, 1.0) * 12.0)) % 12]

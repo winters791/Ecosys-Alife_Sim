@@ -69,6 +69,7 @@ Simulation::Simulation(const SimConfig& cfg)
     cell_corpse_demand_.assign(cells, 0.0f);
     cell_uptake_demand_.assign(cells * NCHEM, 0.0f);
     biomass_.assign(cells, 0.0f);
+    seen_.assign(cells, 0.0f);
 
     // Starting soil: patches of rich ground and stretches of poor ground,
     // scaled so the average is exactly nutrient_mean.
@@ -132,6 +133,16 @@ uint64_t Simulation::add_creature(float x, float y, float energy, const Genome& 
     admit(world_.clamp_coord(x), world_.clamp_coord(y), pure(CHEM_D, std::clamp(energy, 0.0f, p.energy_capacity) / TOP_LEVEL),
           pure(CHEM_D, p.mass), next_lineage_++, sp, 0, std::move(g), p);
     return id;
+}
+
+Rgb Simulation::ground_colour_at(int cell) const {
+    return ground_colour(world_.height(cell), world_.mean_temperature(cell), soil_.nutrient[cell], world_.vent(cell));
+}
+
+float Simulation::shows(std::size_t i) const {
+    const Rgb ground = ground_colour_at(world_.cell_index(c_.x[i], c_.y[i]));
+    const float moving = std::min(c_.moved[i] * (1.0f / SOCIAL_FAST), 1.0f);
+    return std::max(visibility(c_.pheno[i].skin, ground), moving);
 }
 
 double Simulation::stored_energy() const {
@@ -199,7 +210,7 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
             dy += gy * k;
         };
         lean(world_.lights(),       0.02f, w[OUT_LIGHT]);
-        lean(biomass_,              0.5f,  w[OUT_BIOMASS]);
+        lean(seen_,                 0.5f,  w[OUT_BIOMASS]);   // the living, as they show against the ground
         lean(soil_.corpse_energy,   1.0f,  w[OUT_CORPSE]);
         lean(soil_.nutrient,        0.2f,  w[OUT_NUTRIENT]);
         // Comfort: uphill in temperature when too cold, downhill when too hot.
@@ -226,8 +237,8 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
                     const float bigger = std::clamp(q.radius / p.radius - 1.0f, -1.0f, 1.0f);
                     const float moving = std::min(c_.moved[j] * (1.0f / SOCIAL_FAST), 1.0f);
                     const float score = (c_.species[j] == mine ? w[OUT_KIN] : 0.0f) + w[OUT_BIGGER] * bigger + w[OUT_MOVING] * moving;
-                    // Nearer and heavier bodies count for more.
-                    const float k = score * q.mass / (dist * (1.0f + dist));
+                    // Nearer, heavier and plainer-showing bodies count for more.
+                    const float k = score * shows_[j] * q.mass / (dist * (1.0f + dist));
                     sx += ox * k;
                     sy += oy * k;
                 }
@@ -328,10 +339,17 @@ void Simulation::step() {
     poisoned_.assign(n, 0.0f);
 
     // --- Phase 0: bin creatures into cells; living mass per cell --------------
+    // Camouflage (colour.hpp): each body shows against its ground by the
+    // contrast between its skin and the ground's colour; moving gives it away.
     std::fill(biomass_.begin(), biomass_.end(), 0.0f);
+    std::fill(seen_.begin(), seen_.end(), 0.0f);
+    shows_.resize(n);
     for (std::size_t i = 0; i < n; ++i) {
-        cell_of_[i] = world_.cell_index(c_.x[i], c_.y[i]);
-        biomass_[cell_of_[i]] += c_.pheno[i].mass;
+        const int cell = world_.cell_index(c_.x[i], c_.y[i]);
+        cell_of_[i] = cell;
+        shows_[i] = shows(i);
+        biomass_[cell] += c_.pheno[i].mass;
+        seen_[cell] += c_.pheno[i].mass * shows_[i];
     }
     grid_.build(cell_of_, world_.num_cells());
 

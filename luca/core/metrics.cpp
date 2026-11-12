@@ -205,7 +205,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
     if (!f) return false;
     f << "x,y,energy,age,lineage,generation,core_radius,photo,parts,pigment,"
          "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,neurons,links,dormancy,burns,fed_waste,"
-         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair,fed_vent,birth_size,grown,enzymes\n";
+         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair,fed_vent,birth_size,grown,hue,enzymes\n";
     const Creatures& c = sim.creatures();
     for (std::size_t i = 0; i < c.size(); ++i) {
         const Genome& g = c.genome[i];
@@ -216,7 +216,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
         for (int t = 1; t < static_cast<int>(PartType::Count); ++t) f << ',' << c.pheno[i].part_total[t];
         f << ',' << c.pheno[i].max_speed << ',' << c.fed_light[i] << ',' << c.fed_living[i] << ',' << c.fed_dead[i] << ',' << c.species[i] << ',' << g.seed_throw << ',' << g.bite << ','
           << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << static_cast<int>(c.pheno[i].burns) << ',' << c.fed_waste[i] << ','
-          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << ',' << c.fed_vent[i] << ',' << g.birth_size << ',' << c.pheno[i].grown << ',';
+          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << ',' << c.fed_vent[i] << ',' << g.birth_size << ',' << c.pheno[i].grown << ',' << g.hue << ',';
         for (std::size_t k = 0; k < g.enzymes.size(); ++k) f << (k ? " " : "") << enzyme_words(g.enzymes[k]);
         f << '\n';
     }

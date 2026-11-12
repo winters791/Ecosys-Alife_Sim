@@ -274,6 +274,7 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
 
     // --- 6. Heat: absorbed over skin, spread over body mass ------------------
     p.heat_absorption = pigment * p.surface_area / p.mass;
+    p.skin = skin_colour(g.hue, pigment);
     // LUCA: 0.3 × 1 / 1.1 ≈ 0.27.
     // Heat is held in bulk and lost through skin: bigger and fatter bodies lag the air.
     p.heat_follow = 1.0f / (1.0f + HEAT_LAG * p.mass / p.surface_area);

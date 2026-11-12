@@ -366,10 +366,11 @@ func _build_body_tools(parent: VBoxContainer) -> VBoxContainer:
 	_bind_slider(box, "Size", layout["min_radius"], 3.0, 0.02, "radius", func(v: float) -> String: return "%.2f" % v)
 	_bind_slider(box, "Length", 0.0, 1.0, 0.01, "elongation", func(v: float) -> String: return "%.1f × as long as wide" % (1.0 + 2.0 * v))
 	_bind_slider(box, "Boxiness", 0.0, 1.0, 0.01, "squareness", func(v: float) -> String: return "%d%%" % roundi(v * 100.0))
-	_bind_slider(box, "Skin colour", 0.0, 1.0, 0.01, "pigment", func(v: float) -> String: return "pale" if v < 0.3 else ("dark" if v > 0.7 else "tan"))
+	_bind_slider(box, "Skin darkness", 0.0, 1.0, 0.01, "pigment", func(v: float) -> String: return "pale" if v < 0.3 else ("dark" if v > 0.7 else "tan"))
+	_bind_slider(box, "Skin hue", 0.0, 1.0, 0.01, "hue", func(v: float) -> String: return _hue_word(v))
 	_bind_shape_slider(box, "Lumps", 0)
 	_bind_shape_slider(box, "Ripples", 1)
-	box.add_child(_note("Dark skin warms in the sun (good in the cold). Length and boxiness add skin: more room for sun patches, more heat lost. A long body moves more cheaply."))
+	box.add_child(_note("Dark skin warms in the sun (good in the cold). Skin that matches the ground is harder for others to sense; moving gives it away. Length and boxiness add skin: more room for sun patches, more heat lost. A long body moves more cheaply."))
 	return box
 
 
@@ -1562,3 +1563,9 @@ func _input(event: InputEvent) -> void:
 		handled = false
 	if handled:
 		get_viewport().set_input_as_handled()
+
+
+# A rough name for a skin hue (core/colour.hpp keeps every hue earthy).
+func _hue_word(v: float) -> String:
+	var words := ["rust", "tan", "ochre", "olive", "sage", "sage", "grey-green", "slate", "slate", "dusky", "mauve", "rose"]
+	return words[int(round(fposmod(v, 1.0) * 12.0)) % 12]

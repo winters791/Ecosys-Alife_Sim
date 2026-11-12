@@ -85,6 +85,7 @@ void write_genome(std::ostringstream& o, const Genome& g, const char* sep) {
     for (float s : g.shape) o << ' ' << num(s);
     o << sep;
     o << "pigment " << num(g.pigment) << sep;
+    o << "hue " << num(g.hue) << sep;
     o << "thermal " << num(g.thermal_optimum) << ' ' << num(g.thermal_tolerance) << sep;
     o << "repro " << num(g.repro_threshold) << ' ' << num(g.offspring_share) << sep;
     o << "birth " << num(g.birth_size) << sep;
@@ -185,6 +186,7 @@ bool read_creature_file(const std::string& text, CreatureFile& out, std::string&
         bool ok = true;
         if      (key == "radius")     ok = floats({&g->core_radius});
         else if (key == "pigment")    ok = floats({&g->pigment});
+        else if (key == "hue")        ok = floats({&g->hue});
         else if (key == "thermal")    ok = floats({&g->thermal_optimum, &g->thermal_tolerance});
         else if (key == "repro")      ok = floats({&g->repro_threshold, &g->offspring_share});
         else if (key == "birth")      ok = floats({&g->birth_size});

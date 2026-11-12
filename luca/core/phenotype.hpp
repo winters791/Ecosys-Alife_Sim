@@ -5,6 +5,7 @@
 //
 // You own this struct too — add fields as your rules need them.
 
+#include "colour.hpp"
 #include "genome.hpp"
 
 namespace luca {
@@ -26,6 +27,7 @@ struct Phenotype {
     float thermal_optimum   = 0.0f;
     float thermal_tolerance = 0.0f;
     float heat_absorption   = 0.0f;  // from pigment
+    Rgb   skin;                      // skin colour, from hue and pigment (colour.hpp): how it shows against the ground
     float heat_follow       = 1.0f;  // fraction of the gap to the air its body temperature closes per tick
     float grown             = 1.0f;  // fraction of adult mass it has built so far; 1 = adult, able to breed
     float birth_size        = 1.0f;  // fraction of adult mass its children are born at

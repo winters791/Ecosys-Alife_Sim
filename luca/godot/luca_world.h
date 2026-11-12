@@ -98,7 +98,7 @@ public:
     // reads them back out of MODEL_MATRIX):
     //   basis x = (core radius as grown so far, elongation, squareness)
     //   basis y = (storage, sleep, number of parts)
-    //   basis z = (unused, heading x, heading z)
+    //   basis z = (skin hue 0..1, heading x, heading z)
     //   origin  = (x, species hue 0..1, z)   the shader ignores height, so y is free
     //   colour  = (pigment, photo cover, energy fullness, speed)
     //   custom  = (phase, lump gene 0, lump gene 1, poison)

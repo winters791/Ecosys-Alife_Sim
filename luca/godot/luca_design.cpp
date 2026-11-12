@@ -29,6 +29,7 @@ Dictionary to_dict(const luca::Genome& g) {
     Dictionary d;
     d["radius"] = g.core_radius;
     d["pigment"] = g.pigment;
+    d["hue"] = g.hue;
     d["thermal_optimum"] = g.thermal_optimum;
     d["thermal_tolerance"] = g.thermal_tolerance;
     d["repro_threshold"] = g.repro_threshold;
@@ -90,6 +91,7 @@ luca::Genome from_dict(const Dictionary& d) {
     luca::Genome g = luca::make_luca();
     g.core_radius = num(d, "radius", g.core_radius);
     g.pigment = num(d, "pigment", g.pigment);
+    g.hue = num(d, "hue", g.hue);
     g.thermal_optimum = num(d, "thermal_optimum", g.thermal_optimum);
     g.thermal_tolerance = num(d, "thermal_tolerance", g.thermal_tolerance);
     g.repro_threshold = num(d, "repro_threshold", g.repro_threshold);

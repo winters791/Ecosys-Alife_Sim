@@ -123,6 +123,10 @@ public:
     const PowerSystem& powers() const { return powers_; }
     const Soil&      soil() const { return soil_; }
     const std::vector<float>& biomass() const { return biomass_; }  // living mass per cell, last tick
+    // Camouflage (colour.hpp): the colour of a cell's ground, and how plainly
+    // creature i shows against the ground it is on (VISIBLE_MIN..1; moving gives it away).
+    Rgb   ground_colour_at(int cell) const;
+    float shows(std::size_t i) const;
     const Census&    census() const { return census_; }             // refreshed every 50 ticks
     const SpeciesRegistry& species() const { return species_; }     // every species there has ever been
 
@@ -238,6 +242,8 @@ private:
     std::vector<float> cost_upkeep_, cost_thermal_, cost_move_;
     std::vector<float> new_x_, new_y_, new_hx_, new_hy_;
     std::vector<float> biomass_;             // per cell
+    std::vector<float> seen_;                // per cell: living mass as others sense it, each body weighed by how it shows (colour.hpp)
+    std::vector<float> shows_;               // per creature: how plainly it shows against its ground, VISIBLE_MIN..1
     std::vector<float> wash_;                // per cell: matter on its way downhill
     std::vector<float> cell_corpse_demand_;  // per cell
     std::vector<float> corpse_want_, corpse_gain_;

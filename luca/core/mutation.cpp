@@ -29,6 +29,7 @@ namespace luca {
 namespace {
 
 constexpr float P_GENE      = 0.20f;   // chance each ordinary gene is nudged
+constexpr float HUE_STEP    = 0.08f;   // sd of a nudge to skin hue, in turns of the colour wheel
 constexpr float P_ADD       = 0.030f;
 constexpr float P_DELETE    = 0.020f;
 constexpr float P_DUPLICATE = 0.020f;
@@ -134,6 +135,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
     // --- Tweaks ---------------------------------------------------------------
     if (chance(P_GENE)) scale(g.core_radius, 0.06f, rng);
     if (chance(P_GENE)) g.pigment += rng.normal() * 0.05f;
+    if (chance(P_GENE)) g.hue += rng.normal() * HUE_STEP;   // wraps round in clamp_genome
     if (chance(P_GENE)) g.thermal_optimum += rng.normal() * 1.0f;
     if (chance(P_GENE)) g.thermal_tolerance += rng.normal() * 0.6f;
     if (chance(P_GENE)) scale(g.repro_threshold, 0.08f, rng);

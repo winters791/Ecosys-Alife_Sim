@@ -34,7 +34,7 @@ inline void write_sprite(float* f, const luca::Genome& g, const luca::Phenotype&
     auto part = [&](luca::PartType t) { return p.part_total[static_cast<int>(t)]; };
     // Rows of the 3x4 transform (row-major: f[0], f[4], f[8] are basis x ...).
     // f[0] is the radius as grown so far, so the young are drawn small.
-    f[0] = p.radius;        f[1] = part(luca::PartType::Storage);   f[2] = 0.0f;   f[3] = x;
+    f[0] = p.radius;        f[1] = part(luca::PartType::Storage);   f[2] = g.hue;  f[3] = x;
     f[4] = g.elongation;    f[5] = sleep;                           f[6] = hx;     f[7] = hue;
     f[8] = g.squareness;    f[9] = static_cast<float>(g.parts.size()); f[10] = hy; f[11] = y;
     // Colour channel: raw traits. The shader decides how they look.

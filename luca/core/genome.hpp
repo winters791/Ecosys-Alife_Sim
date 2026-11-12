@@ -158,6 +158,7 @@ struct Genome {
     float core_radius = 1.0f;
     float shape[8]    = {};      // lumps / elongation, consumed by the shader
     float pigment     = 0.3f;    // 0 = pale, 1 = dark
+    float hue         = 0.09f;   // skin colour on the wheel, 0..1 and round again (0 red, 1/3 green, 2/3 blue); colour.hpp
     float thermal_optimum   = 20.0f;  // °C
     float thermal_tolerance = 10.0f;  // ± °C of comfortable range
     float repro_threshold   = 10.0f;  // energy needed before dividing

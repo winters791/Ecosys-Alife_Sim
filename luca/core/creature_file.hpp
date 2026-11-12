@@ -14,6 +14,7 @@
 //   body
 //   radius 1
 //   pigment 0.3
+//   hue 0.09                  (optional; skin colour on the wheel, colour.hpp)
 //   thermal 20 10            optimum, tolerance (°C)
 //   repro 600 0.5            threshold, offspring share
 //   birth 0.5

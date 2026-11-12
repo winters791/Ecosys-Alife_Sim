@@ -420,6 +420,8 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["grown"] = p.grown;
     d["birth_size"] = p.birth_size;
     d["pigment"] = g.pigment;
+    d["hue"] = g.hue;
+    d["shows"] = sim_->shows(who);
     d["mass"] = p.mass;
     d["upkeep"] = p.upkeep;
     d["light_capture"] = p.light_capture;
@@ -616,6 +618,7 @@ Dictionary LucaWorld::get_species_profile(int64_t species_id) const {
     b["from"] = from_living ? "eldest" : "founder";
     b["radius"] = g.core_radius;
     b["pigment"] = g.pigment;
+    b["hue"] = g.hue;
     b["elongation"] = g.elongation;
     b["squareness"] = g.squareness;
     b["thermal_optimum"] = g.thermal_optimum;
