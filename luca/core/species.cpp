@@ -180,7 +180,7 @@ uint32_t SpeciesRegistry::classify(uint32_t parent_species, const Genome& child,
     return best != NO_SPECIES ? best : found(parent_species, child, tick, {});
 }
 
-uint32_t SpeciesRegistry::classify_newcomer(const Genome& g, uint64_t tick) {
+uint32_t SpeciesRegistry::classify_newcomer(const Genome& g, uint64_t tick, std::string name) {
     uint32_t best = NO_SPECIES;
     float best_d = SPECIES_THRESHOLD;
     for (const Species& s : species_) {
@@ -191,7 +191,7 @@ uint32_t SpeciesRegistry::classify_newcomer(const Genome& g, uint64_t tick) {
             best = s.id;
         }
     }
-    return best != NO_SPECIES ? best : found_root(g, tick);
+    return best != NO_SPECIES ? best : found_root(g, tick, std::move(name));
 }
 
 bool SpeciesRegistry::born(uint32_t species) {

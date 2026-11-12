@@ -38,6 +38,8 @@ add_library(luca_core STATIC
   core/world.cpp
   core/powers.cpp
   core/events.cpp
+  core/creature_file.cpp
+  core/design.cpp
   core/sim.cpp
   core/metrics.cpp
 )
@@ -78,6 +80,7 @@ if(LUCA_BUILD_GODOT)
   add_library(luca_godot SHARED
     godot/register_types.cpp
     godot/luca_world.cpp
+    godot/luca_design.cpp
   )
   target_link_libraries(luca_godot PRIVATE luca_core godot-cpp)
   target_compile_options(luca_godot PRIVATE ${LUCA_WARNINGS})

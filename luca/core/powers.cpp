@@ -7,6 +7,8 @@
 #include <ostream>
 #include <sstream>
 
+#include "creature_file.hpp"
+
 namespace luca {
 
 namespace {
@@ -16,6 +18,8 @@ namespace {
 constexpr uint64_t RAMP_STEP = 8;
 
 bool is_brush(PowerKind k) { return k == PowerKind::Terrain || k == PowerKind::Heat || k == PowerKind::Vent; }
+// More bodies than this in one meteor is a typo, not a power.
+constexpr float MAX_SEED_COUNT = 500.0f;
 
 const char* kind_name(PowerKind k) {
     switch (k) {
@@ -24,6 +28,7 @@ const char* kind_name(PowerKind k) {
         case PowerKind::Sun:     return "sun";
         case PowerKind::Climate: return "climate";
         case PowerKind::Vent:    return "vent";
+        case PowerKind::Seed:    return "seed";
     }
     return "?";
 }
@@ -86,6 +91,8 @@ std::string describe_start(const PowerCommand& c, const World& w) {
                 return std::string(up ? "The world warms" : "The world cools") + " by " + num(c.amount) + " °C.";
             return std::string(up ? "The world begins to warm" : "The world begins to cool") +
                    " by " + num(c.amount) + " °C" + over + ".";
+        case PowerKind::Seed:
+            return {};   // the Simulation says where it lands and what came with it
     }
     return {};
 }
@@ -109,6 +116,8 @@ std::string describe_end(const PowerCommand& c, const World& w) {
             return "The climate settles " + num(o) + " °C " + (o >= 0.0f ? "above" : "below") +
                    " where it began.";
         }
+        case PowerKind::Seed:
+            return {};
     }
     return {};
 }
@@ -131,6 +140,7 @@ void PowerSystem::apply(const PowerCommand& cmd, float amount, World& world) {
         case PowerKind::Vent:    world.brush(BrushField::Vent, cmd.x, cmd.y, cmd.radius, amount); break;
         case PowerKind::Sun:     world.add_sun(amount); break;
         case PowerKind::Climate: world.add_climate(amount); break;
+        case PowerKind::Seed:    break;   // landed by the Simulation (take_arrivals)
     }
 }
 
@@ -141,6 +151,10 @@ void PowerSystem::update(uint64_t tick, World& world, Chronicle& chronicle) {
     std::size_t due = 0;
     while (due < pending_.size() && pending_[due].tick <= tick) {
         const PowerCommand& cmd = pending_[due++];
+        if (cmd.kind == PowerKind::Seed) {
+            arrivals_.push_back(cmd);
+            continue;
+        }
         if (!cmd.quiet) chronicle.add(tick, describe_start(cmd, world));
         active_.push_back({cmd, tick, 0.0f});
     }
@@ -198,7 +212,25 @@ bool parse_power_script(std::istream& in, std::vector<PowerCommand>& out, std::s
         else if (kind == "sun")     cmd.kind = PowerKind::Sun;
         else if (kind == "climate") cmd.kind = PowerKind::Climate;
         else if (kind == "vent")    cmd.kind = PowerKind::Vent;
-        else return fail("unknown power '" + kind + "' (terrain, heat, vent, sun, climate)");
+        else if (kind == "seed")    cmd.kind = PowerKind::Seed;
+        else return fail("unknown power '" + kind + "' (terrain, heat, vent, sun, climate, seed)");
+
+        if (cmd.kind == PowerKind::Seed) {
+            // The cargo runs to the end of the line, so read it from the raw
+            // line (a creature file never holds '#': clean_text drops it).
+            if (!(ss >> cmd.x >> cmd.y >> cmd.radius >> cmd.amount))
+                return fail("seed needs: x y radius count creature");
+            if (!std::isfinite(cmd.x) || !std::isfinite(cmd.y) || !std::isfinite(cmd.radius) || cmd.radius < 0.0f)
+                return fail("bad seed position or radius");
+            if (!(cmd.amount >= 1.0f && cmd.amount <= MAX_SEED_COUNT)) return fail("seed count must be 1 to 500");
+            std::getline(ss, cmd.creature);
+            cmd.creature.erase(0, cmd.creature.find_first_not_of(" \t"));
+            CreatureFile f;
+            std::string why;
+            if (!read_creature_file(cmd.creature, f, why)) return fail("bad creature: " + why);
+            out.push_back(cmd);
+            continue;
+        }
 
         if (is_brush(cmd.kind)) {
             if (!(ss >> cmd.x >> cmd.y >> cmd.radius >> cmd.amount))
@@ -243,6 +275,13 @@ void write_power_script(std::ostream& out, const std::vector<PowerCommand>& comm
     char buf[160];
     for (const PowerCommand& c : commands) {
         // %.9g round-trips a float exactly, so a replay sees the same numbers.
+        if (c.kind == PowerKind::Seed) {
+            std::snprintf(buf, sizeof buf, "%llu seed %.9g %.9g %.9g %.9g ", static_cast<unsigned long long>(c.tick),
+                          static_cast<double>(c.x), static_cast<double>(c.y), static_cast<double>(c.radius),
+                          static_cast<double>(c.amount));
+            out << buf << c.creature << '\n';
+            continue;
+        }
         if (is_brush(c.kind))
             std::snprintf(buf, sizeof buf, "%llu %s %.9g %.9g %.9g %.9g %u",
                           static_cast<unsigned long long>(c.tick), kind_name(c.kind),

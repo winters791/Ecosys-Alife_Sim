@@ -13,6 +13,7 @@ extends PanelContainer
 ## The words are worked out here; nothing feeds back into the world.
 
 signal species_link(species_id: int)   # a species named on the card was clicked
+signal bank_requested(species_id: int) # "Bank in seed vault" was pressed
 
 const WIDTH := 404
 const PORTRAIT := Vector2i(372, 164)
@@ -118,6 +119,12 @@ func _ready() -> void:
 	_build_portrait()
 	caption = _label("", 11, FAINT)
 	content.add_child(caption)
+	var bank := Button.new()
+	bank.text = "Bank in the seed vault"
+	bank.tooltip_text = "Save a sample of its living members (up to 20) as a creature file, to edit or release later"
+	bank.focus_mode = Control.FOCUS_NONE
+	bank.pressed.connect(func() -> void: bank_requested.emit(species_id))
+	content.add_child(bank)
 
 	# Its niche.
 	role = _label("", 18, INK)

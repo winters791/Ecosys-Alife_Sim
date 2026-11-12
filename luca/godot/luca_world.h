@@ -19,6 +19,7 @@
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 
+#include "design.hpp"
 #include "sim.hpp"
 
 class LucaWorld : public godot::RefCounted {
@@ -155,6 +156,56 @@ public:
     // Save every power cast so far; replay it with luca_headless --script.
     bool save_powers(const godot::String& path) const;
 
+    // --- The creature designer (viewer/designer.gd; core/design.hpp) ----------
+    // Implemented in luca_design.cpp. A genome travels as a Dictionary:
+    //   radius, pigment, thermal_optimum, thermal_tolerance, repro_threshold,
+    //   offspring_share, birth_size, elongation, squareness, bite, dormancy,
+    //   seed_throw, mutability, repair (floats); shape (8 floats);
+    //   parts: [{type, size, theta, stalk}]; enzymes: [{x, y, x2, y2, rate}]
+    //   (x2 = y2 = -1 for one-to-one); hidden (int), tau, bias (one float per
+    //   hidden neuron); links: [{from, to, weight}] in node numbers (inputs,
+    //   then outputs, then hidden neurons: see get_brain_layout).
+    // Every genome coming in is clamped (clamp_genome) before it is used.
+
+    // Node names and numbering for the brain editor, and the gene limits.
+    godot::Dictionary get_brain_layout() const;
+    // Starting points: [{name, genome}].
+    godot::Array get_design_templates() const;
+    // A genome through clamp_genome, as the world would hold it.
+    godot::Dictionary clamp_design(const godot::Dictionary& genome) const;
+    // The energy budget and stats of a design under `sun` (mean light a tick,
+    // 1 = full) and `air` (°C): see luca::assess_design.
+    godot::Dictionary assess_design(const godot::Dictionary& genome, double sun, double air) const;
+    // One sprite of a design at the origin facing +x: {instances, parts}, laid
+    // out like get_sprites. `fullness` 0..1 is how fed it looks.
+    godot::Dictionary design_sprite(const godot::Dictionary& genome, double fullness) const;
+    // What its brain answers to these inputs held for `ticks`: {outputs, hidden}.
+    godot::Dictionary probe_brain(const godot::Dictionary& genome, const godot::PackedFloat32Array& inputs, int ticks) const;
+    // Creature files (core/creature_file.hpp). write: genomes -> text.
+    // read: text -> {ok, error, name, origin, bodies: [genome]}.
+    godot::String write_creature_file(const godot::Array& genomes, const godot::String& name, const godot::String& origin) const;
+    godot::Dictionary read_creature_file(const godot::String& text) const;
+    // The seed vault: a sample of a species as a creature file ("" if unknown).
+    godot::String bank_species(int64_t species_id) const;
+    // A living creature's genome, by id (empty once it has died).
+    godot::Dictionary genome_of(int64_t id) const;
+    // Drop `count` bodies of a creature file as a meteor (the seed power,
+    // logged like any other). Returns false if the file doesn't read.
+    bool release(const godot::String& text, double x, double z, double radius, int count);
+
+    // The test tank: a small world of its own (luca::Trial), stepped by the
+    // designer while it is open. Drawn with the same buffers as the world;
+    // in the instance buffer the hue is 0.08 for the design's lineage and
+    // 0.42 for everything else.
+    bool trial_start(const godot::String& text, int count, bool with_luca, double sun, double air, int64_t seed);
+    void trial_stop();
+    int trial_step(int max_ticks, double budget_ms);
+    // tick, guests, natives, generations, births, extent, and the guests'
+    // diet: fed_light, fed_living, fed_dead, fed_loose (sums), mean_energy.
+    godot::Dictionary trial_info() const;
+    godot::PackedFloat32Array trial_instance_buffer(int capacity) const;
+    godot::PackedFloat32Array trial_part_buffer(int capacity) const;
+
 protected:
     static void _bind_methods();
 
@@ -162,6 +213,7 @@ private:
     godot::Dictionary describe(std::size_t who) const;
 
     std::unique_ptr<luca::Simulation> sim_;
+    std::unique_ptr<luca::Trial> trial_;
 };
 
 VARIANT_ENUM_CAST(LucaWorld::Power);

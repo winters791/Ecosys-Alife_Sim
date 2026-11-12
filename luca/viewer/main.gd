@@ -15,6 +15,8 @@ extends Node3D
 ##   C                    colour creatures by species      T: tree of life
 ##   F                    follow the inspected creature's species (alerts in the chronicle)
 ##   P                    the inspected creature's species, in the tree and its card
+##   B                    the creature designer (its own screen; V opens the seed vault)
+##   Esc                  stop dropping a creature
 ##
 ## Command line (after `--`):  --size=128 --seed=42 --pop=600
 ##   --shot=PATH --frames=N   save a screenshot after N frames and quit
@@ -28,6 +30,10 @@ extends Node3D
 ##   --species                start with creatures coloured by species
 ##   --warmup=N               run N ticks before the first frame (skip ahead to evolved life)
 ##   --events=F               how often the world acts on its own (default 1, 0 = never)
+##   --designer[=TAB]         start in the creature designer (0 body .. 4 test tank)
+##   --template=NAME          ... on that template (Luca, Swimmer, Hunter, ...)
+##   --vault                  ... with the seed vault open
+##   --bank                   bank the most numerous species in the seed vault at the start
 
 const PX_SIZE := 0.125            # world units per sprite pixel: 8 pixels to a cell
 const ZOOMS := [0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]  # screen pixels per sprite pixel
@@ -42,9 +48,11 @@ const NIGHT_BLOBS := Vector3(0.58, 0.62, 0.82)
 ## Vent strength runs 0..3 (`vent_max`), against tens of height units for the land brush.
 const VENT_BRUSH := 0.05
 
-enum Tool { LOOK, RAISE, LOWER, WARM, COOL, VENT, SEAL }
+## DROP is not in the tool grid: the designer and the seed vault pick it, to
+## drop a creature file where the player clicks.
+enum Tool { LOOK, RAISE, LOWER, WARM, COOL, VENT, SEAL, DROP }
 const TOOL_NAMES := ["Look", "Raise land", "Lower land", "Warm spot", "Cold spot", "Open vent", "Close vent"]
-const TOOL_COLORS := [Color(1, 1, 1), Color(1.0, 0.85, 0.4), Color(0.6, 0.75, 1.0), Color(1.0, 0.45, 0.3), Color(0.5, 0.9, 1.0), Color(1.0, 0.55, 0.15), Color(0.55, 0.5, 0.6)]
+const TOOL_COLORS := [Color(1, 1, 1), Color(1.0, 0.85, 0.4), Color(0.6, 0.75, 1.0), Color(1.0, 0.45, 0.3), Color(0.5, 0.9, 1.0), Color(1.0, 0.55, 0.15), Color(0.55, 0.5, 0.6), Color(0.98, 0.62, 0.22)]
 
 var world: LucaWorld
 var world_size := 128
@@ -127,6 +135,18 @@ var alerts_seen := 0
 const ALERT_COLOR := "ffc857"
 var start_vents: Array[Vector3] = []   # --vent=x,z,strength: open a vent before the warmup (testing)
 
+# The creature designer (designer.gd) and dropping what it makes.
+var designer: Control
+var designer_speed := 1                 # the world's speed before the designer paused it
+var drop_text := ""                     # the creature file being dropped
+var drop_name := ""
+var drop_count := 20
+var drop_label: Label
+var start_designer := -1                # --designer=TAB (testing)
+var start_template := ""
+var start_vault := false
+var start_bank := false
+
 
 func _ready() -> void:
 	var seed_value := 42
@@ -157,6 +177,11 @@ func _ready() -> void:
 		elif arg.begins_with("--vent="):
 			var v := arg.get_slice("=", 1).split(",")
 			if v.size() >= 2: start_vents.append(Vector3(float(v[0]), float(v[1]), float(v[2]) if v.size() > 2 else 2.0))
+		elif arg == "--designer": start_designer = 0
+		elif arg.begins_with("--designer="): start_designer = int(arg.get_slice("=", 1))
+		elif arg.begins_with("--template="): start_template = arg.get_slice("=", 1)
+		elif arg == "--vault": start_vault = true
+		elif arg == "--bank": start_bank = true
 		elif arg.begins_with("--at="):
 			var at := arg.get_slice("=", 1).split(",")
 			if at.size() == 2: start_at = Vector2(float(at[0]), float(at[1]))
@@ -209,6 +234,20 @@ func _ready() -> void:
 	get_window().size_changed.connect(_place_camera)
 	get_window().size_changed.connect(_fit_left_column)
 	_fit_left_column()
+	if start_bank:
+		var top: Array = world.get_top_species(1)
+		if not top.is_empty():
+			_bank(top[0]["id"])
+	if start_designer >= 0 or start_vault:
+		_open_designer()
+		if start_template != "":
+			for i in designer.templates.size():
+				if designer.templates[i]["name"] == start_template:
+					designer.template_pick.select(i)
+					designer.load_genome(designer.templates[i]["genome"], start_template, "designed")
+		designer._show_tab(clampi(start_designer, 0, 4))
+		if start_vault:
+			designer._open_library()
 
 
 ## Open the window at most of the screen. The project's 1440x900 is in
@@ -458,8 +497,20 @@ func _build_ui() -> void:
 	tools.add_child(tool_grid)
 	for i in TOOL_NAMES.size():
 		tool_buttons.append(_button(tool_grid, TOOL_NAMES[i], _set_tool.bind(i), true))
+	drop_label = Label.new()
+	drop_label.add_theme_color_override("font_color", TOOL_COLORS[Tool.DROP])
+	drop_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	drop_label.custom_minimum_size.x = 300
+	drop_label.visible = false
+	tools.add_child(drop_label)
 	_slider(tools, "Brush size", 2.0, 40.0, brush_radius, func(v: float) -> void: brush_radius = v)
 	_slider(tools, "Strength", 1.0, 20.0, brush_strength, func(v: float) -> void: brush_strength = v)
+
+	_heading(tools, "LIFE")
+	var life_row := HBoxContainer.new()
+	tools.add_child(life_row)
+	_button(life_row, "Creature designer (B)", _open_designer)
+	_button(life_row, "Seed vault (V)", _open_vault)
 
 	_heading(tools, "WHOLE WORLD")
 	var sun_row := HBoxContainer.new()
@@ -542,6 +593,7 @@ func _build_ui() -> void:
 	tree_row.add_child(species_card)
 	tree_view.selection_changed.connect(func(id: int) -> void: species_card.show_species(id))
 	species_card.species_link.connect(_open_species)
+	species_card.bank_requested.connect(_bank)
 
 	# Bottom right: the inspected creature.
 	var inspector := _panel(Control.PRESET_BOTTOM_RIGHT, Vector2(280, 0))
@@ -552,6 +604,85 @@ func _build_ui() -> void:
 	_button(inspector, "Its species  (P)", _open_inspected_species)
 	follow_button = _button(inspector, "Follow its species  (F)", _toggle_follow, true)
 	follow_button.disabled = true
+	var vault_row := HBoxContainer.new()
+	inspector.add_child(vault_row)
+	_button(vault_row, "Edit in designer", _edit_inspected)
+	_button(vault_row, "Bank its species", func() -> void: _bank(inspected_species))
+
+	# The creature designer: a screen of its own, over everything.
+	var designer_layer := CanvasLayer.new()
+	designer_layer.layer = 5
+	add_child(designer_layer)
+	designer = Control.new()
+	designer.set_script(load("res://designer.gd"))
+	designer.world = world
+	designer.visible = false
+	designer_layer.add_child(designer)
+	designer.closed.connect(func() -> void: _set_speed(designer_speed))
+	designer.release_requested.connect(_start_drop)
+
+
+# --- The creature designer and the seed vault ----------------------------------------
+
+## Open the designer, pausing the world while it is open.
+func _open_designer(genome: Dictionary = {}, title := "") -> void:
+	if not designer.visible:
+		designer_speed = speed if speed > 0 else 1
+		_set_speed(0)
+	if tool == Tool.DROP:
+		_set_tool(Tool.LOOK)
+	designer.open(genome, title)
+
+
+func _open_vault() -> void:
+	_open_designer()
+	designer._open_library()
+
+
+## Open the inspected creature's own genome in the designer.
+func _edit_inspected() -> void:
+	if inspected_id < 0:
+		return
+	var g: Dictionary = world.genome_of(inspected_id)
+	if g.is_empty():
+		return
+	var info: Dictionary = world.inspect_id(inspected_id)
+	_open_designer(g, "%s variant" % info.get("species", "Creature"))
+
+
+## Bank a species in the seed vault: a sample of its living members.
+func _bank(species_id: int) -> void:
+	if species_id < 0:
+		return
+	chronicle_box.append_text("[color=#%s]%s[/color]\n" % [ALERT_COLOR, designer.bank_species(species_id)])
+
+
+## The designer handed over a creature file: drop it where the player clicks next.
+func _start_drop(text: String, title: String, count: int) -> void:
+	drop_text = text
+	drop_name = title
+	drop_count = count
+	_set_speed(designer_speed)
+	_set_tool(Tool.DROP)
+
+
+func _cancel_drop() -> void:
+	if tool == Tool.DROP:
+		_set_tool(Tool.LOOK)
+
+
+func _drop_radius() -> float:
+	return maxf(2.0, sqrt(float(drop_count)) * 0.8)
+
+
+func _drop() -> void:
+	if hover.y < -1e8 or drop_text == "":
+		return
+	if world.release(drop_text, hover.x, hover.z, _drop_radius(), drop_count):
+		_set_tool(Tool.LOOK)
+		drop_text = ""
+	else:
+		chronicle_box.append_text("[color=#f88]That creature file could not be read.[/color]\n")
 
 
 ## Follow the inspected creature's species, or stop. Observation only: a
@@ -581,9 +712,14 @@ func _set_speed(index: int) -> void:
 
 
 func _set_tool(index: int) -> void:
+	if index == Tool.DROP and drop_text == "":
+		index = Tool.LOOK
 	tool = index
 	for i in tool_buttons.size():
 		tool_buttons[i].set_pressed_no_signal(i == tool)
+	if drop_label != null:
+		drop_label.visible = tool == Tool.DROP
+		drop_label.text = "Click the map to drop %d %s by meteor.  Esc to cancel." % [drop_count, drop_name]
 
 
 func _set_overlay(index: int) -> void:
@@ -800,11 +936,15 @@ func _show_creature(info: Dictionary) -> void:
 # --- Input -----------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
+	if designer.visible:
+		return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				if tool == Tool.LOOK:
 					_inspect()
+				elif tool == Tool.DROP:
+					_drop()
 				else:
 					painting = not gradual
 					stroke_started = false
@@ -837,6 +977,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_T: _toggle_tree()
 			KEY_F: _toggle_follow()
 			KEY_P: _open_inspected_species()
+			KEY_B: _open_designer()
+			KEY_V: _open_vault()
+			KEY_ESCAPE: _cancel_drop()
 			KEY_C: (find_child("SpeciesCheck", true, false) as CheckBox).button_pressed = not by_species
 			KEY_MINUS: _zoom(-1, cam_target)
 			KEY_EQUAL: _zoom(1, cam_target)
@@ -879,12 +1022,14 @@ func _process(delta: float) -> void:
 
 	# 2. Camera.
 	var move := Vector2.ZERO
-	if not tree_panel.visible:   # the tree uses the arrow keys itself
+	var keys_free := not designer.visible   # the designer has keys of its own
+	if not tree_panel.visible and keys_free:   # the tree uses the arrow keys itself
 		move = Input.get_vector("ui_left", "ui_right", "ui_down", "ui_up")
-	if Input.is_key_pressed(KEY_A): move.x -= 1.0
-	if Input.is_key_pressed(KEY_D): move.x += 1.0
-	if Input.is_key_pressed(KEY_W): move.y += 1.0
-	if Input.is_key_pressed(KEY_S): move.y -= 1.0
+	if keys_free:
+		if Input.is_key_pressed(KEY_A): move.x -= 1.0
+		if Input.is_key_pressed(KEY_D): move.x += 1.0
+		if Input.is_key_pressed(KEY_W): move.y += 1.0
+		if Input.is_key_pressed(KEY_S): move.y -= 1.0
 	if move != Vector2.ZERO:
 		_pan(move.x * delta * 700.0, -move.y * delta * 700.0)
 	_place_camera()
@@ -963,7 +1108,9 @@ func _update_sun() -> void:
 func _update_brush_ring() -> void:
 	var ring := Vector3(0, 0, -1)
 	var color: Color = TOOL_COLORS[tool]
-	if tool != Tool.LOOK and hover.y > -1e8:
+	if tool == Tool.DROP and hover.y > -1e8:
+		ring = Vector3(hover.x, hover.z, _drop_radius())
+	elif tool != Tool.LOOK and hover.y > -1e8:
 		ring = Vector3(hover.x, hover.z, brush_radius)
 	elif tool == Tool.LOOK and inspected_id >= 0:
 		ring = Vector3(inspected_at.x, inspected_at.y, 1.6)

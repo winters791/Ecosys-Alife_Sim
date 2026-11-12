@@ -103,7 +103,8 @@ public:
 
     // The species of a creature arriving from outside: the nearest living
     // species if one is close enough, otherwise a new root. Not for hot paths.
-    uint32_t classify_newcomer(const Genome& g, uint64_t tick);
+    // A new root takes `name` if one is given (a creature file's).
+    uint32_t classify_newcomer(const Genome& g, uint64_t tick, std::string name = {});
 
     // Bookkeeping. born() returns true the moment a species becomes
     // established; died() returns true when its last member dies.

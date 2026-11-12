@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "chronicle.hpp"
@@ -31,6 +32,11 @@ enum class PowerKind : uint8_t {
     Sun,      // global: change the sun multiplier (0.2 = 20% brighter)
     Climate,  // global: warm (+) or cool (-) the whole world, in °C
     Vent,     // brush: open (+) or close (-) a vent, in units of strength (0..vent_max)
+    // A life-bearing meteor (design doc 4.9): `amount` bodies from a creature
+    // file (creature_file.hpp, kept in `creature`) land within `radius` of
+    // (x, y). The one power that brings creatures: it never touches any that
+    // are already there. Instant; the Simulation lands them (take_arrivals).
+    Seed,
 };
 
 struct PowerCommand {
@@ -40,6 +46,7 @@ struct PowerCommand {
     float     amount = 0.0f;  // total change once the ramp has finished
     uint32_t  duration = 0;   // ticks to spread the change over; 0 = instant
     bool      quiet = false;  // no chronicle entry (later dabs of one brush stroke)
+    std::string creature = {};   // Seed only: the cargo, as one line (creature_line)
 };
 
 class PowerSystem {
@@ -55,6 +62,10 @@ public:
 
     bool idle() const { return pending_.empty() && active_.empty(); }
 
+    // Meteors that came due in update(), for the Simulation to land. Taking
+    // them empties the list.
+    std::vector<PowerCommand> take_arrivals() { return std::exchange(arrivals_, {}); }
+
 private:
     struct Active {
         PowerCommand cmd;
@@ -67,6 +78,7 @@ private:
     std::vector<PowerCommand> pending_;  // sorted by tick, ties in cast order
     std::vector<Active>       active_;
     std::vector<PowerCommand> log_;
+    std::vector<PowerCommand> arrivals_;
 };
 
 // --- Script format -----------------------------------------------------------
@@ -79,6 +91,10 @@ private:
 //   <tick> vent    <x> <y> <radius> <amount> [duration]
 //   <tick> sun     <amount> [duration]
 //   <tick> climate <amount> [duration]
+//   <tick> seed    <x> <y> <radius> <count> <creature file on one line>
+//
+// A seed line ends with its cargo (creature_line: the file with ';' between
+// lines); it takes no duration and no `quiet`.
 //
 // Returns false and fills `error` (with a line number) on the first bad line.
 bool parse_power_script(std::istream& in, std::vector<PowerCommand>& out, std::string& error);

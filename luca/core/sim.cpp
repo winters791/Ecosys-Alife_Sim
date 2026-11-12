@@ -1,5 +1,7 @@
 #include "sim.hpp"
 
+#include "creature_file.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -288,11 +290,17 @@ void Simulation::step() {
     const auto t0 = std::chrono::steady_clock::now();
     stats_ = TickStats{};
     stats_.tick = tick_;
+    // Meteors that landed while time stood still (flush_powers) count in this tick.
+    stats_.energy_in += arrived_energy_;
+    stats_.in_meteor += arrived_energy_;
+    stats_.matter_in += arrived_matter_;
+    arrived_energy_ = arrived_matter_ = 0.0;
 
     // God powers act first, then the sun moves, so every creature sees the
     // same world this tick.
     events_.update(tick_, world_, powers_, chronicle_);
     powers_.update(tick_, world_, chronicle_);
+    land_arrivals(false);
     world_.set_time(tick_);
     drop_windfalls();
     if (world_.any_vents()) run_vents();
@@ -825,8 +833,59 @@ void Simulation::run_vents() {
         stats_.energy_in += made * level;
         stats_.in_vent += made * level;
         stats_.matter_in += made;
+        matter_brought_up_ += made;
     }
-    matter_brought_up_ += stats_.matter_in;
+}
+
+void Simulation::land_arrivals(bool between_ticks) {
+    for (const PowerCommand& cmd : powers_.take_arrivals()) land_meteor(cmd, between_ticks);
+}
+
+// A life-bearing meteor: `amount` bodies from the cargo, cycling through its
+// genomes, laid out on a sunflower spiral within `radius` (no randomness, so
+// a replayed power log lands them in the same places). Every body arrives
+// grown, with a store worth 60% of what it needs to divide, made of the
+// richest chemical it can burn (a vent dweller arrives full of C, a plant of
+// D). All of them join one species: the nearest living one if it is close
+// enough, otherwise a new root under the cargo's name.
+void Simulation::land_meteor(const PowerCommand& cmd, bool between_ticks) {
+    CreatureFile cargo;
+    std::string why;
+    if (!read_creature_file(cmd.creature, cargo, why)) return;   // parse_power_script and the viewer check first
+    const int count = std::clamp(static_cast<int>(std::lround(cmd.amount)), 1, 500);
+    const uint32_t sp = species_.classify_newcomer(cargo.bodies.front(), tick_, cargo.name);
+    const uint32_t lineage = next_lineage_++;   // one founding event
+    double energy = 0.0, matter = 0.0;
+    for (int k = 0; k < count; ++k) {
+        const Genome& g = cargo.bodies[static_cast<std::size_t>(k) % cargo.bodies.size()];
+        const Phenotype p = compile_phenotype(g);
+        const float r = cmd.radius * std::sqrt((static_cast<float>(k) + 0.5f) / static_cast<float>(count));
+        const float a = 2.3999632f * static_cast<float>(k);   // the golden angle
+        int chem = CHEM_D;
+        for (int c = NCHEM - 1; c > CHEM_A; --c)
+            if (p.can_burn(c)) { chem = c; break; }
+        const float store_e = std::min(0.6f * p.repro_threshold, p.energy_capacity);
+        const Mix store = pure(chem, store_e / LEVEL[chem]);
+        const Mix body = pure(CHEM_D, p.mass);
+        energy += store.energy() + body.energy();
+        matter += store.mass() + body.mass();
+        admit(world_.clamp_coord(cmd.x + r * std::cos(a)), world_.clamp_coord(cmd.y + r * std::sin(a)), store, body,
+              lineage, sp, 0, g, p);
+    }
+    matter_brought_up_ += matter;
+    if (between_ticks) {
+        arrived_energy_ += energy;
+        arrived_matter_ += matter;
+    } else {
+        stats_.energy_in += energy;
+        stats_.in_meteor += energy;
+        stats_.matter_in += matter;
+    }
+    const Species& s = species_.get(sp);
+    const std::string what = cargo.bodies.size() > 1 ? " a sample of " : " ";
+    chronicle_.add(tick_, "A meteor falls in " + region_name(world_, cmd.x, cmd.y) + ", carrying" + what +
+                              with_commas(static_cast<uint64_t>(count)) + " " + (cargo.name.empty() ? s.name : cargo.name) +
+                              (s.name == cargo.name || cargo.name.empty() ? "." : " (counted among the " + s.name + ")."));
 }
 
 // Loose chemicals drift: each cell hands WASTE_SPREAD of them to its four

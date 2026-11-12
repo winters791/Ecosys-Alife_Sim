@@ -29,6 +29,7 @@ void IntervalTotals::add(const TickStats& s) {
     eaten_waste  += s.eaten_waste;
     in_windfall  += s.in_windfall;
     in_vent      += s.in_vent;
+    in_meteor    += s.in_meteor;
     grown_mass   += s.grown_mass;
     two_flow     += s.two_flow;
     matter_in    += s.matter_in;
@@ -57,7 +58,7 @@ bool MetricsWriter::open(const std::string& path) {
             "producers,hunters,scavengers,mixed,movers,sighted,armoured,"
             "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison,gene_transfers,gene_transfers_cross,gene_transfers_novel,"
             "waste_total,excreted,eaten_waste,out_fouling,out_waste_decay,cleaners,loose_B,loose_C,loose_D,mean_mutability,mean_repair,"
-            "in_windfall,windfalls,in_vent,chemotrophs,vent_loose,growing,mean_birth_size,grown_mass,"
+            "in_windfall,windfalls,in_vent,in_meteor,chemotrophs,vent_loose,growing,mean_birth_size,grown_mass,"
             "neurons,slow_neurons,mean_tau,"
             "pool_B,pool_C,pool_D,tissue_B,tissue_C,tissue_D,mean_enzymes,rx_AB,rx_AC,rx_AD,rx_BC,rx_BD,rx_CD,rx_two,rx_neutral,two_flow,neutral_flow,matter_in\n";
     return true;
@@ -173,7 +174,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
          << t.gene_transfers << ',' << t.gene_transfers_cross << ',' << t.gene_transfers_novel << ','
          << waste << ',' << t.excreted << ',' << t.eaten_waste << ',' << t.out_fouling << ',' << t.out_waste_decay << ','
          << k.cleaners << ',' << loose[1] << ',' << loose[2] << ',' << loose[3] << ',' << sum_mutability * inv << ',' << sum_repair * inv << ','
-         << t.in_windfall << ',' << t.windfalls << ',' << t.in_vent << ',' << k.chemotrophs << ',' << vent_loose
+         << t.in_windfall << ',' << t.windfalls << ',' << t.in_vent << ',' << t.in_meteor << ',' << k.chemotrophs << ',' << vent_loose
          << ',' << k.growing << ',' << sum_birth * inv << ',' << t.grown_mass << ','
          << neurons << ',' << slow_neurons << ',' << (neurons ? std::exp(sum_log_tau / static_cast<double>(neurons)) : 0.0) << ','
          << pool_m[1] << ',' << pool_m[2] << ',' << pool_m[3] << ',' << tissue_m[1] << ',' << tissue_m[2] << ',' << tissue_m[3] << ','

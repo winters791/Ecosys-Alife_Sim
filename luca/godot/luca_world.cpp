@@ -1,4 +1,5 @@
 #include "luca_world.h"
+#include "sprite_data.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -18,55 +19,6 @@ PackedFloat32Array to_packed(const std::vector<float>& v) {
     out.resize(static_cast<int64_t>(v.size()));
     if (!v.empty()) std::memcpy(out.ptrw(), v.data(), v.size() * sizeof(float));
     return out;
-}
-
-// A fixed random number in [0, 1) per creature, so each blob breathes and
-// wiggles on its own beat for its whole life.
-float hash01(uint64_t id) {
-    uint64_t h = id * 0x9E3779B97F4A7C15ull;
-    h ^= h >> 29;
-    h *= 0xBF58476D1CE4E5B9ull;
-    h ^= h >> 32;
-    return static_cast<float>(h & 0xFFFFu) / 65536.0f;
-}
-
-// One colour per species, as a hue: steps of the golden ratio keep species
-// with neighbouring ids far apart on the colour wheel.
-float species_hue(uint32_t id) {
-    const float h = 0.13f + static_cast<float>(id % 4096u) * 0.61803399f;
-    return h - std::floor(h);
-}
-
-// One creature's sprite data, as documented in luca_world.h.
-void write_sprite(float* f, const luca::Genome& g, const luca::Phenotype& p, float x, float y, float hx, float hy,
-                  float sleep, float energy, float hue, float phase) {
-    auto part = [&](luca::PartType t) { return p.part_total[static_cast<int>(t)]; };
-    // Rows of the 3x4 transform (row-major: f[0], f[4], f[8] are basis x ...).
-    // f[0] is the radius as grown so far, so the young are drawn small.
-    f[0] = p.radius;        f[1] = part(luca::PartType::Storage);   f[2] = 0.0f;   f[3] = x;
-    f[4] = g.elongation;    f[5] = sleep;                           f[6] = hx;     f[7] = hue;
-    f[8] = g.squareness;    f[9] = static_cast<float>(g.parts.size()); f[10] = hy; f[11] = y;
-    // Colour channel: raw traits. The shader decides how they look.
-    f[12] = std::clamp(g.pigment, 0.0f, 1.0f);
-    f[13] = p.surface_area > 0.0f ? std::clamp(p.light_capture / p.surface_area, 0.0f, 1.0f) : 0.0f;
-    f[14] = p.repro_threshold > 0.0f ? std::clamp(energy / p.repro_threshold, 0.0f, 1.0f) : 0.0f;
-    f[15] = p.has_brain ? std::clamp(p.max_speed * 4.0f, 0.0f, 1.0f) : 0.0f;
-    // Custom data.
-    f[16] = phase;
-    f[17] = g.shape[0];
-    f[18] = g.shape[1];
-    f[19] = part(luca::PartType::Poison);
-}
-
-// One creature's parts: PARTS_PER_CREATURE texels of (type + 1, size, angle, stalk).
-void write_parts(float* t, const luca::Genome& g, int per_creature) {
-    const std::size_t k_max = std::min(g.parts.size(), static_cast<std::size_t>(per_creature));
-    for (std::size_t k = 0; k < k_max; ++k, t += 4) {
-        t[0] = static_cast<float>(static_cast<int>(g.parts[k].type) + 1);
-        t[1] = g.parts[k].size;
-        t[2] = g.parts[k].theta;
-        t[3] = g.parts[k].stalk;
-    }
 }
 
 // Bilinear height between cell centres.
@@ -185,7 +137,7 @@ Array LucaWorld::get_top_species(int max_count) const {
         d["population"] = static_cast<int64_t>(s.population);
         d["parent"] = s.parent != luca::NO_SPECIES ? String::utf8(all[s.parent].name.c_str()) : String();
         d["born"] = static_cast<int64_t>(s.born_tick);
-        d["hue"] = species_hue(s.id);
+        d["hue"] = sprite::species_hue(s.id);
         out.push_back(d);
     }
     return out;
@@ -227,7 +179,7 @@ Array LucaWorld::get_species_tree(int min_peak) const {
         d["extinct"] = s.alive() ? static_cast<int64_t>(-1) : static_cast<int64_t>(s.extinct_tick);
         d["population"] = static_cast<int64_t>(s.population);
         d["peak"] = static_cast<int64_t>(s.peak);
-        d["hue"] = species_hue(s.id);
+        d["hue"] = sprite::species_hue(s.id);
         out.push_back(d);
         for (auto it = children[id].rbegin(); it != children[id].rend(); ++it) stack.push_back(*it);
     }
@@ -275,8 +227,8 @@ PackedFloat32Array LucaWorld::get_instance_buffer(int capacity) const {
     const std::size_t n = std::min(c.size(), static_cast<std::size_t>(capacity));
     float* f = out.ptrw();
     for (std::size_t i = 0; i < n; ++i, f += STRIDE)
-        write_sprite(f, c.genome[i], c.pheno[i], c.x[i], c.y[i], c.hx[i], c.hy[i], c.sleep[i], c.energy[i],
-                     species_hue(c.species[i]), hash01(c.id[i]));
+        sprite::write_sprite(f, c.genome[i], c.pheno[i], c.x[i], c.y[i], c.hx[i], c.hy[i], c.sleep[i], c.energy[i],
+                     sprite::species_hue(c.species[i]), sprite::hash01(c.id[i]));
     return out;
 }
 
@@ -291,69 +243,17 @@ PackedFloat32Array LucaWorld::get_part_buffer(int capacity) const {
     const std::size_t n = std::min(c.size(), static_cast<std::size_t>(capacity));
     float* f = out.ptrw();
     for (std::size_t i = 0; i < n; ++i)
-        write_parts(f + static_cast<int64_t>(i) * PARTS_PER_CREATURE * 4, c.genome[i], PARTS_PER_CREATURE);
+        sprite::write_parts(f + static_cast<int64_t>(i) * PARTS_PER_CREATURE * 4, c.genome[i], PARTS_PER_CREATURE);
     return out;
 }
 
 int LucaWorld::spawn_parade(double x, double z) {
     if (!sim_) return 0;
-    using luca::PartType;
-    constexpr float PI = 3.14159265f;
-    auto part = [](PartType t, float size, float theta, float stalk = 0.0f) { return luca::Part{t, size, theta, 0.0f, stalk}; };
-    auto wander = [](luca::Genome& g, float throttle) {
-        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_WANDER), 1.0f);
-        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_INERTIA), 2.0f);
-        g.brain.connect(luca::input_node(luca::IN_BIAS), luca::output_node(luca::OUT_THROTTLE), throttle);
-    };
+    // The designer's templates (core/design.cpp), the hunter left out so the
+    // parade keeps its seven.
     std::vector<luca::Genome> cast;
-    cast.push_back(luca::make_luca());                                   // a plain sitter
-    {   luca::Genome g = luca::make_luca();                              // a long swimmer: tail behind, mouth and eyes in front
-        g.elongation = 0.8f;
-        g.parts.push_back(part(PartType::Flagellum, 1.2f, PI));
-        g.parts.push_back(part(PartType::Absorber, 0.5f, 0.0f));
-        g.parts.push_back(part(PartType::Sensor, 0.6f, 0.0f));
-        wander(g, -0.3f);
-        cast.push_back(g); }
-    {   luca::Genome g = luca::make_luca();                              // an armoured box: plates all round but the mouth and tail
-        g.elongation = 0.4f;
-        g.squareness = 1.0f;
-        g.parts[0].size = 0.4f;
-        g.parts.push_back(part(PartType::Armour, 0.75f, PI * 0.5f));
-        g.parts.push_back(part(PartType::Armour, 0.75f, -PI * 0.5f));
-        g.parts.push_back(part(PartType::Absorber, 0.9f, 0.0f));
-        g.parts.push_back(part(PartType::Flagellum, 1.0f, PI));
-        g.parts.push_back(part(PartType::Sensor, 0.3f, 0.3f));
-        g.bite = 1.0f;
-        wander(g, -0.35f);
-        cast.push_back(g); }
-    {   luca::Genome g = luca::make_luca();                              // a tentacle monster: mouths out on stalks, armoured body
-        g.core_radius = 1.3f;
-        g.parts[0].size = 0.3f;
-        for (int k = 0; k < 5; ++k) g.parts.push_back(part(PartType::Absorber, 0.4f, -PI * 0.8f + PI * 0.4f * k, 0.8f));
-        g.parts.push_back(part(PartType::Armour, 2.0f, 0.0f));
-        g.parts.push_back(part(PartType::Sensor, 0.8f, 0.0f));
-        g.pigment = 0.6f;
-        cast.push_back(g); }
-    {   luca::Genome g = luca::make_luca();                              // a frond: sun patches held up on stalks
-        g.parts[0].stalk = 0.7f;
-        g.parts.push_back(part(PartType::Photo, 0.8f, PI * 0.66f, 0.9f));
-        g.parts.push_back(part(PartType::Photo, 0.8f, -PI * 0.66f, 0.5f));
-        g.pigment = 0.15f;
-        cast.push_back(g); }
-    {   luca::Genome g = luca::make_luca();                              // a walker with legs along both sides
-        g.elongation = 0.5f;
-        g.parts.push_back(part(PartType::Legs, 1.0f, PI * 0.35f));
-        g.parts.push_back(part(PartType::Legs, 1.0f, PI * 0.7f));
-        g.parts.push_back(part(PartType::Sensor, 1.0f, 0.0f));
-        g.parts.push_back(part(PartType::Absorber, 0.4f, 0.0f));
-        wander(g, -0.42f);
-        cast.push_back(g); }
-    {   luca::Genome g = luca::make_luca();                              // fat and poisonous on one side
-        g.parts.push_back(part(PartType::Poison, 1.0f, PI));
-        g.parts.push_back(part(PartType::Storage, 1.5f, 0.0f));
-        g.pigment = 0.7f;
-        g.squareness = 0.5f;
-        cast.push_back(g); }
+    for (const auto& [name, g] : luca::design_templates())
+        if (name != "Hunter") cast.push_back(g);
     for (std::size_t k = 0; k < cast.size(); ++k)
         sim_->add_creature(static_cast<float>(x) + 3.2f * static_cast<float>(k), static_cast<float>(z),
                           0.8f * cast[k].repro_threshold, cast[k]);   // well fed, but not yet ready to divide
@@ -450,7 +350,7 @@ Array LucaWorld::get_followed() const {
         d["id"] = static_cast<int64_t>(s.id);
         d["name"] = String::utf8(s.name.c_str());
         d["population"] = static_cast<int64_t>(s.population);
-        d["hue"] = species_hue(s.id);
+        d["hue"] = sprite::species_hue(s.id);
         d["alive"] = s.alive();
         out.push_back(d);
     }
@@ -513,7 +413,7 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["species"] = String::utf8(sp.name.c_str());
     d["species_parent"] = sp.parent != luca::NO_SPECIES ? String::utf8(sim_->species().get(sp.parent).name.c_str()) : String();
     d["species_population"] = static_cast<int64_t>(sp.population);
-    d["species_hue"] = species_hue(sp.id);
+    d["species_hue"] = sprite::species_hue(sp.id);
     d["species_id"] = static_cast<int64_t>(sp.id);
     d["species_followed"] = sim_->following(sp.id);
     d["radius"] = p.radius;   // as grown so far
@@ -607,7 +507,7 @@ Dictionary LucaWorld::get_species_profile(int64_t species_id) const {
 
     d["id"] = static_cast<int64_t>(s.id);
     d["name"] = String::utf8(s.name.c_str());
-    d["hue"] = species_hue(s.id);
+    d["hue"] = sprite::species_hue(s.id);
     d["parent"] = s.parent != luca::NO_SPECIES ? String::utf8(all[s.parent].name.c_str()) : String();
     d["parent_id"] = s.parent != luca::NO_SPECIES ? static_cast<int64_t>(s.parent) : static_cast<int64_t>(-1);
     d["born"] = static_cast<int64_t>(s.born_tick);
@@ -768,7 +668,7 @@ Dictionary LucaWorld::get_species_profile(int64_t species_id) const {
             const luca::Species& o = all[v[k].second];
             e["id"] = static_cast<int64_t>(o.id);
             e["name"] = String::utf8(o.name.c_str());
-            e["hue"] = species_hue(o.id);
+            e["hue"] = sprite::species_hue(o.id);
             e["alive"] = o.alive();
             e["kills"] = static_cast<int64_t>(v[k].first);
             out.push_back(e);
@@ -796,13 +696,13 @@ Dictionary LucaWorld::get_sprites(const PackedInt64Array& ids, int64_t species_i
             if (static_cast<int64_t>(c.id[i]) != ids[k]) continue;
             const int64_t at = inst.size();
             inst.resize(at + STRIDE);
-            write_sprite(inst.ptrw() + at, c.genome[i], c.pheno[i], 0.0f, 0.0f, c.hx[i], c.hy[i], c.sleep[i], c.energy[i],
-                         species_hue(c.species[i]), hash01(c.id[i]));
+            sprite::write_sprite(inst.ptrw() + at, c.genome[i], c.pheno[i], 0.0f, 0.0f, c.hx[i], c.hy[i], c.sleep[i], c.energy[i],
+                         sprite::species_hue(c.species[i]), sprite::hash01(c.id[i]));
             const int64_t pt = parts.size();
             parts.resize(pt + PARTS_PER_CREATURE * 4);
             float* t = parts.ptrw() + pt;
             std::fill(t, t + PARTS_PER_CREATURE * 4, 0.0f);
-            write_parts(t, c.genome[i], PARTS_PER_CREATURE);
+            sprite::write_parts(t, c.genome[i], PARTS_PER_CREATURE);
             speeds.push_back(c.pheno[i].has_brain ? c.pheno[i].max_speed : 0.0f);
             drawn.push_back(ids[k]);
             break;
@@ -813,11 +713,11 @@ Dictionary LucaWorld::get_sprites(const PackedInt64Array& ids, int64_t species_i
         const luca::Species& s = sim_->species().get(static_cast<uint32_t>(species_id));
         const luca::Phenotype p = luca::compile_phenotype(s.representative);
         inst.resize(STRIDE);
-        write_sprite(inst.ptrw(), s.representative, p, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, p.repro_threshold * 0.6f,
-                     species_hue(s.id), hash01(s.id));
+        sprite::write_sprite(inst.ptrw(), s.representative, p, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, p.repro_threshold * 0.6f,
+                     sprite::species_hue(s.id), sprite::hash01(s.id));
         parts.resize(PARTS_PER_CREATURE * 4);
         std::fill(parts.ptrw(), parts.ptrw() + PARTS_PER_CREATURE * 4, 0.0f);
-        write_parts(parts.ptrw(), s.representative, PARTS_PER_CREATURE);
+        sprite::write_parts(parts.ptrw(), s.representative, PARTS_PER_CREATURE);
         speeds.push_back(0.0f);
     }
     d["instances"] = inst;
@@ -885,6 +785,24 @@ void LucaWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chronicle", "from"), &LucaWorld::get_chronicle);
     ClassDB::bind_method(D_METHOD("inspect", "x", "z", "max_distance"), &LucaWorld::inspect);
     ClassDB::bind_method(D_METHOD("save_powers", "path"), &LucaWorld::save_powers);
+    // The creature designer (luca_design.cpp).
+    ClassDB::bind_method(D_METHOD("get_brain_layout"), &LucaWorld::get_brain_layout);
+    ClassDB::bind_method(D_METHOD("get_design_templates"), &LucaWorld::get_design_templates);
+    ClassDB::bind_method(D_METHOD("clamp_design", "genome"), &LucaWorld::clamp_design);
+    ClassDB::bind_method(D_METHOD("assess_design", "genome", "sun", "air"), &LucaWorld::assess_design);
+    ClassDB::bind_method(D_METHOD("design_sprite", "genome", "fullness"), &LucaWorld::design_sprite);
+    ClassDB::bind_method(D_METHOD("probe_brain", "genome", "inputs", "ticks"), &LucaWorld::probe_brain);
+    ClassDB::bind_method(D_METHOD("write_creature_file", "genomes", "name", "origin"), &LucaWorld::write_creature_file);
+    ClassDB::bind_method(D_METHOD("read_creature_file", "text"), &LucaWorld::read_creature_file);
+    ClassDB::bind_method(D_METHOD("bank_species", "species_id"), &LucaWorld::bank_species);
+    ClassDB::bind_method(D_METHOD("genome_of", "id"), &LucaWorld::genome_of);
+    ClassDB::bind_method(D_METHOD("release", "text", "x", "z", "radius", "count"), &LucaWorld::release);
+    ClassDB::bind_method(D_METHOD("trial_start", "text", "count", "with_luca", "sun", "air", "seed"), &LucaWorld::trial_start);
+    ClassDB::bind_method(D_METHOD("trial_stop"), &LucaWorld::trial_stop);
+    ClassDB::bind_method(D_METHOD("trial_step", "max_ticks", "budget_ms"), &LucaWorld::trial_step);
+    ClassDB::bind_method(D_METHOD("trial_info"), &LucaWorld::trial_info);
+    ClassDB::bind_method(D_METHOD("trial_instance_buffer", "capacity"), &LucaWorld::trial_instance_buffer);
+    ClassDB::bind_method(D_METHOD("trial_part_buffer", "capacity"), &LucaWorld::trial_part_buffer);
 
     BIND_ENUM_CONSTANT(POWER_TERRAIN);
     BIND_ENUM_CONSTANT(POWER_HEAT);

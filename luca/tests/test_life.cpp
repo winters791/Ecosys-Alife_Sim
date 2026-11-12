@@ -11,6 +11,9 @@
 #include <vector>
 
 #include "body.hpp"
+#include "creature_file.hpp"
+#include "design.hpp"
+#include "powers.hpp"
 #include "energy.hpp"
 #include "mutation.hpp"
 #include "sim.hpp"
@@ -1007,6 +1010,164 @@ void test_species() {
     CHECK(sim.species().all().size() == before);
 }
 
+// Creature files, the seed power (a life-bearing meteor), the designer's
+// budget and the test tank (2026-11-12).
+void test_creature_files_and_meteors() {
+    using namespace luca;
+    // A file round-trips every gene exactly, brain and two-input enzymes included.
+    const auto templates = design_templates();
+    CHECK(templates.size() >= 8);
+    Genome g = templates.back().second;   // the hunter: a wired brain
+    g.brain.hidden = 2;
+    g.brain.tau[0] = 37.5f; g.brain.bias[0] = -0.25f; g.brain.tau[1] = 3.0f;
+    g.brain.connect(input_node(IN_HUNGER), hidden_node(0), 1.25f);
+    g.brain.connect(hidden_node(0), hidden_node(1), -0.5f);
+    g.brain.connect(hidden_node(1), output_node(OUT_LIGHT), 0.75f);
+    g.enzymes.push_back(canonical_enzyme(Enzyme{CHEM_A, CHEM_D, 0.01f, CHEM_A, CHEM_D}));
+    g.shape[0] = 0.3f; g.mutability = -1.5f; g.repair = 0.2f; g.seed_throw = 1.0f;
+    clamp_genome(g);
+    CreatureFile f;
+    f.name = "Spiky;#\nthing";   // separators and comments are cleaned out
+    f.origin = "designed";
+    f.bodies = {g, make_luca()};
+    for (const std::string& text : {write_creature_file(f), creature_line(f)}) {
+        CreatureFile back;
+        std::string err;
+        CHECK(read_creature_file(text, back, err));
+        CHECK(back.name == "Spikything" && back.origin == "designed" && back.bodies.size() == 2);
+        const Genome& b = back.bodies[0];
+        CHECK(b.core_radius == g.core_radius && b.elongation == g.elongation && b.pigment == g.pigment);
+        CHECK(b.parts.size() == g.parts.size() && b.enzymes.size() == g.enzymes.size());
+        CHECK(b.brain.hidden == 2 && b.brain.tau[0] == 37.5f && b.brain.bias[0] == -0.25f);
+        CHECK(b.brain.links.size() == g.brain.links.size());
+        for (std::size_t k = 0; k < b.brain.links.size() && k < g.brain.links.size(); ++k)
+            CHECK(b.brain.links[k].from == g.brain.links[k].from && b.brain.links[k].to == g.brain.links[k].to &&
+                  b.brain.links[k].weight == g.brain.links[k].weight);
+        CHECK(enzyme_words(b.enzymes.back()) == "A+A-D+D");
+        CHECK(b.shape[0] == 0.3f && b.mutability == -1.5f && b.seed_throw == 1.0f);
+        CHECK(compile_phenotype(b).upkeep == compile_phenotype(g).upkeep);
+    }
+    {   // Bad files are refused with a reason, not half read.
+        CreatureFile back;
+        std::string err;
+        CHECK(!read_creature_file("hello", back, err) && !err.empty());
+        CHECK(!read_creature_file("luca-creature 1 ; name x ; body ; wings 3", back, err));
+        CHECK(!read_creature_file("luca-creature 1 ; name x", back, err));
+        CHECK(!read_creature_file("luca-creature 1 ; body ; link hunger nowhere 1", back, err));
+    }
+
+    // The seed power: a script line carries its cargo and round-trips.
+    {
+        PowerCommand m;
+        m.tick = 3; m.kind = PowerKind::Seed; m.x = 10; m.y = 12; m.radius = 3; m.amount = 7;
+        m.creature = creature_line(f);
+        std::ostringstream out;
+        write_power_script(out, {m});
+        std::istringstream in(out.str());
+        std::vector<PowerCommand> back;
+        std::string err;
+        CHECK(parse_power_script(in, back, err));
+        CHECK(back.size() == 1 && back[0].kind == PowerKind::Seed && back[0].amount == 7.0f && back[0].creature == m.creature);
+        std::istringstream bad("0 seed 1 1 1 5 luca-creature 1 ; body ; wings 3\n");
+        back.clear();
+        CHECK(!parse_power_script(bad, back, err));
+    }
+
+    // A meteor lands every body, books its energy and matter as arriving from
+    // outside, names the species after the cargo, and replays exactly.
+    for (bool between : {false, true}) {
+        SimConfig cfg = small_config();
+        cfg.windfall_rate = 0.0f;
+        Simulation sim(cfg);
+        sim.step();
+        const double e0 = sim.stored_energy(), m0 = sim.total_matter() - sim.matter_brought_up();
+        PowerCommand m;
+        m.kind = PowerKind::Seed; m.x = 24; m.y = 24; m.radius = 4; m.amount = 9;
+        CreatureFile one;
+        one.name = "Spiky";
+        one.bodies = {templates[1].second};
+        m.tick = sim.tick();
+        m.creature = creature_line(one);
+        sim.cast(m);
+        if (between) sim.flush_powers();
+        CHECK(sim.creatures().size() == (between ? 9u : 0u));
+        sim.step();
+        CHECK(sim.creatures().size() == 9);
+        const auto& sp = sim.species().get(sim.creatures().species[0]);
+        CHECK(sp.name == "Spiky");
+        for (std::size_t i = 0; i < sim.creatures().size(); ++i) {
+            CHECK(sim.creatures().species[i] == sim.creatures().species[0]);
+            const float dx = sim.creatures().x[i] - 24.0f, dy = sim.creatures().y[i] - 24.0f;
+            CHECK(dx * dx + dy * dy <= 4.0f * 4.0f + 1.0f);
+        }
+        const TickStats& t = sim.last_stats();
+        CHECK(t.in_meteor > 0.0 && t.matter_in > 0.0);
+        const double audit = sim.stored_energy() - (e0 + t.energy_in - t.energy_out);
+        CHECK(std::abs(audit) < 1e-3 * e0 + 1e-2);
+        CHECK(std::abs(sim.total_matter() - sim.matter_brought_up() - m0) < 1e-4 * m0);
+    }
+
+    // The budget: the bill adds up to the upkeep, and the warnings catch the obvious.
+    {
+        const DesignReport r = assess_design(make_luca(), 1.0f, 20.0f);
+        float sum = 0.0f;
+        for (const CostLine& c : r.costs) sum += c.upkeep;
+        CHECK(std::abs(sum - r.upkeep) < 1e-4f);
+        CHECK(r.costs.front().kind == "body");
+        CHECK(r.light_income > r.upkeep);        // a LUCA in full sun pays its way
+        CHECK(r.burn_power > r.upkeep && r.warnings.empty());
+        Genome no_enzyme = make_luca();
+        no_enzyme.enzymes.clear();
+        CHECK(!assess_design(no_enzyme, 1.0f, 20.0f).warnings.empty());
+        CHECK(assess_design(make_luca(), 0.1f, 20.0f).light_income < r.light_income);
+        Genome motor_only = with_part(PartType::Flagellum, 1.0f);
+        CHECK(!assess_design(motor_only, 1.0f, 20.0f).warnings.empty());
+    }
+
+    // The brain probe answers like think() does.
+    {
+        float in[NUM_INPUTS] = {1.0f}, out[NUM_OUTPUTS], hid[MAX_HIDDEN];
+        probe_brain(templates.back().second, in, 1, out, hid);
+        CHECK(std::abs(out[OUT_BIOMASS] - 1.5f) < 1e-5f && std::abs(out[OUT_THROTTLE] - 0.2f) < 1e-5f);
+    }
+
+    // The tank: LUCAs alone in a tank thrive; a body that can't burn anything doesn't.
+    {
+        CreatureFile luca_file;
+        luca_file.name = "Luca2";
+        luca_file.bodies = {make_luca()};
+        TrialOptions o;
+        o.with_luca = false;
+        o.count = 6;
+        Trial a(luca_file, o);
+        CHECK(a.guests() == 6 && a.natives() == 0);
+        a.step(3000);
+        CHECK(a.guests() > 6 && a.guest_births() > 0 && a.generations() >= 1);
+        Genome dud = make_luca();
+        dud.enzymes.clear();
+        CreatureFile dud_file;
+        dud_file.bodies = {dud};
+        o.with_luca = true;
+        Trial b(dud_file, o);
+        CHECK(b.natives() > 0);
+        b.step(50);
+        CHECK(b.guests() == 0 && b.natives() > 0);
+    }
+
+    // The seed vault: a sample of a living species, or its founder once gone.
+    {
+        SimConfig cfg = small_config();
+        cfg.initial_population = 30;
+        Simulation sim(cfg);
+        sim.seed_population();
+        const CreatureFile v = bank_species(sim, sim.creatures().species[0], 20);
+        CHECK(v.bodies.size() == 20 && v.name == sim.species().get(sim.creatures().species[0]).name);
+        CreatureFile back;
+        std::string err;
+        CHECK(read_creature_file(write_creature_file(v), back, err) && back.bodies.size() == 20);
+    }
+}
+
 }  // namespace
 
 // Loose chemicals (chemistry stage 2): a body gives off what it can't burn;
@@ -1916,6 +2077,7 @@ int main() {
     test_vents();
     test_windfalls();
     test_two_input_reactions();
+    test_creature_files_and_meteors();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;
 }

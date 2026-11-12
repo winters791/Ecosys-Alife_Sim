@@ -26,7 +26,8 @@ struct TickStats {
     double energy_in       = 0.0;  // everything that enters the world: light absorbed plus windfalls
     double in_windfall     = 0.0;  // part of energy_in: food dropped on the map (see drop_windfalls)
     double in_vent         = 0.0;  // part of energy_in: made by vents (VENT_CHEM out of the cell's A)
-    double matter_in       = 0.0;  // matter brought up from below by vents (units; the only way matter enters)
+    double in_meteor       = 0.0;  // part of energy_in: bodies (and their stores) landed by the seed power
+    double matter_in       = 0.0;  // matter arriving from outside: brought up by vents, or landed by meteors (units)
     double grown_mass      = 0.0;  // matter young bodies took from the soil to grow (not a flow of energy)
     std::size_t windfalls  = 0;    // lumps dropped this tick
     double energy_out      = 0.0;  // everything lost as heat
@@ -98,7 +99,12 @@ public:
     // Apply powers that are due right now instead of waiting for the next
     // step(), so painting works while time is paused. The result is identical
     // to letting step() do it: the next step() finds nothing left to add.
-    void flush_powers() { powers_.update(tick_, world_, chronicle_); }
+    // A meteor (the seed power) lands at once too; its energy and matter are
+    // booked into the next tick's stats, so the audit still balances.
+    void flush_powers() {
+        powers_.update(tick_, world_, chronicle_);
+        land_arrivals(true);
+    }
 
     // The world acting on its own (events.hpp). The rate can change at any
     // time; what was cast stays in the power log either way.
@@ -167,6 +173,11 @@ private:
     void drop_windfalls();
     // Vents turn their cell's A into VENT_CHEM, loose in the cell (energy.hpp).
     void run_vents();
+    // Life-bearing meteors (the seed power, powers.hpp): land the bodies of
+    // every one that has come due. Their energy and matter are new.
+    // `between_ticks`: from flush_powers, so the books go to the next tick.
+    void land_arrivals(bool between_ticks);
+    void land_meteor(const PowerCommand& cmd, bool between_ticks);
     void share_light_by_canopy();
     // Where a child flung `dist` from (x, y) along (ux, uy) comes down: it
     // stops short of any step in the ground taller than birth_max_step.
@@ -195,7 +206,9 @@ private:
     TickStats   stats_;
     PowerSystem powers_;
     WorldEvents events_;
-    double matter_brought_up_ = 0.0;   // all the matter vents have brought up since tick 0
+    double matter_brought_up_ = 0.0;   // all the matter vents and meteors have brought from outside since tick 0
+    double arrived_energy_ = 0.0;      // meteors landed between ticks (flush_powers): booked into the next tick
+    double arrived_matter_ = 0.0;
     Chronicle   chronicle_;
     SpeciesRegistry species_;
 
