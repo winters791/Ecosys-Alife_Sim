@@ -16,8 +16,11 @@
 // That is one distance check for nearly every birth; a newborn that has
 // drifted costs one more per living daughter of its parent's species.
 //
-// Not built yet: the periodic check for one species forming two clusters
-// (9.3 step 3), e.g. either side of a mountain.
+// Splits (9.3 step 3, 2026-11-12): every few thousand ticks the sim looks
+// inside each big species for two separate clusters of genomes (e.g. either
+// side of a mountain, or two ways of life in one place). If it finds them, the
+// cluster further from the founder becomes a new species and its members are
+// relabelled (Simulation::check_splits). Still no randomness.
 
 #include <cstdint>
 #include <string>
@@ -46,6 +49,7 @@ struct Species {
     uint32_t    population = 0;
     uint32_t    peak = 0;              // most alive at once
     bool        established = false;   // ever reached SPECIES_ESTABLISHED
+    bool        by_split = false;      // found by a split check, not founded by a newborn
     std::vector<uint32_t> living_daughters;  // branched from this one and not yet extinct (pruned lazily)
 
     bool alive() const { return population > 0; }
@@ -67,6 +71,12 @@ public:
     // established; died() returns true when its last member dies.
     bool born(uint32_t species);
     bool died(uint32_t species, uint64_t tick);
+
+    // A split: a new daughter of `from`, represented by `rep`, with no members
+    // yet. Members are moved over one by one with move_member().
+    uint32_t split_off(uint32_t from, const Genome& rep, uint64_t tick);
+    // Relabel one living creature. Returns true the moment `to` becomes established.
+    bool move_member(uint32_t from, uint32_t to);
 
     const std::vector<Species>& all() const { return species_; }
     const Species& get(uint32_t id) const { return species_[id]; }

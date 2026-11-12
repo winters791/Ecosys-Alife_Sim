@@ -71,6 +71,7 @@ constexpr float THROW_COST = 2.0f;
 // in a crowded cell it is several times that.
 constexpr float WASTE_HARM     = 0.0025f;  // energy per tick per unit of waste per unit of skin
 constexpr float WASTE_EAT_RATE = 0.3f;     // waste taken up per tick at full detox
+constexpr float CHEMO_RATE     = 1.0f;     // vent energy taken up per tick at full chemo
 
 // Contact.
 constexpr float CONTACT_RATE = 1.5f;  // energy per tick for a pull of 1 against no membrane
@@ -141,12 +142,64 @@ float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, f
     return CONTACT_RATE * taker.bite * edge * a * a / (a + membrane);
 }
 
+float burn(const Phenotype& p, Mix& pool, float& soil_a, float want) {
+    float released = 0.0f;
+    for (int k = 0; k < p.enzymes && released < want; ++k) {
+        const int lo = p.enz_lo[k], hi = p.enz_hi[k];
+        const float step = LEVEL[hi] - LEVEL[lo];
+        const float amount = std::min({p.enz_rate[k], pool.v[hi], (want - released) / step});
+        if (amount <= 0.0f) continue;
+        pool.v[hi] -= amount;
+        if (lo == CHEM_A) soil_a += amount;
+        else pool.v[lo] += amount;
+        released += amount * step;
+    }
+    return released;
+}
+
+float power(const Phenotype& p, const Mix& pool) {
+    // Enzymes sharing an input draw on the same stock, so cap each input by
+    // what is there.
+    float left[NCHEM];
+    for (int c = 0; c < NCHEM; ++c) left[c] = pool.v[c];
+    float total = 0.0f;
+    for (int k = 0; k < p.enzymes; ++k) {
+        const int lo = p.enz_lo[k], hi = p.enz_hi[k];
+        const float amount = std::min(p.enz_rate[k], left[hi]);
+        if (amount <= 0.0f) continue;
+        left[hi] -= amount;
+        total += amount * (LEVEL[hi] - LEVEL[lo]);
+    }
+    return total;
+}
+
+float charge(const Phenotype& p, Mix& pool, float& soil_a, float energy) {
+    float stored = 0.0f;
+    for (int k = 0; k < p.enzymes && stored < energy; ++k) {
+        const int lo = p.enz_lo[k], hi = p.enz_hi[k];
+        const float step = LEVEL[hi] - LEVEL[lo];
+        float amount = std::min(p.enz_rate[k], (energy - stored) / step);
+        if (lo == CHEM_A) amount = std::min({amount, soil_a, p.pool_capacity - pool.mass()});
+        else amount = std::min(amount, pool.v[lo]);
+        if (amount <= 0.0f) continue;
+        if (lo == CHEM_A) soil_a -= amount;
+        else pool.v[lo] -= amount;
+        pool.v[hi] += amount;
+        stored += amount * step;
+    }
+    return stored;
+}
+
 float fouling_cost(const Phenotype& p, float waste_here) {
     return WASTE_HARM * waste_here * p.surface_area;
 }
 
 float waste_demand(const Phenotype& p) {
     return WASTE_EAT_RATE * p.detox;
+}
+
+float vent_demand(const Phenotype& p) {
+    return CHEMO_RATE * p.chemo;
 }
 
 float corpse_demand(const Phenotype& p) {

@@ -1,4 +1,6 @@
 #pragma once
+
+#include <algorithm>
 // Energy rules: how much a creature gains and pays each tick, and the one
 // rule for what happens when two bodies touch.
 //
@@ -32,6 +34,18 @@ float light_demand(const Phenotype& p, const LocalEnv& env);
 // Sunbathing and moving conflict: the fraction of its light a body still
 // catches after covering `moved` world units last tick. 1 when it sat still.
 float light_while_moving(float moved);
+
+// Folding (2026-11-12, in place of MOVER_SUN): a body that moves further than
+// FOLD_STRIDE in a tick folds its sun patches shut, and they take
+// UNFOLD_TICKS (a day) to open again, catching light in proportion. A body
+// that moves now and then (to flee) loses a little; one that creeps every few
+// ticks stays folded. 0 = off.
+constexpr float FOLD_STRIDE  = 0.001f;
+constexpr float UNFOLD_TICKS = 600.0f;
+inline float next_unfold(float unfold, float moved) {
+    if (UNFOLD_TICKS <= 0.0f) return 1.0f;
+    return moved > FOLD_STRIDE ? 0.0f : std::min(1.0f, unfold + 1.0f / UNFOLD_TICKS);
+}
 
 // --- Dormancy --------------------------------------------------------------------
 // A body with the dormancy gene shuts down when it is dark, or colder than it
@@ -85,6 +99,23 @@ float throw_cost(float child_mass, float distance);
 // plates sit (BodyPlan, body.hpp).
 float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, float membrane);
 
+// --- Metabolism: the chemistry layer (chem.hpp) -----------------------------------
+// A body has no energy of its own, only a store of chemicals. Everything it
+// spends it gets by running its enzymes downhill on that store, and
+// everything it gains from light or a vent it keeps by running them uphill.
+// Each enzyme turns over at most its rate each way in one call. A reaction
+// that ends at A gives the A to the cell's soil (`soil_a`); one that starts
+// from A takes it from there, and only while the store has room.
+
+// Releases up to `want` energy from the store. Returns what it released:
+// less if the store or its enzymes can't give more.
+float burn(const Phenotype& p, Mix& pool, float& soil_a, float want);
+// The most `burn` could release from this store this tick.
+float power(const Phenotype& p, const Mix& pool);
+// Stores up to `energy` in the store. Returns what it stored: less if there
+// is no A to hand, no room, or no enzyme to do it.
+float charge(const Phenotype& p, Mix& pool, float& soil_a, float energy);
+
 // Energy per tick this creature tries to pull out of dead matter in its cell.
 float corpse_demand(const Phenotype& p);
 
@@ -106,6 +137,13 @@ constexpr float WASTE_SHARE = 0.2f;
 float fouling_cost(const Phenotype& p, float waste_here);
 // Waste this body tries to take up per tick (before sharing within the cell).
 float waste_demand(const Phenotype& p);
+
+// --- Vents (2026-11-12) -------------------------------------------------------
+// A vent gives its cell a steady flow of energy, day and night (World::vent_energy).
+// Only bodies with the chemo gene take it up; they share the cell's flow like
+// the dead and keep all of it (it is a second sun, not a meal). What nobody
+// takes is lost. Booked under energy_in.
+float vent_demand(const Phenotype& p);
 // Each field update (8 ticks), this fraction of a cell's waste moves to its
 // four neighbours (a quarter each), and this fraction breaks down to heat.
 constexpr float WASTE_SPREAD = 0.2f;

@@ -28,7 +28,12 @@ Genome make_luca() {
     g.repro_threshold   = 600.0f;  // a child's body costs 244; this leaves both enough to last a night
     g.offspring_share   = 0.5f;
     g.seed_throw        = 0.0f;    // its children land right beside it
+    g.birth_size        = 0.5f;    // its children are born at half its mass and grow the rest
     g.parts.push_back(Part{PartType::Photo, 1.0f, 0.0f, 0.0f, 0.0f});
+    // Its whole chemistry: A <-> D. Light runs it up (A from the soil into D in
+    // its store), and it burns D back to A to live. 0.015 a tick is 3.3 energy
+    // a tick each way, several times what it burns or catches at noon.
+    g.enzymes.push_back(Enzyme{CHEM_A, CHEM_D, 0.015f});
     return g;
 }
 
@@ -49,6 +54,9 @@ void Brain::remove_hidden(int k) {
         if (l.from > gone) --l.from;
         if (l.to > gone) --l.to;
     }
+    for (int j = k; j + 1 < hidden; ++j) { tau[j] = tau[j + 1]; bias[j] = bias[j + 1]; }
+    tau[hidden - 1] = 1.0f;
+    bias[hidden - 1] = 0.0f;
     --hidden;
 }
 
@@ -77,12 +85,23 @@ void clamp_genome(Genome& g) {
     g.squareness        = std::clamp(g.squareness, 0.0f, 1.0f);
     g.mutability        = std::clamp(g.mutability, MIN_MUTABILITY, MAX_MUTABILITY);
     g.repair            = std::clamp(g.repair, 0.0f, 1.0f);
+    g.chemo             = std::clamp(g.chemo, 0.0f, 1.0f);
+    g.birth_size        = std::clamp(g.birth_size, MIN_BIRTH, MAX_BIRTH);
     if (g.parts.size() > static_cast<std::size_t>(MAX_PARTS)) g.parts.resize(MAX_PARTS);
     for (Part& p : g.parts) {
         if (static_cast<int>(p.type) >= static_cast<int>(PartType::Count)) p.type = PartType::Photo;
         p.size = std::clamp(p.size, MIN_PART, MAX_PART);
         p.stalk = can_have_stalk(p.type) ? std::clamp(p.stalk, 0.0f, MAX_STALK) : 0.0f;
         p.theta = std::remainder(p.theta, 6.2831853f);  // -pi .. pi
+    }
+    // Enzymes: two different chemicals, the poorer first, rate within bounds.
+    if (g.enzymes.size() > static_cast<std::size_t>(MAX_ENZYMES)) g.enzymes.resize(MAX_ENZYMES);
+    for (Enzyme& e : g.enzymes) {
+        e.x = static_cast<uint8_t>(std::min<int>(e.x, NCHEM - 1));
+        e.y = static_cast<uint8_t>(std::min<int>(e.y, NCHEM - 1));
+        if (e.x == e.y) e.y = static_cast<uint8_t>((e.x + 1) % NCHEM);
+        if (e.x > e.y) std::swap(e.x, e.y);
+        e.rate = std::isfinite(e.rate) ? std::clamp(e.rate, MIN_ENZYME_RATE, MAX_ENZYME_RATE) : MIN_ENZYME_RATE;
     }
     // The brain: drop links that point at nothing or run the wrong way, and
     // keep its size within bounds.
@@ -97,6 +116,11 @@ void clamp_genome(Genome& g) {
     if (b.links.size() > static_cast<std::size_t>(MAX_LINKS)) b.links.resize(MAX_LINKS);
     for (BrainLink& l : b.links) l.weight = std::clamp(l.weight, -MAX_WEIGHT, MAX_WEIGHT);
     if (b.links.empty()) b.hidden = 0;
+    for (int k = 0; k < MAX_HIDDEN; ++k) {
+        const bool used = k < b.hidden;
+        b.tau[k] = used && std::isfinite(b.tau[k]) ? std::clamp(b.tau[k], MIN_TAU, MAX_TAU) : 1.0f;
+        b.bias[k] = used && std::isfinite(b.bias[k]) ? std::clamp(b.bias[k], -MAX_WEIGHT, MAX_WEIGHT) : 0.0f;
+    }
 }
 
 }  // namespace luca

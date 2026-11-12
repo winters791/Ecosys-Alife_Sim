@@ -28,6 +28,8 @@ void IntervalTotals::add(const TickStats& s) {
     excreted     += s.excreted;
     eaten_waste  += s.eaten_waste;
     in_windfall  += s.in_windfall;
+    in_vent      += s.in_vent;
+    grown_mass   += s.grown_mass;
     windfalls    += s.windfalls;
     eaten_living += s.eaten_living;
     eaten_dead   += s.eaten_dead;
@@ -52,7 +54,9 @@ bool MetricsWriter::open(const std::string& path) {
             "producers,hunters,scavengers,mixed,movers,sighted,armoured,"
             "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison,gene_transfers,gene_transfers_cross,gene_transfers_novel,"
             "waste_total,excreted,eaten_waste,out_fouling,out_waste_decay,cleaners,mean_detox,mean_mutability,mean_repair,"
-            "in_windfall,windfalls\n";
+            "in_windfall,windfalls,in_vent,chemotrophs,mean_chemo,growing,mean_birth_size,grown_mass,"
+            "neurons,slow_neurons,mean_tau,"
+            "pool_B,pool_C,pool_D,tissue_B,tissue_C,tissue_D,mean_enzymes,rx_AB,rx_AC,rx_AD,rx_BC,rx_BD,rx_CD\n";
     return true;
 }
 
@@ -64,12 +68,30 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     double sum_e = 0, sum_r = 0, sum_photo = 0, sum_parts = 0;
     double photo_b = 0, photo_d = 0, sum_speed = 0, sum_absorb = 0, sum_armour = 0, sum_throw = 0, sum_bite = 0, sum_digest = 0, sum_neurons = 0, sum_links = 0, sum_detox = 0;
     std::size_t brains = 0;
+    // CTRNN neurons in running brains: how many, how many are slow (tau of
+    // SLOW_TAU ticks or more), and their time constants' geometric mean.
+    constexpr float SLOW_TAU = 30.0f;
+    std::size_t neurons = 0, slow_neurons = 0;
+    double sum_log_tau = 0.0;
     int max_neurons = 0;
-    double sum_dormancy = 0, sum_mutability = 0, sum_repair = 0;
+    double sum_dormancy = 0, sum_mutability = 0, sum_repair = 0, sum_chemo = 0, sum_birth = 0;
     std::size_t asleep = 0;
     std::size_t nb = 0, nd = 0;
     uint32_t max_gen = 0;
     std::unordered_set<uint32_t> lineages;
+    // Chemistry: what stores and bodies are made of (mass of B, C, D), and how
+    // many bodies can run each of the six reactions.
+    double pool_m[NCHEM] = {}, tissue_m[NCHEM] = {}, sum_enzymes = 0;
+    std::size_t rx[NCHEM][NCHEM] = {};
+    for (std::size_t i = 0; i < n; ++i) {
+        for (int k = 0; k < NCHEM; ++k) { pool_m[k] += c.pool[i].v[k]; tissue_m[k] += c.tissue[i].v[k]; }
+        const Phenotype& ph = c.pheno[i];
+        sum_enzymes += ph.enzymes;
+        bool has[NCHEM][NCHEM] = {};
+        for (int e = 0; e < ph.enzymes; ++e) has[ph.enz_lo[e]][ph.enz_hi[e]] = true;
+        for (int x = 0; x < NCHEM; ++x)
+            for (int y = x + 1; y < NCHEM; ++y) rx[x][y] += has[x][y];
+    }
     for (std::size_t i = 0; i < n; ++i) {
         const float photo = total_part_size(c.genome[i], PartType::Photo);
         sum_e += c.energy[i];
@@ -87,12 +109,20 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
         sum_dormancy += c.genome[i].dormancy;
         sum_mutability += c.genome[i].mutability;
         sum_repair += c.genome[i].repair;
+        sum_chemo += c.genome[i].chemo;
+        sum_birth += c.genome[i].birth_size;
         asleep += c.sleep[i] >= DEEP_SLEEP ? 1 : 0;
         if (c.pheno[i].has_brain) {   // brains that are actually running
             ++brains;
             sum_neurons += c.brain[i].hidden;
             sum_links += c.brain[i].links;
             max_neurons = std::max(max_neurons, static_cast<int>(c.brain[i].hidden));
+            const Brain& b = c.genome[i].brain;
+            for (int k = 0; k < b.hidden; ++k) {
+                ++neurons;
+                slow_neurons += b.tau[k] >= SLOW_TAU;
+                sum_log_tau += std::log(b.tau[k]);
+            }
         }
         sum_absorb += c.pheno[i].part_total[static_cast<int>(PartType::Absorber)];
         sum_armour += c.pheno[i].part_total[static_cast<int>(PartType::Armour)];
@@ -104,7 +134,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     const Census& k = sim.census();
     double nutrient = 0, corpse = 0;
     for (float v : sim.soil().nutrient) nutrient += v;
-    for (float v : sim.soil().corpse_matter) corpse += v;
+    for (const Mix& v : sim.soil().corpse) corpse += v.mass();
     double waste = 0;
     for (float v : sim.soil().waste) waste += v;
 
@@ -135,7 +165,11 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
          << t.gene_transfers << ',' << t.gene_transfers_cross << ',' << t.gene_transfers_novel << ','
          << waste << ',' << t.excreted << ',' << t.eaten_waste << ',' << t.out_fouling << ',' << t.out_waste_decay << ','
          << k.cleaners << ',' << sum_detox * inv << ',' << sum_mutability * inv << ',' << sum_repair * inv << ','
-         << t.in_windfall << ',' << t.windfalls << '\n';
+         << t.in_windfall << ',' << t.windfalls << ',' << t.in_vent << ',' << k.chemotrophs << ',' << sum_chemo * inv
+         << ',' << k.growing << ',' << sum_birth * inv << ',' << t.grown_mass << ','
+         << neurons << ',' << slow_neurons << ',' << (neurons ? std::exp(sum_log_tau / static_cast<double>(neurons)) : 0.0) << ','
+         << pool_m[1] << ',' << pool_m[2] << ',' << pool_m[3] << ',' << tissue_m[1] << ',' << tissue_m[2] << ',' << tissue_m[3] << ','
+         << sum_enzymes * inv << ',' << rx[0][1] << ',' << rx[0][2] << ',' << rx[0][3] << ',' << rx[1][2] << ',' << rx[1][3] << ',' << rx[2][3] << '\n';
     out_.flush();
     return audit;
 }
@@ -161,7 +195,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
     if (!f) return false;
     f << "x,y,energy,age,lineage,generation,core_radius,photo,parts,pigment,"
          "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy,detox,fed_waste,"
-         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair\n";
+         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair,chemo,fed_vent,birth_size,grown\n";
     const Creatures& c = sim.creatures();
     for (std::size_t i = 0; i < c.size(); ++i) {
         const Genome& g = c.genome[i];
@@ -172,7 +206,7 @@ bool write_creature_snapshot(const Simulation& sim, const std::string& path) {
         for (int t = 1; t < static_cast<int>(PartType::Count); ++t) f << ',' << c.pheno[i].part_total[t];
         f << ',' << c.pheno[i].max_speed << ',' << c.fed_light[i] << ',' << c.fed_living[i] << ',' << c.fed_dead[i] << ',' << c.species[i] << ',' << g.seed_throw << ',' << g.bite << ',' << g.digestion << ','
           << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << g.detox << ',' << c.fed_waste[i] << ','
-          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << '\n';
+          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << ',' << g.chemo << ',' << c.fed_vent[i] << ',' << g.birth_size << ',' << c.pheno[i].grown << '\n';
     }
     return true;
 }
@@ -181,7 +215,7 @@ bool write_species_table(const Simulation& sim, const std::string& path) {
     std::ofstream f(path);
     if (!f) return false;
     f << "id,name,parent,born_tick,extinct_tick,population,peak,established,"
-         "core_radius,photo,absorber,flagellum,legs,sensor,armour,storage,poison,brain\n";
+         "core_radius,photo,absorber,flagellum,legs,sensor,armour,storage,poison,brain,split\n";
     for (const Species& s : sim.species().all()) {
         f << s.id << ',' << s.name << ',';
         if (s.parent != NO_SPECIES) f << s.parent;
@@ -191,7 +225,7 @@ bool write_species_table(const Simulation& sim, const std::string& path) {
           << s.representative.core_radius;
         for (int t = 0; t < static_cast<int>(PartType::Count); ++t)
             f << ',' << total_part_size(s.representative, static_cast<PartType>(t));
-        f << ',' << (s.representative.brain.empty() ? 0 : 1) << '\n';
+        f << ',' << (s.representative.brain.empty() ? 0 : 1) << ',' << (s.by_split ? 1 : 0) << '\n';
     }
     return true;
 }

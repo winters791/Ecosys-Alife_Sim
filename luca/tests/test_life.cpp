@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -229,8 +230,8 @@ void test_costs() {
     CHECK(flow(huge, mid) == flow(big, mid));
     CHECK(flow(tiny, mid) > 0.0f);            // a parasite's sip, never nothing
 
-    // A body is worth eating: a LUCA's corpse holds about 244.
-    CHECK(std::abs(compile_phenotype(make_luca()).body_energy - 244.0f) < 2.0f);
+    // A body is worth eating: a LUCA's body, built of D, holds about 244.
+    CHECK(std::abs(compile_phenotype(make_luca()).mass * TOP_LEVEL - 244.0f) < 2.0f);
 }
 
 void test_movement() {
@@ -292,7 +293,7 @@ void test_contact_and_corpses() {
     Simulation sim(cfg);
 
     // A mouth with no patch, touching a LUCA. Far away, a second LUCA alone.
-    const uint64_t hunter = sim.add_creature(24.2f, 6.0f, 100.0f, aim_east(sim, with_part(PartType::Absorber, 1.5f)));
+    const uint64_t hunter = sim.add_creature(24.2f, 6.5f, 100.0f, aim_east(sim, with_part(PartType::Absorber, 1.5f)));
     const uint64_t prey   = sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
     const uint64_t loner  = sim.add_creature(40.5f, 6.0f, 300.0f, make_luca());
     const double matter0 = sim.total_matter();
@@ -323,7 +324,7 @@ void test_contact_and_corpses() {
     CHECK(sim.creatures().size() < 3);
     double soil = 0.0;
     for (float v : sim.soil().nutrient) soil += v;
-    for (float v : sim.soil().corpse_matter) soil += v;
+    for (const Mix& v : sim.soil().corpse) soil += v.mass();
     CHECK(soil > 0.0);
 }
 
@@ -341,7 +342,7 @@ void test_scavenging() {
     sim.step();
     const int here = sim.world().cell_index(10.5f, 10.5f), there = sim.world().cell_index(30.5f, 10.5f);
     CHECK(sim.creatures().size() == 0);
-    CHECK(sim.soil().corpse_energy[here] > 0.0f && sim.soil().corpse_matter[here] > 0.0f);
+    CHECK(sim.soil().corpse_energy[here] > 0.0f && sim.soil().corpse[here].mass() > 0.0f);
 
     const uint64_t eater = sim.add_creature(10.4f, 10.6f, 50.0f, with_part(PartType::Absorber, 0.5f));
     double eaten = 0.0;
@@ -353,7 +354,7 @@ void test_scavenging() {
     const std::size_t i = find(sim, eater);
     CHECK(i < sim.creatures().size() && sim.creatures().fed_dead[i] > 0.0f);
     // The eaten corpse has given up far more of its matter than the one left to weather.
-    CHECK(sim.soil().corpse_matter[here] < sim.soil().corpse_matter[there] * 0.5f);
+    CHECK(sim.soil().corpse[here].mass() < sim.soil().corpse[there].mass() * 0.5f);
     CHECK(sim.soil().nutrient[here] > sim.soil().nutrient[there]);
 }
 
@@ -591,7 +592,7 @@ void test_feeding_genes_and_kin_sense() {
     cfg.nutrient_mean = 0.0f;   // nobody breeds
     {
         Simulation sim(cfg);
-        sim.add_creature(24.2f, 6.0f, 100.0f, aim_east(sim, gut_g));
+        sim.add_creature(24.2f, 6.5f, 100.0f, aim_east(sim, gut_g));
         sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
         double eaten = 0.0, lost = 0.0;
         for (int t = 0; t < 40; ++t) {
@@ -1299,6 +1300,7 @@ void test_windfalls() {
     SimConfig cfg = small_config();
     cfg.windfall_rate = 0.01f;
     cfg.windfall_size = 50.0f;   // 48 x 48 cells: about 0.46 lumps a tick
+    cfg.nutrient_patchiness = 0.0f;   // every cell has the A a lump is made from
     Simulation a(cfg), b(cfg);
     const double matter0 = a.total_matter();
     double start = a.stored_energy(), in = 0, out = 0, fallen = 0;
@@ -1318,9 +1320,7 @@ void test_windfalls() {
     CHECK(out > 0.0);                                                  // uneaten, it weathers away
     CHECK(std::abs(a.stored_energy() - (start + in - out)) < 1e-4 * a.stored_energy());
     CHECK(std::abs(a.total_matter() - matter0) < 1e-6 * matter0);
-    double corpse_matter = 0.0;
-    for (float m : a.soil().corpse_matter) corpse_matter += m;
-    CHECK(corpse_matter == 0.0);
+    // A lump is D made from the cell's own A: the matter was already there.
     CHECK(a.soil().corpse_energy == b.soil().corpse_energy);           // deterministic
 
     cfg.windfall_rate = 0.0f;
@@ -1329,6 +1329,386 @@ void test_windfalls() {
     double left = 0.0;
     for (float e : none.soil().corpse_energy) left += e;
     CHECK(left == 0.0);
+}
+
+// Vents: a brush opens one, it warms the ground and gives its cell a steady
+// flow of energy, day and night, that only bodies with the chemo gene take up.
+// Folding: a body that moves folds its sun patches and they take
+// UNFOLD_TICKS to reopen; a body that sits still keeps them open. Being able
+// to move costs no light of itself (MOVER_SUN is 1).
+void test_folding() {
+    using namespace luca;
+    Genome mover = make_luca();
+    mover.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
+    mover.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
+    Genome still = mover;
+    still.brain.clear();
+    CHECK(compile_phenotype(mover).light_capture == compile_phenotype(still).light_capture);
+    CHECK(next_unfold(1.0f, 0.0f) == 1.0f);                      // sitting still: open
+    CHECK(next_unfold(1.0f, 2.0f * FOLD_STRIDE) == 0.0f);        // one stride: shut
+    float u = 0.0f;
+    for (int t = 0; t < static_cast<int>(UNFOLD_TICKS / 2); ++t) u = next_unfold(u, 0.0f);
+    CHECK(std::abs(u - 0.5f) < 1e-3f);                           // half open after half the time
+
+    // In a world: a wanderer catches far less light than the same body still.
+    Simulation sim(small_config());
+    mover.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.5f);
+    const uint64_t a = sim.add_creature(10.0f, 6.0f, 600.0f, mover);
+    const uint64_t b = sim.add_creature(30.0f, 6.0f, 600.0f, still);
+    for (int t = 0; t < 300; ++t) sim.step();
+    const Creatures& c = sim.creatures();
+    const std::size_t ia = find(sim, a), ib = find(sim, b);
+    CHECK(ia < c.size() && ib < c.size());
+    if (ia < c.size() && ib < c.size()) CHECK(c.fed_light[ia] < 0.2f * c.fed_light[ib]);
+}
+
+// A species holding two separate clusters of genomes is split in two at the
+// next check; a species of one kind is not. Following it reports the split.
+void test_species_split() {
+    using namespace luca;
+    // The first body founds the species; then two groups that each differ from
+    // it in one gene (distance 0.6 and 0.7) and from each other in both (0.92).
+    auto run = [](bool apart, bool watch, Simulation& sim) {
+        sim.add_creature(24.0f, 24.0f, 300.0f, make_luca());
+        Genome a = make_luca(), b = a;
+        if (apart) {
+            a.pigment += 0.3f;
+            b.thermal_tolerance += 14.0f;
+        }
+        for (int k = 0; k < 20; ++k) sim.add_creature(4.0f + (k % 5) * 2.0f, 4.0f + (k / 5) * 2.0f, 300.0f, a);
+        // Both groups in the same band of light, so neither dwindles below a
+        // quarter of the species by chance (in the dim corner it could).
+        for (int k = 0; k < 20; ++k) sim.add_creature(34.0f + (k % 5) * 2.0f, 4.0f + (k / 5) * 2.0f, 300.0f, b);
+        if (watch) sim.follow(0);
+        for (int t = 0; t < 2000; ++t) sim.step();
+    };
+
+    Simulation two(small_config());
+    run(true, true, two);
+    const auto& all = two.species().all();
+    CHECK(genome_distance(make_luca(), all[0].representative) == 0.0f);
+    const Species* split = nullptr;
+    for (const Species& s : all) if (s.by_split) split = &s;
+    CHECK(split != nullptr);
+    if (split) {
+        CHECK(split->parent == 0 && split->established && split->alive());
+        const float tol = make_luca().thermal_tolerance + 7.0f;
+        CHECK(split->representative.thermal_tolerance > tol);   // the side further from the founder leaves
+        const Creatures& c = two.creatures();
+        for (std::size_t i = 0; i < c.size(); ++i)
+            if (c.species[i] == 0 || c.species[i] == split->id)
+                CHECK((c.genome[i].thermal_tolerance > tol) == (c.species[i] == split->id));
+        std::size_t on = 0;
+        for (const Species& s : all) on += s.population;
+        CHECK(on == c.size());                           // the books still add up
+    }
+    bool logged = false, alerted = false;
+    for (const auto& e : two.chronicle().entries()) logged |= e.text.find("splits in two") != std::string::npos;
+    for (const auto& e : two.alerts().entries()) alerted |= e.text.find("splits in two") != std::string::npos;
+    CHECK(logged && alerted);
+
+    // All alike: no split.
+    Simulation one(small_config());
+    run(false, false, one);
+    for (const Species& s : one.species().all()) CHECK(!s.by_split);
+    CHECK(one.alerts().entries().empty());              // nothing followed, nothing reported
+}
+
+// Following a species: alerts when most of it gains a part, when it grows in
+// number, and none once it is no longer followed.
+void test_follow_species() {
+    using namespace luca;
+    Simulation sim(small_config());
+    const Genome plain = make_luca();
+    Genome eyed = plain;
+    eyed.parts.push_back({PartType::Sensor, 0.5f, 0.0f, 0.0f});
+    CHECK(genome_distance(plain, eyed) < SPECIES_THRESHOLD);
+    for (int k = 0; k < 20; ++k) sim.add_creature(4.0f + k * 2.0f, 8.0f, 300.0f, plain);
+    sim.follow(0);
+    CHECK(sim.following(0) && sim.followed().size() == 1);
+    for (int k = 0; k < 40; ++k) sim.add_creature(4.0f + (k % 20) * 2.0f, 20.0f + (k / 20) * 4.0f, 300.0f, eyed);
+    CHECK(sim.creatures().species.back() == 0);
+    for (int t = 0; t < 200; ++t) sim.step();
+    bool eyes = false, thriving = false;
+    for (const auto& e : sim.alerts().entries()) {
+        eyes |= e.text.find("now have eyes") != std::string::npos;
+        thriving |= e.text.find("thriving") != std::string::npos;
+    }
+    CHECK(eyes && thriving);
+    const std::size_t before = sim.alerts().entries().size();
+    sim.follow(0, false);
+    CHECK(!sim.following(0));
+    for (int t = 0; t < 400; ++t) sim.step();
+    CHECK(sim.alerts().entries().size() == before);
+}
+
+// The CTRNN brain: a neuron with tau 1 and no bias is the old instant
+// neuron; a slow one creeps towards its input and holds on to it after; time
+// constants cost upkeep and stay in range under mutation; removing a neuron
+// keeps the others' genes with them.
+// Touch: a body being drained feels it, and the one draining it feels it is
+// eating; a body nobody touches feels neither. A brain wired to "hurt" can
+// use it: a prey that only moves when drained stays put until something bites.
+void test_touch() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;
+    Simulation sim(cfg);
+    const uint64_t hunter = sim.add_creature(24.2f, 6.5f, 100.0f, aim_east(sim, with_part(PartType::Absorber, 1.5f)));
+    Genome skittish = make_luca();
+    skittish.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
+    skittish.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), -3.0f);   // sits still...
+    skittish.brain.connect(input_node(IN_HURT), output_node(OUT_THROTTLE), 6.0f);   // ...until something bites
+    skittish.brain.connect(input_node(IN_HURT), output_node(OUT_WANDER), 3.0f);
+    const uint64_t prey  = sim.add_creature(24.6f, 6.5f, 300.0f, skittish);
+    const uint64_t calm  = sim.add_creature(40.5f, 6.5f, 300.0f, skittish);     // nobody near it
+    const float calm_x = sim.creatures().x[find(sim, calm)];
+    for (int t = 0; t < 3; ++t) sim.step();
+    const Creatures& c = sim.creatures();
+    // In the middle of a cell, so its first steps don't climb a cliff it
+    // can't power (a step costs at most what its enzymes release in a tick).
+    const std::size_t ih = find(sim, hunter), ip = find(sim, prey), ic = find(sim, calm);
+    CHECK(ih < c.size() && ip < c.size() && ic < c.size());
+    if (failures) return;
+    CHECK(c.ate[ih] > 0.0f && c.hurt[ih] == 0.0f);
+    CHECK(c.hurt[ip] > 0.0f && c.ate[ip] == 0.0f);
+    CHECK(c.hurt[ic] == 0.0f && c.ate[ic] == 0.0f);
+    CHECK(c.moved[ip] > 0.0f);            // bitten, it runs
+    CHECK(c.x[ic] == calm_x);             // untouched, it stays
+}
+
+void test_ctrnn() {
+    using namespace luca;
+    auto one_neuron = [](float tau, float bias) {
+        Genome g = make_luca();
+        g.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
+        g.brain.hidden = 1;
+        g.brain.tau[0] = tau;
+        g.brain.bias[0] = bias;
+        g.brain.connect(input_node(IN_HUNGER), hidden_node(0), 1.5f);
+        g.brain.connect(hidden_node(0), output_node(OUT_WANDER), 2.0f);
+        clamp_genome(g);
+        return g;
+    };
+    float in[NUM_INPUTS] = {}, out[NUM_OUTPUTS];
+    in[IN_BIAS] = 1.0f;
+    in[IN_HUNGER] = 0.8f;
+
+    {   // Fast: the old rule, out = 2 tanh(1.5 x 0.8), at once.
+        const BrainPlan plan = compile_brain(one_neuron(1.0f, 0.0f));
+        BrainState st;
+        think(plan, st, in, out);
+        CHECK(std::abs(out[OUT_WANDER] - 2.0f * std::tanh(1.2f)) < 1e-6f);
+    }
+    {   // Bias shifts where it fires.
+        const BrainPlan plan = compile_brain(one_neuron(1.0f, -1.2f));
+        BrainState st;
+        think(plan, st, in, out);
+        CHECK(std::abs(out[OUT_WANDER]) < 1e-6f);
+    }
+    {   // Slow (tau 100): a hundredth of the way the first tick, about 63% after
+        // 100 ticks, and after the input stops it is still mostly there 20 ticks on.
+        const BrainPlan plan = compile_brain(one_neuron(100.0f, 0.0f));
+        BrainState st;
+        think(plan, st, in, out);
+        CHECK(std::abs(st.hidden[0] - 0.012f) < 1e-5f);
+        for (int t = 1; t < 100; ++t) think(plan, st, in, out);
+        CHECK(std::abs(st.hidden[0] - 1.2f * (1.0f - std::pow(0.99f, 100.0f))) < 1e-3f);
+        const float held = st.hidden[0];
+        in[IN_HUNGER] = 0.0f;
+        for (int t = 0; t < 20; ++t) think(plan, st, in, out);
+        CHECK(st.hidden[0] > 0.8f * held && out[OUT_WANDER] > 0.5f);
+        in[IN_HUNGER] = 0.8f;
+    }
+    {   // Memory costs: a slow neuron dearer than a fast one, by MEMORY_COST per e-fold.
+        const float fast = compile_phenotype(one_neuron(1.0f, 0.0f)).upkeep;
+        const float slow = compile_phenotype(one_neuron(1000.0f, 0.0f)).upkeep;
+        const float biased = compile_phenotype(one_neuron(1.0f, 1.0f)).upkeep;
+        CHECK(slow > fast + 0.0001f && slow < fast + 0.0002f);   // MEMORY_COST x ln 1000
+        CHECK(biased > fast);
+    }
+    {   // Range, mutation and removal.
+        Genome g = one_neuron(5000.0f, 9.0f);
+        CHECK(g.brain.tau[0] == limits::MAX_TAU && g.brain.bias[0] == limits::MAX_WEIGHT);
+        g.brain.hidden = 3;
+        g.brain.tau[1] = 7.0f;  g.brain.bias[1] = 0.5f;
+        g.brain.tau[2] = 50.0f; g.brain.bias[2] = -0.5f;
+        g.brain.connect(hidden_node(2), output_node(OUT_LIGHT), 1.0f);
+        g.brain.remove_hidden(1);
+        CHECK(g.brain.hidden == 2 && g.brain.tau[1] == 50.0f && g.brain.bias[1] == -0.5f && g.brain.tau[2] == 1.0f);
+        bool linked = false;
+        for (const BrainLink& l : g.brain.links) linked |= l.from == hidden_node(1) && l.to == output_node(OUT_LIGHT);
+        CHECK(linked);   // the link followed its neuron down one place
+        Rng rng(5);
+        bool moved = false;
+        for (int k = 0; k < 3000; ++k) {
+            g = mutate(g, rng);
+            for (int h = 0; h < g.brain.hidden; ++h) {
+                CHECK(g.brain.tau[h] >= limits::MIN_TAU && g.brain.tau[h] <= limits::MAX_TAU);
+                moved |= g.brain.tau[h] > 1.0f && g.brain.tau[h] < limits::MAX_TAU;
+            }
+        }
+        CHECK(moved);
+    }
+}
+
+void test_growing_up() {
+    using namespace luca;
+    // A young body is the adult scaled down by mass.
+    const Phenotype adult = compile_phenotype(make_luca()), half = compile_phenotype(make_luca(), 0.5f);
+    CHECK(make_luca().birth_size == 0.5f && adult.grown == 1.0f && half.grown == 0.5f);
+    CHECK(std::abs(half.mass - 0.5f * adult.mass) < 1e-5f);
+    CHECK(std::abs(half.pool_capacity - 0.5f * adult.pool_capacity) < 1e-4f);
+    CHECK(std::abs(half.energy_capacity - 0.5f * adult.energy_capacity) < 1e-2f);
+    CHECK(std::abs(half.radius - std::cbrt(0.5f) * adult.radius) < 1e-5f);
+    CHECK(half.upkeep < adult.upkeep && half.light_capture < adult.light_capture);
+    CHECK(half.heat_follow > adult.heat_follow);   // small bodies lose heat faster
+    CHECK(flow(compile_phenotype(with_part(PartType::Absorber, 1.0f)), half) >
+          flow(compile_phenotype(with_part(PartType::Absorber, 1.0f)), adult));   // and are easier to drain
+
+    SimConfig cfg = small_config();
+    cfg.day_length = 0;
+    cfg.nutrient_patchiness = 0.0f;
+    cfg.nutrient_mean = 20.0f;
+    cfg.slope_shade = 0.0f;
+    cfg.windfall_rate = 0.0f;
+    cfg.wash_rate = 0.0f;   // so its cell's soil changes only by what it takes
+
+    // A young LUCA with plenty to spend grows to full size, then breeds.
+    // Its body is built of the chemicals in its store, which light refills
+    // from its own cell's soil.
+    Simulation sim(cfg);
+    const uint64_t kid = sim.add_creature(20.5f, 20.5f, 300.0f, make_luca(), 0.5f);
+    CHECK(sim.creatures().pheno[find(sim, kid)].grown == 0.5f);
+    const double matter0 = sim.total_matter();
+    const int cell = sim.world().cell_index(20.5f, 20.5f);
+    const float soil0 = sim.soil().nutrient[cell];
+    const float held0 = sim.creatures().pool[0].mass() + sim.creatures().tissue[0].mass();
+    bool bred_young = false;
+    float grown = 0.5f;
+    double grew = 0.0, start = sim.stored_energy(), in = 0.0, out = 0.0;
+    for (int t = 0; t < 40 && grown < 1.0f; ++t) {
+        for (int k = 0; k < 50; ++k) {
+            sim.step();
+            grew += sim.last_stats().grown_mass;
+            in += sim.last_stats().energy_in;
+            out += sim.last_stats().energy_out;
+        }
+        const std::size_t i = find(sim, kid);
+        CHECK(i < sim.creatures().size());
+        if (i >= sim.creatures().size()) break;
+        grown = sim.creatures().pheno[i].grown;
+        if (grown < 1.0f && sim.creatures().size() > 1) bred_young = true;
+    }
+    CHECK(grown == 1.0f);
+    CHECK(!bred_young);                                       // nothing is born before it is grown
+    {
+        const std::size_t i = find(sim, kid);
+        // Whatever it holds now beyond what it started with came out of its cell.
+        const float gained = sim.creatures().pool[i].mass() + sim.creatures().tissue[i].mass() - held0;
+        CHECK(gained > 0.1f && std::abs(soil0 - sim.soil().nutrient[cell] - gained) < 1e-3f);
+        // Its body is what its store held: D.
+        CHECK(std::abs(sim.creatures().tissue[i].mass() - sim.creatures().pheno[i].mass) < 1e-4f);
+        CHECK(sim.creatures().tissue[i].v[CHEM_D] > 0.99f * sim.creatures().tissue[i].mass());
+    }
+    CHECK(std::abs(grew - (adult.mass - half.mass)) < 1e-3);   // and is counted
+    CHECK(std::abs(sim.creatures().pheno[find(sim, kid)].mass - adult.mass) < 1e-4f);
+    CHECK(std::abs(sim.stored_energy() - (start + in - out)) < 1e-4 * sim.stored_energy());
+    CHECK(std::abs(sim.total_matter() - matter0) < 1e-4 * matter0);
+
+    // Its children are born at the size in their own genome.
+    for (int t = 0; t < 4000 && sim.creatures().size() < 2; ++t) sim.step();
+    const Creatures& c = sim.creatures();
+    CHECK(c.size() >= 2);
+    int newborns = 0;
+    for (std::size_t i = 0; i < c.size(); ++i)
+        if (c.generation[i] == 1 && c.age[i] < 4) {
+            ++newborns;
+            CHECK(std::abs(c.pheno[i].grown - c.genome[i].birth_size) < 1e-6f);
+            CHECK(c.pheno[i].grown < 1.0f);
+        }
+    CHECK(newborns == 1);
+
+    // No soil, nothing new to build with: on bare ground a young body can
+    // only build itself out of what it carries, and its store never refills.
+    SimConfig bare = cfg;
+    bare.nutrient_mean = 0.0f;
+    Simulation poor(bare);
+    const uint64_t stunted = poor.add_creature(20.5f, 20.5f, 400.0f, make_luca(), 0.5f);
+    const std::size_t s0 = find(poor, stunted);
+    const float carried = poor.creatures().pool[s0].mass() + poor.creatures().tissue[s0].mass();
+    for (int t = 0; t < 200; ++t) poor.step();
+    const std::size_t si = find(poor, stunted);
+    CHECK(si < poor.creatures().size());
+    if (si < poor.creatures().size()) {
+        CHECK(poor.creatures().pool[si].mass() + poor.creatures().tissue[si].mass() < carried);
+    }
+}
+
+void test_vents() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.sun_strength = 0.0f;      // a dark world: the vent is the only food
+    // Soil to store the vent's energy in (A -> D); too little time to breed.
+    cfg.nutrient_mean = 6.0f;
+    cfg.nutrient_patchiness = 0.0f;
+    cfg.windfall_rate = 0.0f;
+    Simulation sim(cfg);
+    const World& w = sim.world();
+    const int cell = w.cell_index(20.5f, 20.5f);
+    const float cold = w.mean_temperature(cell);
+    CHECK(!w.any_vents() && w.vent_energy(cell) == 0.0f);
+
+    PowerCommand open;
+    open.kind = PowerKind::Vent;
+    open.x = 20.5f; open.y = 20.5f; open.radius = 2.0f; open.amount = 1.0f;
+    sim.cast(open);
+    sim.flush_powers();
+    CHECK(w.any_vents() && std::abs(w.vent(cell) - 1.0f) < 1e-4f);
+    CHECK(std::abs(w.vent_energy(cell) - cfg.vent_power) < 1e-4f);
+    CHECK(std::abs(w.mean_temperature(cell) - cold - cfg.vent_heat) < 1e-3f);   // vents are warm
+
+    // Phenotype: chemosynthesis costs upkeep whether or not there is a vent.
+    Genome chemo_g = make_luca();
+    chemo_g.chemo = 1.0f;
+    CHECK(std::abs(compile_phenotype(chemo_g).upkeep - compile_phenotype(make_luca()).upkeep - 0.1f) < 1e-4f);
+
+    // Two chemo bodies share the vent; a plain LUCA beside them gets nothing.
+    const uint64_t a = sim.add_creature(20.3f, 20.4f, 300.0f, chemo_g);
+    const uint64_t b = sim.add_creature(20.7f, 20.6f, 300.0f, chemo_g);
+    const uint64_t plain = sim.add_creature(20.5f, 20.2f, 300.0f, make_luca());
+    const uint64_t far = sim.add_creature(40.5f, 40.5f, 300.0f, chemo_g);   // no vent here
+    double in_vent = 0.0;
+    for (int k = 0; k < 50; ++k) {
+        sim.step();
+        in_vent += sim.last_stats().in_vent;
+        CHECK(sim.last_stats().in_vent <= w.vent_energy(cell) * 1.0001);    // never more than the vent gives
+    }
+    const Creatures& c = sim.creatures();
+    const std::size_t ia = find(sim, a), ib = find(sim, b), ip = find(sim, plain), iff = find(sim, far);
+    CHECK(ia < c.size() && ib < c.size() && ip < c.size() && iff < c.size());
+    if (failures) return;
+    CHECK(c.fed_vent[ia] > 20.0f && std::abs(c.fed_vent[ia] - c.fed_vent[ib]) < 1e-3f);   // shared alike
+    CHECK(std::abs(in_vent - 50.0 * cfg.vent_power) < 0.5);                               // the whole flow, between them
+    CHECK(c.fed_vent[ip] == 0.0f && c.fed_vent[iff] == 0.0f);
+    CHECK(c.energy[ia] > c.energy[ip]);
+    CHECK(run_audited(sim, 500) < 1e-4);
+
+    // Closing the vent takes it away.
+    PowerCommand close = open;
+    close.amount = -1.0f;
+    sim.cast(close);
+    sim.flush_powers();
+    CHECK(!w.any_vents() && std::abs(w.mean_temperature(cell) - cold) < 1e-3f);
+
+    // The script format round-trips.
+    std::vector<PowerCommand> cmds;
+    std::string error;
+    std::istringstream in("100 vent 10 12 3 1.5 200\n");
+    CHECK(parse_power_script(in, cmds, error) && cmds.size() == 1 && cmds[0].kind == PowerKind::Vent);
+    std::ostringstream out;
+    write_power_script(out, cmds);
+    CHECK(out.str().find("100 vent 10 12 3 1.5 200") != std::string::npos);
 }
 
 int main() {
@@ -1356,6 +1736,13 @@ int main() {
     test_body_shape();
     test_stalks();
     test_mutability_and_repair();
+    test_folding();
+    test_species_split();
+    test_follow_species();
+    test_ctrnn();
+    test_touch();
+    test_growing_up();
+    test_vents();
     test_windfalls();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;

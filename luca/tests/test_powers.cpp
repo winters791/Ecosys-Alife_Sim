@@ -3,9 +3,11 @@
 // audit). No test framework; a failed CHECK prints the line and the run
 // exits non-zero.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
+#include <vector>
 
 #include "powers.hpp"
 #include "sim.hpp"
@@ -240,12 +242,100 @@ void test_sim() {
 
 }  // namespace
 
+// The world acting on its own: off means nothing happens; each kind of event
+// leaves what it should (a hill, a crater, a drifted climate) and takes back
+// what it should (a storm's cold, a volcano's heat and vent, an impact's dust);
+// and a run with events replays exactly from its power log with events off.
+void test_world_events() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.initial_population = 0;   // only the ground matters here
+
+    auto snapshot = [](const World& w, std::vector<float>& h, std::vector<float>& t) {
+        h.clear(); t.clear();
+        for (int c = 0; c < w.num_cells(); ++c) { h.push_back(w.height(c)); t.push_back(w.mean_temperature(c)); }
+    };
+    auto worst = [](const std::vector<float>& a, const std::vector<float>& b) {
+        double d = 0.0;
+        for (std::size_t i = 0; i < a.size(); ++i) d = std::max(d, static_cast<double>(std::abs(a[i] - b[i])));
+        return d;
+    };
+    std::vector<float> h0, t0, h1, t1;
+
+    {   // Off by default: nothing is cast.
+        Simulation sim(cfg);
+        for (int t = 0; t < 20000; ++t) sim.step();
+        CHECK(sim.powers().log().empty());
+    }
+    {   // A storm comes and goes, leaving the ground as it was.
+        Simulation sim(cfg);
+        snapshot(sim.world(), h0, t0);
+        sim.trigger_event(EventKind::Storm);
+        sim.step();
+        for (int t = 0; t < 100; ++t) sim.step();
+        snapshot(sim.world(), h1, t1);
+        CHECK(worst(t0, t1) > 1.0);                      // it is cold under the storm
+        for (int t = 0; t < 3100; ++t) sim.step();
+        snapshot(sim.world(), h1, t1);
+        CHECK(worst(t0, t1) < 1e-3 && worst(h0, h1) == 0.0);
+        bool came = false, went = false;
+        for (const auto& e : sim.chronicle().entries()) {
+            came |= e.text.find("storm gathers") != std::string::npos;
+            went |= e.text.find("storm over") != std::string::npos;
+        }
+        CHECK(came && went && sim.events().count(EventKind::Storm) == 1);
+    }
+    {   // A volcano: the hill stays, the heat and the vent fade.
+        Simulation sim(cfg);
+        snapshot(sim.world(), h0, t0);
+        sim.trigger_event(EventKind::Eruption);
+        for (int t = 0; t < 400; ++t) sim.step();
+        CHECK(sim.world().any_vents());
+        for (int t = 0; t < 40000; ++t) sim.step();
+        snapshot(sim.world(), h1, t1);
+        CHECK(!sim.world().any_vents());
+        double rise = 0.0;
+        for (std::size_t i = 0; i < h0.size(); ++i) rise = std::max(rise, static_cast<double>(h1[i] - h0[i]));
+        CHECK(rise > 4.0);
+    }
+    {   // A meteor: a crater stays, its heat fades, and any dust clears.
+        Simulation sim(cfg);
+        snapshot(sim.world(), h0, t0);
+        sim.trigger_event(EventKind::Meteor);
+        for (int t = 0; t < 41000; ++t) sim.step();
+        snapshot(sim.world(), h1, t1);
+        CHECK(worst(h0, h1) > 2.0);
+        CHECK(near(sim.world().sun_scale(), 1.0f, 1e-4));
+    }
+    {   // Climate drift moves the whole world and stays.
+        Simulation sim(cfg);
+        sim.trigger_event(EventKind::ClimateDrift);
+        for (int t = 0; t < 31000; ++t) sim.step();
+        CHECK(std::abs(sim.world().climate_offset()) > 1e-4f);
+    }
+    {   // Same seed, same events; and the log replays them exactly with events off.
+        SimConfig busy = cfg;
+        busy.event_rate = 10.0f;
+        Simulation a(busy), b(busy);
+        for (int t = 0; t < 20000; ++t) { a.step(); b.step(); }
+        CHECK(a.powers().log().size() > 10 && a.powers().log().size() == b.powers().log().size());
+        Simulation replay(cfg);
+        for (const PowerCommand& c : a.powers().log()) replay.cast(c);
+        for (int t = 0; t < 20000; ++t) replay.step();
+        snapshot(a.world(), h0, t0);
+        snapshot(replay.world(), h1, t1);
+        CHECK(worst(h0, h1) == 0.0 && worst(t0, t1) == 0.0);
+        CHECK(a.world().sun_scale() == replay.world().sun_scale());
+    }
+}
+
 int main() {
     test_brush();
     test_globals();
     test_ramp_matches_instant();
     test_script();
     test_sim();
+    test_world_events();
     if (failures == 0) std::puts("all power tests passed");
     return failures == 0 ? 0 : 1;
 }

@@ -20,16 +20,20 @@ struct Creatures {
     std::vector<float>     x, y;
     std::vector<float>     hx, hy;      // unit heading (which way it last moved)
     std::vector<float>     moved;       // distance covered last tick (others can sense this)
+    std::vector<float>     ate, hurt;   // energy taken in from bodies, and drained out of it, last tick (touch)
+    std::vector<float>     unfold;      // 0 leaves folded (it just moved) .. 1 fully open; see UNFOLD_TICKS
     std::vector<float>     wander;      // angle of its wandering urge; drifts a little each tick
     std::vector<float>     sleep;       // 0 awake .. 1 fully dormant (see energy.hpp)
     std::vector<float>     body_temp;   // °C; lags the air, more so in big bodies (see energy.hpp)
-    std::vector<float>     energy;
+    std::vector<float>     energy;      // what its store is worth: pool[i].energy(), kept in step by the sim
+    std::vector<Mix>       pool;        // its store: the chemicals it holds (never A; chem.hpp)
+    std::vector<Mix>       tissue;      // what its body is built of; tissue mass = pheno.mass
     std::vector<uint32_t>  age;
     std::vector<Phenotype> pheno;
 
     // Where its energy has come from over its life. Observation only (food
     // web, inspector, chronicle); the sim never reads these to decide anything.
-    std::vector<float>     fed_light, fed_living, fed_dead, fed_waste;
+    std::vector<float>     fed_light, fed_living, fed_dead, fed_waste, fed_vent;
 
     // Cold: identity and inheritance
     std::vector<uint64_t>  id;          // unique for the whole run; never reused
@@ -47,14 +51,14 @@ struct Creatures {
     std::size_t size() const { return x.size(); }
 
     void reserve(std::size_t n) {
-        x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n); wander.reserve(n); sleep.reserve(n); body_temp.reserve(n);
-        energy.reserve(n); age.reserve(n); pheno.reserve(n);
-        fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n); fed_waste.reserve(n);
+        x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n); ate.reserve(n); hurt.reserve(n); unfold.reserve(n); wander.reserve(n); sleep.reserve(n); body_temp.reserve(n);
+        energy.reserve(n); pool.reserve(n); tissue.reserve(n); age.reserve(n); pheno.reserve(n);
+        fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n); fed_waste.reserve(n); fed_vent.reserve(n);
         id.reserve(n); lineage.reserve(n); species.reserve(n); generation.reserve(n); genome.reserve(n);
         brain.reserve(n); brain_state.reserve(n); body.reserve(n);
     }
 
-    void add(float px, float py, float e, float temp, uint64_t uid, uint32_t lin, uint32_t sp, uint32_t gen, Genome g, const Phenotype& p) {
+    void add(float px, float py, const Mix& store, const Mix& body_mix, float temp, uint64_t uid, uint32_t lin, uint32_t sp, uint32_t gen, Genome g, const Phenotype& p) {
         x.push_back(px);
         y.push_back(py);
         // A body faces somewhere from birth: the way it starts to wander.
@@ -64,6 +68,9 @@ struct Creatures {
         hx.push_back(std::cos(facing));
         hy.push_back(std::sin(facing));
         moved.push_back(0.0f);
+        ate.push_back(0.0f);
+        unfold.push_back(1.0f);
+        hurt.push_back(0.0f);
         wander.push_back(facing);
         sleep.push_back(0.0f);
         body_temp.push_back(temp);
@@ -71,8 +78,11 @@ struct Creatures {
         fed_living.push_back(0.0f);
         fed_dead.push_back(0.0f);
         fed_waste.push_back(0.0f);
+        fed_vent.push_back(0.0f);
         id.push_back(uid);
-        energy.push_back(e);
+        energy.push_back(store.energy());
+        pool.push_back(store);
+        tissue.push_back(body_mix);
         age.push_back(0);
         pheno.push_back(p);
         lineage.push_back(lin);
@@ -87,9 +97,9 @@ struct Creatures {
     // O(1) removal: move the last creature into slot i. Changes order, but
     // deterministically, so replays still match.
     void remove_swap(std::size_t i) {
-        swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i); swap_pop(wander, i); swap_pop(sleep, i); swap_pop(body_temp, i);
-        swap_pop(energy, i); swap_pop(age, i);
-        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(id, i);
+        swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i); swap_pop(ate, i); swap_pop(hurt, i); swap_pop(unfold, i); swap_pop(wander, i); swap_pop(sleep, i); swap_pop(body_temp, i);
+        swap_pop(energy, i); swap_pop(pool, i); swap_pop(tissue, i); swap_pop(age, i);
+        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(fed_vent, i); swap_pop(id, i);
         swap_pop(pheno, i); swap_pop(lineage, i); swap_pop(species, i); swap_pop(generation, i); swap_pop(genome, i);
         swap_pop(brain, i); swap_pop(brain_state, i); swap_pop(body, i);
     }

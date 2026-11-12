@@ -25,7 +25,7 @@ class LucaWorld : public godot::RefCounted {
 
 public:
     // Power ids for cast_power(); must match luca::PowerKind.
-    enum Power { POWER_TERRAIN = 0, POWER_HEAT = 1, POWER_SUN = 2, POWER_CLIMATE = 3 };
+    enum Power { POWER_TERRAIN = 0, POWER_HEAT = 1, POWER_SUN = 2, POWER_CLIMATE = 3, POWER_VENT = 4 };
 
     // (Re)create the world and scatter the first LUCAs.
     void setup(int size, int64_t seed, int population, bool light_gradient);
@@ -71,7 +71,7 @@ public:
     godot::PackedFloat32Array get_lights() const;       // at noon
     godot::PackedFloat32Array get_nutrients() const;    // free matter in the soil
     godot::PackedFloat32Array get_corpses() const;      // energy left in dead bodies
-    godot::PackedFloat32Array get_soil() const;         // nutrient, corpse energy, waste, interleaved: one three-channel texture
+    godot::PackedFloat32Array get_soil() const;         // nutrient, corpse energy, waste, vent strength, interleaved: one four-channel texture
     int get_height_revision() const;
     int get_climate_revision() const;
 
@@ -79,7 +79,7 @@ public:
     // `capacity` instances. A sprite needs no rotation or scale, so the nine
     // basis slots of the transform carry body data instead (blob.gdshader
     // reads them back out of MODEL_MATRIX):
-    //   basis x = (core radius, elongation, squareness)
+    //   basis x = (core radius as grown so far, elongation, squareness)
     //   basis y = (storage, sleep, number of parts)
     //   basis z = (unused, heading x, heading z)
     //   origin  = (x, species hue 0..1, z)   the shader ignores height, so y is free
@@ -111,6 +111,11 @@ public:
     // global powers (sun, climate). duration 0 = instant.
     void cast_power(int power, double x, double z, double radius, double amount, int duration, bool quiet);
 
+    // The world acting on its own (core/events.hpp): 1 = about one storm,
+    // eruption, meteor or climate drift every 5,000 ticks; 0 = none.
+    void set_event_rate(double rate);
+    double get_event_rate() const;
+
     // Chronicle lines from entry `from` onwards, already formatted.
     int get_chronicle_size() const;
     godot::PackedStringArray get_chronicle(int from) const;
@@ -120,6 +125,16 @@ public:
     godot::Dictionary inspect(double x, double z, double max_distance) const;
     // The same facts for a creature already picked, by its "id". Empty once it has died.
     godot::Dictionary inspect_id(int64_t id) const;
+
+    // Following a species (observation only; see Simulation::follow). The
+    // inspector's "species_id" and "species_followed" say which and whether.
+    void follow_species(int64_t species, bool on);
+    bool is_following(int64_t species) const;
+    // Followed species: id, name, population, hue, alive.
+    godot::Array get_followed() const;
+    // Alerts about followed species from entry `from` onwards, already formatted.
+    int get_alerts_size() const;
+    godot::PackedStringArray get_alerts(int from) const;
 
     // Save every power cast so far; replay it with luca_headless --script.
     bool save_powers(const godot::String& path) const;

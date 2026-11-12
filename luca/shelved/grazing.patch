@@ -1,0 +1,668 @@
+--- a/./core/creatures.hpp	2026-11-12 09:42:40
++++ b/core/creatures.hpp	2026-11-12 09:42:20
+@@ -22,6 +22,7 @@
+     std::vector<float>     moved;       // distance covered last tick (others can sense this)
+     std::vector<float>     ate, hurt;   // energy taken in from bodies, and drained out of it, last tick (touch)
+     std::vector<float>     unfold;      // 0 leaves folded (it just moved) .. 1 fully open; see UNFOLD_TICKS
++    std::vector<float>     bare;        // leaf mass grazed off and not yet grown back (see leaf_left)
+     std::vector<float>     wander;      // angle of its wandering urge; drifts a little each tick
+     std::vector<float>     sleep;       // 0 awake .. 1 fully dormant (see energy.hpp)
+     std::vector<float>     body_temp;   // °C; lags the air, more so in big bodies (see energy.hpp)
+@@ -31,7 +32,7 @@
+ 
+     // Where its energy has come from over its life. Observation only (food
+     // web, inspector, chronicle); the sim never reads these to decide anything.
+-    std::vector<float>     fed_light, fed_living, fed_dead, fed_waste, fed_vent;
++    std::vector<float>     fed_light, fed_living, fed_dead, fed_waste, fed_vent, fed_leaf;
+ 
+     // Cold: identity and inheritance
+     std::vector<uint64_t>  id;          // unique for the whole run; never reused
+@@ -49,9 +50,9 @@
+     std::size_t size() const { return x.size(); }
+ 
+     void reserve(std::size_t n) {
+-        x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n); ate.reserve(n); hurt.reserve(n); unfold.reserve(n); wander.reserve(n); sleep.reserve(n); body_temp.reserve(n);
++        x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n); ate.reserve(n); hurt.reserve(n); unfold.reserve(n); bare.reserve(n); wander.reserve(n); sleep.reserve(n); body_temp.reserve(n);
+         energy.reserve(n); age.reserve(n); pheno.reserve(n);
+-        fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n); fed_waste.reserve(n); fed_vent.reserve(n);
++        fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n); fed_waste.reserve(n); fed_vent.reserve(n); fed_leaf.reserve(n);
+         id.reserve(n); lineage.reserve(n); species.reserve(n); generation.reserve(n); genome.reserve(n);
+         brain.reserve(n); brain_state.reserve(n); body.reserve(n);
+     }
+@@ -68,6 +69,7 @@
+         moved.push_back(0.0f);
+         ate.push_back(0.0f);
+         unfold.push_back(1.0f);
++        bare.push_back(0.0f);
+         hurt.push_back(0.0f);
+         wander.push_back(facing);
+         sleep.push_back(0.0f);
+@@ -77,6 +79,7 @@
+         fed_dead.push_back(0.0f);
+         fed_waste.push_back(0.0f);
+         fed_vent.push_back(0.0f);
++        fed_leaf.push_back(0.0f);
+         id.push_back(uid);
+         energy.push_back(e);
+         age.push_back(0);
+@@ -93,9 +96,9 @@
+     // O(1) removal: move the last creature into slot i. Changes order, but
+     // deterministically, so replays still match.
+     void remove_swap(std::size_t i) {
+-        swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i); swap_pop(ate, i); swap_pop(hurt, i); swap_pop(unfold, i); swap_pop(wander, i); swap_pop(sleep, i); swap_pop(body_temp, i);
++        swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i); swap_pop(ate, i); swap_pop(hurt, i); swap_pop(unfold, i); swap_pop(bare, i); swap_pop(wander, i); swap_pop(sleep, i); swap_pop(body_temp, i);
+         swap_pop(energy, i); swap_pop(age, i);
+-        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(fed_vent, i); swap_pop(id, i);
++        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(fed_vent, i); swap_pop(fed_leaf, i); swap_pop(id, i);
+         swap_pop(pheno, i); swap_pop(lineage, i); swap_pop(species, i); swap_pop(generation, i); swap_pop(genome, i);
+         swap_pop(brain, i); swap_pop(brain_state, i); swap_pop(body, i);
+     }
+--- a/./core/energy.cpp	2026-11-12 09:42:40
++++ b/core/energy.cpp	2026-11-12 09:42:20
+@@ -142,6 +142,13 @@
+     return CONTACT_RATE * taker.bite * edge * a * a / (a + membrane);
+ }
+ 
++float graze_flow(const Phenotype& taker, float pull, const Phenotype& giver, float plates) {
++    const float a = pull * taker.graze;
++    if (a <= 0.0f || giver.leaf_mass <= 0.0f) return 0.0f;
++    const float edge = std::min(std::pow(taker.radius / giver.radius, SIZE_POWER), SIZE_EDGE_MAX);
++    return CONTACT_RATE * edge * a * a / (a + plates);
++}
++
+ float fouling_cost(const Phenotype& p, float waste_here) {
+     return WASTE_HARM * waste_here * p.surface_area;
+ }
+--- a/./core/energy.hpp	2026-11-12 09:42:40
++++ b/core/energy.hpp	2026-11-12 09:42:20
+@@ -99,6 +99,39 @@
+ // plates sit (BodyPlan, body.hpp).
+ float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, float membrane);
+ 
++// --- Leaves and grazing (2026-11-12) --------------------------------------------
++// A body's sun patches are its leaves: part of its body, holding the same
++// energy per unit of mass as the rest of it. A mouth can aim part of its pull
++// (the `graze` gene) at the leaves of what it touches instead of at its store.
++// Leaves sit outside the membrane, so only plates facing the grazer resist,
++// and the size rule at the mouth still applies; `bite` does not (it is for
++// draining). What is bitten off feeds the grazer (at its usual efficiency)
++// and its matter falls to the soil under the plant. The plant is not killed:
++// it catches light in proportion to the leaf it has left, and grows the rest
++// back from its own store and the soil in its cell (sim.cpp).
++//
++// LEAF_FLOOR: the share of a leaf nothing can bite off (the part pressed to
++// the skin), so a stripped plant still catches a little light.
++// LEAF_REGROW_TICKS: how long a plant takes to grow a whole leaf back, if it
++// has the energy and the soil; it grows back every 8 ticks while awake.
++constexpr float LEAF_FLOOR        = 0.2f;
++// Energy it takes to build one unit of leaf, and so what a grazer gets for
++// biting it off (the rest of a body costs 222 a unit; phenotype.cpp).
++constexpr float LEAF_ENERGY_PER_MASS = 222.0f;
++constexpr float LEAF_REGROW_TICKS = 1800.0f;   // three days
++
++// Share of its leaf a body still has: 1 = whole, LEAF_FLOOR = grazed bare.
++inline float leaf_left(const Phenotype& p, float bare) {
++    return p.leaf_mass > 0.0f ? std::max(0.0f, 1.0f - bare / p.leaf_mass) : 1.0f;
++}
++// Leaf mass a grazer can still bite off.
++inline float leaf_to_bite(const Phenotype& p, float bare) {
++    return std::max(0.0f, (1.0f - LEAF_FLOOR) * p.leaf_mass - bare);
++}
++// Energy per tick a taker bites off the giver's leaves, given its pull
++// towards the giver and the plates (armour only, no base membrane) facing it.
++float graze_flow(const Phenotype& taker, float pull, const Phenotype& giver, float plates);
++
+ // Energy per tick this creature tries to pull out of dead matter in its cell.
+ float corpse_demand(const Phenotype& p);
+ 
+--- a/./core/genome.cpp	2026-11-12 09:42:40
++++ b/core/genome.cpp	2026-11-12 09:42:20
+@@ -83,6 +83,7 @@
+     g.repair            = std::clamp(g.repair, 0.0f, 1.0f);
+     g.chemo             = std::clamp(g.chemo, 0.0f, 1.0f);
+     g.birth_size        = std::clamp(g.birth_size, MIN_BIRTH, MAX_BIRTH);
++    g.graze             = std::clamp(g.graze, 0.0f, 1.0f);
+     if (g.parts.size() > static_cast<std::size_t>(MAX_PARTS)) g.parts.resize(MAX_PARTS);
+     for (Part& p : g.parts) {
+         if (static_cast<int>(p.type) >= static_cast<int>(PartType::Count)) p.type = PartType::Photo;
+--- a/./core/genome.hpp	2026-11-12 09:42:40
++++ b/core/genome.hpp	2026-11-12 09:42:20
+@@ -148,6 +148,7 @@
+     float repair            = 0.0f;   // 0..1: energy spent repairing wear, so it ages more slowly
+     float chemo             = 0.0f;   // 0..1: chemosynthesis, living on the energy of a vent (2026-11-12)
+     float birth_size        = 0.5f;   // fraction of adult mass a child is born at; it grows the rest (2026-11-12)
++    float graze             = 0.0f;   // 0..1: share of each mouth's pull aimed at the leaves of what it touches, not its store (2026-11-12)
+     std::vector<Part>  parts;
+     Brain brain;                 // empty = no behaviour; see above
+ };
+--- a/./core/metrics.cpp	2026-11-12 09:42:40
++++ b/core/metrics.cpp	2026-11-12 09:42:20
+@@ -30,6 +30,8 @@
+     in_windfall  += s.in_windfall;
+     in_vent      += s.in_vent;
+     grown_mass   += s.grown_mass;
++    eaten_leaf   += s.eaten_leaf;
++    regrown_mass += s.regrown_mass;
+     windfalls    += s.windfalls;
+     eaten_living += s.eaten_living;
+     eaten_dead   += s.eaten_dead;
+@@ -55,7 +57,8 @@
+             "mean_speed,mean_absorber,mean_armour,soil_nutrient,corpse_matter,matter_total,daylight,species,species_established,mean_throw,mean_bite,mean_digestion,brains,mean_neurons,mean_links,max_neurons,mean_dormancy,asleep,poisonous,out_poison,gene_transfers,gene_transfers_cross,gene_transfers_novel,"
+             "waste_total,excreted,eaten_waste,out_fouling,out_waste_decay,cleaners,mean_detox,mean_mutability,mean_repair,"
+             "in_windfall,windfalls,in_vent,chemotrophs,mean_chemo,growing,mean_birth_size,grown_mass,"
+-            "neurons,slow_neurons,mean_tau\n";
++            "neurons,slow_neurons,mean_tau,"
++            "eaten_leaf,regrown_mass,grazers,mean_graze,mean_leaf\n";
+     return true;
+ }
+ 
+@@ -73,7 +76,8 @@
+     std::size_t neurons = 0, slow_neurons = 0;
+     double sum_log_tau = 0.0;
+     int max_neurons = 0;
+-    double sum_dormancy = 0, sum_mutability = 0, sum_repair = 0, sum_chemo = 0, sum_birth = 0;
++    double sum_dormancy = 0, sum_mutability = 0, sum_repair = 0, sum_chemo = 0, sum_birth = 0, sum_graze = 0, sum_leaf = 0;
++    std::size_t leafy = 0;   // bodies with leaves at all
+     std::size_t asleep = 0;
+     std::size_t nb = 0, nd = 0;
+     uint32_t max_gen = 0;
+@@ -97,6 +101,8 @@
+         sum_repair += c.genome[i].repair;
+         sum_chemo += c.genome[i].chemo;
+         sum_birth += c.genome[i].birth_size;
++        sum_graze += c.genome[i].graze;
++        if (c.pheno[i].leaf_mass > 0.0f) { sum_leaf += leaf_left(c.pheno[i], c.bare[i]); ++leafy; }
+         asleep += c.sleep[i] >= DEEP_SLEEP ? 1 : 0;
+         if (c.pheno[i].has_brain) {   // brains that are actually running
+             ++brains;
+@@ -153,7 +159,8 @@
+          << k.cleaners << ',' << sum_detox * inv << ',' << sum_mutability * inv << ',' << sum_repair * inv << ','
+          << t.in_windfall << ',' << t.windfalls << ',' << t.in_vent << ',' << k.chemotrophs << ',' << sum_chemo * inv
+          << ',' << k.growing << ',' << sum_birth * inv << ',' << t.grown_mass << ','
+-         << neurons << ',' << slow_neurons << ',' << (neurons ? std::exp(sum_log_tau / static_cast<double>(neurons)) : 0.0) << '\n';
++         << neurons << ',' << slow_neurons << ',' << (neurons ? std::exp(sum_log_tau / static_cast<double>(neurons)) : 0.0) << ','
++         << t.eaten_leaf << ',' << t.regrown_mass << ',' << k.grazers << ',' << sum_graze * inv << ',' << (leafy ? sum_leaf / static_cast<double>(leafy) : 0.0) << '\n';
+     out_.flush();
+     return audit;
+ }
+@@ -179,7 +186,7 @@
+     if (!f) return false;
+     f << "x,y,energy,age,lineage,generation,core_radius,photo,parts,pigment,"
+          "absorber,flagellum,legs,sensor,armour,storage,poison,max_speed,fed_light,fed_living,fed_dead,species,seed_throw,bite,digestion,neurons,links,dormancy,detox,fed_waste,"
+-         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair,chemo,fed_vent,birth_size,grown\n";
++         "elongation,squareness,mouth_stalk,canopy_lift,tail_facing,mutability,repair,chemo,fed_vent,birth_size,grown,graze,fed_leaf,leaf\n";
+     const Creatures& c = sim.creatures();
+     for (std::size_t i = 0; i < c.size(); ++i) {
+         const Genome& g = c.genome[i];
+@@ -190,7 +197,7 @@
+         for (int t = 1; t < static_cast<int>(PartType::Count); ++t) f << ',' << c.pheno[i].part_total[t];
+         f << ',' << c.pheno[i].max_speed << ',' << c.fed_light[i] << ',' << c.fed_living[i] << ',' << c.fed_dead[i] << ',' << c.species[i] << ',' << g.seed_throw << ',' << g.bite << ',' << g.digestion << ','
+           << static_cast<int>(g.brain.hidden) << ',' << g.brain.links.size() << ',' << g.dormancy << ',' << g.detox << ',' << c.fed_waste[i] << ','
+-          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << ',' << g.chemo << ',' << c.fed_vent[i] << ',' << g.birth_size << ',' << c.pheno[i].grown << '\n';
++          << g.elongation << ',' << g.squareness << ',' << mouth_stalk(g) << ',' << c.pheno[i].canopy - c.pheno[i].radius << ',' << tail_facing(g) << ',' << g.mutability << ',' << g.repair << ',' << g.chemo << ',' << c.fed_vent[i] << ',' << g.birth_size << ',' << c.pheno[i].grown << ',' << g.graze << ',' << c.fed_leaf[i] << ',' << leaf_left(c.pheno[i], c.bare[i]) << '\n';
+     }
+     return true;
+ }
+--- a/./core/metrics.hpp	2026-11-12 09:42:40
++++ b/core/metrics.hpp	2026-11-12 09:42:20
+@@ -23,7 +23,7 @@
+     double out_transfer = 0.0, out_decay = 0.0, out_waste = 0.0, out_poison = 0.0;
+     double eaten_living = 0.0, eaten_dead = 0.0;
+     double out_fouling = 0.0, out_waste_decay = 0.0, excreted = 0.0, eaten_waste = 0.0;
+-    double in_windfall = 0.0, in_vent = 0.0, grown_mass = 0.0;
++    double in_windfall = 0.0, in_vent = 0.0, grown_mass = 0.0, eaten_leaf = 0.0, regrown_mass = 0.0;
+     std::size_t windfalls = 0;
+     std::size_t births = 0, deaths = 0;
+     std::size_t gene_transfers = 0, gene_transfers_cross = 0, gene_transfers_novel = 0;
+--- a/./core/mutation.cpp	2026-11-12 09:42:40
++++ b/core/mutation.cpp	2026-11-12 09:42:20
+@@ -138,6 +138,7 @@
+     if (chance(P_GENE)) g.mutability += rng.normal() * 0.15f;
+     if (chance(P_GENE)) nudge_optional(g.repair, 0.08f, rng);
+     if (chance(P_GENE)) nudge_optional(g.chemo, 0.08f, rng);
++    if (chance(P_GENE)) nudge_optional(g.graze, 0.08f, rng);
+     if (chance(P_GENE)) g.birth_size += rng.normal() * 0.05f;
+     for (float& s : g.shape)
+         if (chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
+--- a/./core/phenotype.cpp	2026-11-12 09:42:40
++++ b/core/phenotype.cpp	2026-11-12 09:42:20
+@@ -113,6 +113,10 @@
+ // Chemosynthesis: paid for whether or not there is a vent, so it only pays
+ // where one is. At full strength it takes a whole vent's worth (energy.cpp).
+ constexpr float CHEMO_UPKEEP         = 0.1f;    // upkeep at full chemo
++// Grazing (2026-11-12): a mouth that can bite leaves (flat teeth, a gut for
++// plant tissue) costs a little whether or not there is anything to graze.
++// Its real price is that pull aimed at leaves is not draining the store.
++constexpr float GRAZE_UPKEEP         = 0.04f;   // upkeep at full graze
+ 
+ // Gene ranges live in genome.hpp (limits::); mutation enforces them through
+ // clamp_genome(). The clamps below are a second line of defence for genomes
+@@ -222,7 +226,7 @@
+                    + (skin - 1.0f) * r * r * SKIN_UPKEEP + stalk_upkeep
+                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
+                    + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP
+-                   + detox * DETOX_UPKEEP + std::clamp(g.chemo, 0.0f, 1.0f) * CHEMO_UPKEEP
++                   + detox * DETOX_UPKEEP + std::clamp(g.chemo, 0.0f, 1.0f) * CHEMO_UPKEEP + std::clamp(g.graze, 0.0f, 1.0f) * GRAZE_UPKEEP
+                    + std::max(0.0f, -std::clamp(g.mutability, limits::MIN_MUTABILITY, limits::MAX_MUTABILITY)) * FIDELITY_UPKEEP;
+     const float repair = std::clamp(g.repair, 0.0f, 1.0f);
+     p.upkeep *= 1.0f + REPAIR_SHARE * repair;
+@@ -262,11 +266,16 @@
+     p.efficiency = TRANSFER_EFFICIENCY + DIGEST_GAIN * digestion;
+     p.detox      = detox;
+     p.chemo      = std::clamp(g.chemo, 0.0f, 1.0f);
++    p.graze      = std::clamp(g.graze, 0.0f, 1.0f);
++    // Leaves: the sun patches themselves (not their stalks). A grazer bites
++    // them off; the plant catches light in proportion to what is left and
++    // grows them back (sim.cpp).
++    p.leaf_mass  = photo_total * MASS_PER_SIZE[static_cast<int>(PartType::Photo)];
+ 
+     // --- 9. Storage: a body can only hold so much, and can't save up more
+     //        than it can hold before dividing --------------------------------
+     p.energy_capacity = CAPACITY_PER_VOLUME * r * r * r + CAPACITY_PER_STORE * storage_total;
+-    p.body_energy     = BODY_ENERGY_PER_MASS * mass;
++    p.body_energy     = BODY_ENERGY_PER_MASS * mass + (LEAF_ENERGY_PER_MASS - BODY_ENERGY_PER_MASS) * p.leaf_mass;   // leaves may cost more to build
+     p.repro_threshold = std::min(std::clamp(g.repro_threshold, limits::MIN_THRESHOLD, limits::MAX_THRESHOLD),
+                                  0.95f * p.energy_capacity);
+ 
+@@ -289,7 +298,8 @@
+     if (f < 1.0f) {
+         const float k = std::cbrt(f);
+         p.mass            *= f;
+-        p.body_energy      = BODY_ENERGY_PER_MASS * p.mass;
++        p.body_energy     *= f;
++        p.leaf_mass       *= f;
+         p.energy_capacity *= f;
+         p.repro_threshold  = std::min(p.repro_threshold, 0.95f * p.energy_capacity);
+         p.upkeep          *= std::pow(f, 0.75f);
+--- a/./core/phenotype.hpp	2026-11-12 09:42:40
++++ b/core/phenotype.hpp	2026-11-12 09:42:20
+@@ -38,6 +38,8 @@
+     float efficiency = 0.0f; // fraction of what it pulls, from the living or the dead, that it keeps
+     float detox      = 0.0f; // 0..1: how hard it takes up waste (see energy.hpp)
+     float chemo      = 0.0f; // 0..1: how hard it takes up the energy of a vent (see energy.hpp)
++    float graze      = 0.0f; // 0..1: share of its pull that bites leaves instead of draining the store
++    float leaf_mass  = 0.0f; // mass of its sun patches: the part of the body a grazer can bite off
+ 
+     float energy_capacity = 0.0f;  // the most energy the body can hold
+     float body_energy     = 0.0f;  // energy locked in the body itself; becomes the corpse
+--- a/./core/sim.cpp	2026-11-12 09:43:01
++++ b/core/sim.cpp	2026-11-12 09:42:20
+@@ -133,7 +133,10 @@
+ double Simulation::stored_energy() const {
+     double s = 0.0;
+     for (float e : c_.energy) s += e;
+-    for (const Phenotype& p : c_.pheno) s += p.body_energy;
++    for (std::size_t i = 0; i < c_.size(); ++i) {
++        const Phenotype& p = c_.pheno[i];
++        s += p.body_energy - c_.bare[i] * LEAF_ENERGY_PER_MASS;   // less the leaf grazed off
++    }
+     for (float e : soil_.corpse_energy) s += e;
+     for (float e : soil_.waste) s += e;
+     return s;
+@@ -141,7 +144,7 @@
+ 
+ double Simulation::total_matter() const {
+     double s = 0.0;
+-    for (const Phenotype& p : c_.pheno) s += p.mass;
++    for (std::size_t i = 0; i < c_.size(); ++i) s += c_.pheno[i].mass - c_.bare[i];
+     for (float m : soil_.nutrient) s += m;
+     for (float m : soil_.corpse_matter) s += m;
+     return s;
+@@ -308,6 +311,9 @@
+     drained_.assign(n, 0.0f);
+     intake_.assign(n, 0.0f);
+     poisoned_.assign(n, 0.0f);
++    graze_want_.assign(n, 0.0f);
++    grazed_.assign(n, 0.0f);
++    leaf_intake_.assign(n, 0.0f);
+ 
+     // --- Phase 0: bin creatures into cells; living mass per cell --------------
+     std::fill(biomass_.begin(), biomass_.end(), 0.0f);
+@@ -328,7 +334,7 @@
+         const Phenotype& p = c_.pheno[i];
+         const int cell = cell_of_[i];
+         // A body on the move catches less light (it moved last tick; see energy.cpp).
+-        demand_[i] = dark ? 0.0f : std::max(0.0f, light_demand(p, world_.env(cell)) * light_while_moving(c_.moved[i]) * c_.unfold[i] * (1.0f - c_.sleep[i]));
++        demand_[i] = dark ? 0.0f : std::max(0.0f, light_demand(p, world_.env(cell)) * light_while_moving(c_.moved[i]) * c_.unfold[i] * leaf_left(p, c_.bare[i]) * (1.0f - c_.sleep[i]));
+         gain_[i] = demand_[i];
+         cell_demand_[cell] += demand_[i];
+         corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
+@@ -391,10 +397,16 @@
+                         const float gx = c_.hx[q.who], gy = c_.hy[q.who];
+                         membrane += ARMOUR_RESIST * theirs.armour[body_dir(-ddx * gx - ddy * gy, -gx * ddy + gy * ddx)];
+                     }
+-                    const float flow = contact_flow(p, pull, c_.pheno[q.who], membrane) * (1.0f - c_.sleep[i]);
+-                    if (flow <= 0.0f) continue;
+-                    contacts_.push_back({static_cast<uint32_t>(i), q.who, flow});
++                    // The pull is split: the share aimed at leaves (graze) bites
++                    // what grows outside the membrane; the rest drains the store.
++                    const float awake = 1.0f - c_.sleep[i];
++                    const Phenotype& giver = c_.pheno[q.who];
++                    const float flow = contact_flow(p, pull * (1.0f - p.graze), giver, membrane) * awake;
++                    const float leaf = p.graze > 0.0f ? graze_flow(p, pull, giver, membrane - MEMBRANE_BASE) * awake : 0.0f;
++                    if (flow <= 0.0f && leaf <= 0.0f) continue;
++                    contacts_.push_back({static_cast<uint32_t>(i), q.who, flow, leaf});
+                     drain_want_[q.who] += flow;
++                    graze_want_[q.who] += leaf;
+                 }
+             }
+         }
+@@ -446,14 +458,24 @@
+         const float amount = want > have ? k.flow * (have / want) : k.flow;
+         drained_[k.giver] += amount;
+         intake_[k.taker] += amount;
+-        // A poisonous body costs its eater energy for every unit taken.
+-        poisoned_[k.taker] += amount * c_.pheno[k.giver].toxicity;
++        // Leaves: shared out the same way, down to the part nothing can bite off.
++        float leaf = 0.0f;
++        if (k.leaf > 0.0f) {
++            const Phenotype& g = c_.pheno[k.giver];
++            const float lhave = leaf_to_bite(g, c_.bare[k.giver]) * LEAF_ENERGY_PER_MASS;
++            const float lwant = graze_want_[k.giver];
++            leaf = lwant > lhave ? k.leaf * (lhave / lwant) : k.leaf;
++            grazed_[k.giver] += leaf;
++            leaf_intake_[k.taker] += leaf;
++        }
++        // A poisonous body costs its eater energy for every unit taken, leaf or store.
++        poisoned_[k.taker] += (amount + leaf) * c_.pheno[k.giver].toxicity;
+ 
+         // Gene transfer: now and then, something of the body being drained is
+         // taken up as a blueprint. It goes into the taker's genome only: its
+         // own body is already built and does not change, but its children
+         // are built from the new plan (and pay for the extra part).
+-        if (amount > 0.0f && cfg_.gene_transfer_chance > 0.0f && rng_.chance(cfg_.gene_transfer_chance)) {
++        if (amount + leaf > 0.0f && cfg_.gene_transfer_chance > 0.0f && rng_.chance(cfg_.gene_transfer_chance)) {
+             float before[static_cast<int>(PartType::Count)] = {};
+             for (const Part& part : c_.genome[k.taker].parts) before[static_cast<int>(part.type)] += part.size;
+             PartType copied = PartType::Photo;
+@@ -483,7 +505,14 @@
+ 
+         // In: light, the living, the dead.
+         const float from_living = intake_[i] * p.efficiency;
+-        float lost = intake_[i] - from_living;
++        const float from_leaf = leaf_intake_[i] * p.efficiency;
++        float lost = intake_[i] - from_living + leaf_intake_[i] - from_leaf;
++        // Its own leaves bitten off: the matter falls to the soil beneath it.
++        if (grazed_[i] > 0.0f) {
++            const float dm = grazed_[i] / LEAF_ENERGY_PER_MASS;
++            c_.bare[i] += dm;
++            soil_.nutrient[cell] += dm;
++        }
+         float from_dead = 0.0f;
+         if (corpse_gain_[i] > 0.0f) {
+             float& ce = soil_.corpse_energy[cell];
+@@ -511,7 +540,9 @@
+             from_waste = take * p.efficiency;
+             lost += take - from_waste;
+         }
+-        e += gain_[i] + vent_gain_[i] + from_living + from_dead + from_waste;
++        e += gain_[i] + vent_gain_[i] + from_living + from_leaf + from_dead + from_waste;
++        stats_.eaten_leaf += from_leaf;
++        c_.fed_leaf[i] += from_leaf;
+         stats_.energy_in += vent_gain_[i];
+         stats_.in_vent += vent_gain_[i];
+         c_.fed_vent[i] += vent_gain_[i];
+@@ -525,8 +556,8 @@
+         c_.fed_light[i] += gain_[i];
+         c_.fed_living[i] += from_living;
+         c_.fed_dead[i] += from_dead;
+-        c_.ate[i] = from_living + from_dead;   // felt next tick (touch)
+-        c_.hurt[i] = drained_[i];
++        c_.ate[i] = from_living + from_leaf + from_dead;   // felt next tick (touch)
++        c_.hurt[i] = drained_[i] + grazed_[i];
+ 
+         // Poison: paid out of whatever it now holds; it can cost more than the meal gave.
+         if (poisoned_[i] > 0.0f) {
+@@ -581,10 +612,25 @@
+         if (e <= 0.0f) {
+             // Death: the body stays where it fell, as matter and as food.
+             c_.energy[i] = 0.0f;
+-            soil_.corpse_energy[cell] += p.body_energy;
+-            soil_.corpse_matter[cell] += p.mass;
++            soil_.corpse_energy[cell] += p.body_energy - c_.bare[i] * LEAF_ENERGY_PER_MASS;   // less the leaf it had lost
++            soil_.corpse_matter[cell] += p.mass - c_.bare[i];
+             dead_.push_back(static_cast<uint32_t>(i));
+             continue;
++        }
++
++        // Leaves grow back: every 8 ticks an awake body with leaf missing builds
++        // some back, a whole leaf in LEAF_REGROW_TICKS, from its store and the
++        // soil in its cell, spending at most half of what it holds. Energy only
++        // moves from store to body and matter from soil to body.
++        if (c_.bare[i] > 0.0f && (c_.age[i] & 7u) == 2 && c_.sleep[i] < AWAKE) {
++            const float dm = std::min({c_.bare[i], p.leaf_mass * (8.0f / LEAF_REGROW_TICKS), soil_.nutrient[cell],
++                                       0.5f * e / LEAF_ENERGY_PER_MASS});
++            if (dm > 0.0f) {
++                e -= dm * LEAF_ENERGY_PER_MASS;
++                soil_.nutrient[cell] -= dm;
++                c_.bare[i] = dm >= c_.bare[i] ? 0.0f : c_.bare[i] - dm;
++                stats_.regrown_mass += dm;
++            }
+         }
+ 
+         // Growing up: every 8 ticks a young body puts the energy it holds
+@@ -826,10 +872,12 @@
+         if (p.toxicity > 0.0f) ++k.poisonous;
+         if (p.grown < 1.0f) ++k.growing;
+         const float l = c_.fed_light[i], v = c_.fed_living[i], d = c_.fed_dead[i], w = c_.fed_waste[i], h = c_.fed_vent[i];
+-        const float total = l + v + d + w + h;
++        const float f = c_.fed_leaf[i];
++        const float total = l + v + d + w + h + f;
+         if (total < 20.0f)           ++k.young;
+         else if (l > 0.6f * total)   ++k.producers;
+         else if (v > 0.6f * total)   ++k.hunters;
++        else if (f > 0.6f * total)   ++k.grazers;
+         else if (d > 0.6f * total)   ++k.scavengers;
+         else if (w > 0.6f * total)   ++k.cleaners;
+         else if (h > 0.6f * total)   ++k.chemotrophs;
+@@ -1066,6 +1114,7 @@
+     first(armoured_logged_, census_.armoured, "The first armour: some bodies have grown plates.");
+     first(poisonous_logged_, census_.poisonous, "The first poison: some bodies now sicken whatever feeds on them.");
+     first(hunters_logged_, census_.hunters, "The first hunters: some creatures now live mostly by draining the living.");
++    first(grazers_logged_, census_.grazers, "The first grazers: some creatures now live mostly on the leaves of others, and leave them alive.");
+     first(scavengers_logged_, census_.scavengers, "The first scavengers: some creatures now live mostly on the dead.");
+     first(cleaners_logged_, census_.cleaners, "The first cleaners: some creatures now live mostly on what others give off.");
+     first(chemotrophs_logged_, census_.chemotrophs, "Life at the vents: some creatures now live mostly on the warmth of the deep.");
+--- a/./core/sim.hpp	2026-11-12 09:42:40
++++ b/core/sim.hpp	2026-11-12 09:42:20
+@@ -43,6 +43,8 @@
+     double eaten_dead      = 0.0;  // arrived from corpses
+     double excreted        = 0.0;  // upkeep given off as waste instead of heat
+     double eaten_waste     = 0.0;  // arrived from waste
++    double eaten_leaf      = 0.0;  // arrived from leaves bitten off living bodies
++    double regrown_mass    = 0.0;  // matter plants took from the soil to grow leaves back (not a flow of energy)
+     // Blueprints taken up through contact (see Simulation::step, phase 2a):
+     std::size_t gene_transfers = 0;        // all of them
+     std::size_t gene_transfers_cross = 0;  // between different species
+@@ -58,6 +60,7 @@
+     std::size_t scavengers = 0;   // mostly taken from corpses
+     std::size_t cleaners = 0;     // mostly taken from waste
+     std::size_t chemotrophs = 0;  // mostly taken from vents
++    std::size_t grazers = 0;      // mostly bitten off the leaves of living bodies
+     std::size_t mixed = 0;        // no single source above 60%
+     std::size_t young = 0;        // hasn't eaten enough yet to say
+     std::size_t growing = 0;      // not yet full size (any way of life); can't breed yet
+@@ -199,7 +202,7 @@
+     std::size_t day_peak_ = 0;        // highest population so far today
+     uint64_t    day_seen_ = 0;
+     bool        extinct_logged_ = false;
+-    bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false, cleaners_logged_ = false, chemotrophs_logged_ = false;
++    bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false, cleaners_logged_ = false, chemotrophs_logged_ = false, grazers_logged_ = false;
+     bool        sighted_logged_ = false, armoured_logged_ = false, poisonous_logged_ = false, transfer_logged_ = false;
+ 
+     // Scratch buffers, reused every tick to avoid allocation.
+@@ -219,7 +222,8 @@
+     std::vector<float> vent_want_, vent_gain_;
+     std::vector<float> waste_flow_;          // per cell: waste on its way to the neighbours
+     std::vector<float> drain_want_, drained_, intake_, poisoned_;
+-    struct Contact { uint32_t taker, giver; float flow; };
++    std::vector<float> graze_want_, grazed_, leaf_intake_;   // leaf energy asked of, bitten off, and taken in
++    struct Contact { uint32_t taker, giver; float flow, leaf; };   // flow drains the store, leaf bites leaves
+     std::vector<Contact> contacts_;
+     struct Near { float x, y, reach; uint32_t who; };  // one creature, in cell order
+     std::vector<Near> near_;
+--- a/./core/species.cpp	2026-11-12 09:42:40
++++ b/core/species.cpp	2026-11-12 09:42:20
+@@ -27,6 +27,7 @@
+ constexpr float W_MUTABILITY = 0.3f;  // per doubling of the mutation rate
+ constexpr float W_REPAIR    = 1.5f;   // none to full is 0..1
+ constexpr float W_CHEMO     = 1.5f;   // none to full is 0..1
++constexpr float W_GRAZE     = 1.5f;   // drains only to grazes only is 0..1
+ constexpr float W_BIRTH     = 1.5f;   // a tenth to full size is 0.1..1
+ constexpr float W_STALK     = 0.8f;   // per world unit of stalk, summed over a kind of part
+ constexpr float W_PART_KIND = 0.6f;   // one has a kind of part the other lacks entirely
+@@ -75,6 +76,7 @@
+     term(W_MUTABILITY, a.mutability - b.mutability);
+     term(W_REPAIR,    a.repair - b.repair);
+     term(W_CHEMO,     a.chemo - b.chemo);
++    term(W_GRAZE,     a.graze - b.graze);
+     term(W_BIRTH,     a.birth_size - b.birth_size);
+     term(W_DETOX,     a.detox - b.detox);
+     term(W_ELONGATE,  a.elongation - b.elongation);
+--- a/./godot/luca_world.cpp	2026-11-12 09:43:01
++++ b/godot/luca_world.cpp	2026-11-12 09:42:20
+@@ -1,5 +1,7 @@
+ #include "luca_world.h"
+ 
++#include "energy.hpp"
++
+ #include <algorithm>
+ #include <chrono>
+ #include <cmath>
+@@ -103,6 +105,7 @@
+     const luca::Census& k = sim_->census();
+     d["producers"]  = static_cast<int64_t>(k.producers);
+     d["hunters"]    = static_cast<int64_t>(k.hunters);
++    d["grazers"]    = static_cast<int64_t>(k.grazers);
+     d["scavengers"] = static_cast<int64_t>(k.scavengers);
+     d["cleaners"]   = static_cast<int64_t>(k.cleaners);
+     d["chemotrophs"] = static_cast<int64_t>(k.chemotrophs);
+@@ -275,9 +278,11 @@
+         float* t = f + static_cast<int64_t>(i) * PARTS_PER_CREATURE * 4;
+         const auto& parts = c.genome[i].parts;
+         const std::size_t k_max = std::min(parts.size(), static_cast<std::size_t>(PARTS_PER_CREATURE));
++        // Grazed leaves are drawn smaller, in proportion to what is left.
++        const float leaf = luca::leaf_left(c.pheno[i], c.bare[i]);
+         for (std::size_t k = 0; k < k_max; ++k, t += 4) {
+             t[0] = static_cast<float>(static_cast<int>(parts[k].type) + 1);
+-            t[1] = parts[k].size;
++            t[1] = parts[k].type == luca::PartType::Photo ? parts[k].size * leaf : parts[k].size;
+             t[2] = parts[k].theta;
+             t[3] = parts[k].stalk;
+         }
+@@ -542,6 +547,10 @@
+     d["fed_dead"] = c.fed_dead[who];
+     d["fed_waste"] = c.fed_waste[who];
+     d["fed_vent"] = c.fed_vent[who];
++    d["fed_leaf"] = c.fed_leaf[who];
++    d["graze"] = p.graze;
++    d["leaf"] = luca::leaf_left(p, c.bare[who]);
++    d["has_leaves"] = p.leaf_mass > 0.0f;
+     d["chemo"] = p.chemo;
+     d["detox"] = p.detox;
+     d["mutability"] = g.mutability;
+--- a/./tests/test_life.cpp	2026-11-12 09:43:01
++++ b/tests/test_life.cpp	2026-11-12 09:42:20
+@@ -1476,6 +1476,56 @@
+     CHECK(c.x[ic] == calm_x);             // untouched, it stays
+ }
+ 
++// Grazing: a mouth with the graze gene bites the leaves of what it touches
++// instead of draining its store. The plant lives, catches less light, and
++// grows its leaves back from its store and the soil once left alone.
++void test_grazing() {
++    using namespace luca;
++    {   // Phenotype: leaves are the sun patches' mass; grazing costs upkeep.
++        Genome g = make_luca();
++        g.graze = 1.0f;
++        CHECK(std::abs(compile_phenotype(make_luca()).leaf_mass - 0.1f) < 1e-6f);
++        CHECK(std::abs(compile_phenotype(g).upkeep - compile_phenotype(make_luca()).upkeep - 0.04f) < 1e-4f);
++    }
++    SimConfig cfg = small_config();
++    cfg.nutrient_mean = 0.0f;   // nobody breeds; leaves regrow only from what grazing dropped
++    cfg.windfall_rate = 0.0f;
++    Simulation sim(cfg);
++    Genome grazer_g = with_part(PartType::Absorber, 1.5f);
++    grazer_g.graze = 1.0f;
++    const uint64_t grazer = sim.add_creature(24.2f, 6.0f, 100.0f, aim_east(sim, grazer_g));
++    const uint64_t plant  = sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
++    const uint64_t loner  = sim.add_creature(40.5f, 6.0f, 300.0f, make_luca());
++    const double matter0 = sim.total_matter();
++    double leaf = 0.0, lost = 0.0;
++    for (int t = 0; t < 40; ++t) {
++        sim.step();
++        leaf += sim.last_stats().eaten_leaf;
++        lost += sim.last_stats().out_transfer;
++    }
++    {
++        const Creatures& c = sim.creatures();
++        const std::size_t ig = find(sim, grazer), ip = find(sim, plant), il = find(sim, loner);
++        CHECK(ig < c.size() && ip < c.size() && il < c.size());
++        if (failures) return;
++        CHECK(leaf > 0.0 && c.fed_leaf[ig] > 0.0f);
++        CHECK(c.fed_living[ig] == 0.0f);                       // it drains nothing
++        CHECK(c.bare[ip] > 0.0f && c.bare[il] == 0.0f);
++        const float left = leaf_left(c.pheno[ip], c.bare[ip]);
++        CHECK(left < 1.0f && left >= LEAF_FLOOR - 1e-4f);      // bitten, never past the floor
++        CHECK(std::abs(lost / (leaf + lost) - (1.0 - TRANSFER_EFFICIENCY)) < 1e-3);
++    }
++    // The grazer has nothing else to live on and starves; the plant grows its
++    // leaves back. The books balance throughout.
++    const double worst = run_audited(sim, 4000);
++    CHECK(worst < 1e-4);
++    CHECK(std::abs(sim.total_matter() - matter0) < 1e-4 * matter0);
++    const Creatures& c = sim.creatures();
++    const std::size_t ip = find(sim, plant);
++    CHECK(find(sim, grazer) == c.size());
++    CHECK(ip < c.size() && c.bare[ip] == 0.0f);
++}
++
+ void test_ctrnn() {
+     using namespace luca;
+     auto one_neuron = [](float tau, float bias) {
+@@ -1721,6 +1771,7 @@
+     test_follow_species();
+     test_ctrnn();
+     test_touch();
++    test_grazing();
+     test_growing_up();
+     test_vents();
+     test_windfalls();
+--- a/./viewer/main.gd	2026-11-12 09:43:01
++++ b/viewer/main.gd	2026-11-12 09:42:20
+@@ -632,11 +632,14 @@
+ 	var dead: float = info["fed_dead"]
+ 	var waste: float = info["fed_waste"]
+ 	var vent: float = info["fed_vent"]
+-	var total := light + living + dead + waste + vent
++	var leaf: float = info["fed_leaf"]
++	var total := light + living + dead + waste + vent + leaf
+ 	if total < 1.0:
+ 		return "has not fed yet"
+ 	var text := "sun %d%%, the living %d%%, the dead %d%%" % [
+ 		roundi(100.0 * light / total), roundi(100.0 * living / total), roundi(100.0 * dead / total)]
++	if leaf > 0.0:
++		text += ", leaves %d%%" % roundi(100.0 * leaf / total)
+ 	if waste > 0.0:
+ 		text += ", waste %d%%" % roundi(100.0 * waste / total)
+ 	if vent > 0.0:
+@@ -699,6 +702,7 @@
+ 		_brain_words(info),
+ 		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
+ 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
++		("Drains only" if info["graze"] <= 0.0 else "Grazes: %d%% of its pull bites leaves" % roundi(100.0 * info["graze"])) + ("" if not info["has_leaves"] else ("   leaves whole" if info["leaf"] >= 0.995 else "   leaves grazed to %d%%" % roundi(100.0 * info["leaf"]))),
+ 		("Can't eat waste" if info["detox"] <= 0.0 else "Eats waste (detox %.2f)" % info["detox"]) + ("   can't feed at vents" if info["chemo"] <= 0.0 else "   feeds at vents (chemo %.2f)" % info["chemo"]),
+ 		"Copied with %s the usual mistakes   %s" % [_rate_words(info["mutability"]), "no repair" if info["repair"] <= 0.0 else "repairs itself: ages %.1fx slower" % (1.0 + 2.0 * info["repair"])],
+ 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
+@@ -891,9 +895,9 @@
+ 
+ func _update_ui() -> void:
+ 	var census: Dictionary = world.get_census()
+-	stats_label.text = "%sTick %s\nPopulation %s\nSun-fed %s   Hunters %s   Scavengers %s\nCleaners %s   Vent-fed %s   Mixed diet %s   Able to move %s\n%d ticks/s   %.2f ms/tick   %d fps\nSun %.2fx    Climate %+.1f °C" % [
++	stats_label.text = "%sTick %s\nPopulation %s\nSun-fed %s   Hunters %s   Grazers %s   Scavengers %s\nCleaners %s   Vent-fed %s   Mixed diet %s   Able to move %s\n%d ticks/s   %.2f ms/tick   %d fps\nSun %.2fx    Climate %+.1f °C" % [
+ 		_clock(), _commas(world.get_tick()), _commas(world.get_population()),
+-		_commas(census.get("producers", 0)), _commas(census.get("hunters", 0)), _commas(census.get("scavengers", 0)),
++		_commas(census.get("producers", 0)), _commas(census.get("hunters", 0)), _commas(census.get("grazers", 0)), _commas(census.get("scavengers", 0)),
+ 		_commas(census.get("cleaners", 0)), _commas(census.get("chemotrophs", 0)), _commas(census.get("mixed", 0)), _commas(census.get("movers", 0)),
+ 		ticks_per_second, world.get_tick_ms(), Engine.get_frames_per_second(),
+ 		world.get_sun_scale(), world.get_climate_offset()]

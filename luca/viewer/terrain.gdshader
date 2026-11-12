@@ -8,12 +8,12 @@ render_mode unshaded;
 uniform sampler2D height_tex : filter_nearest, repeat_disable;
 uniform sampler2D temp_tex : filter_nearest, repeat_disable;    // °C
 uniform sampler2D light_tex : filter_nearest, repeat_disable;   // energy per cell per tick at noon
-uniform sampler2D soil_tex : filter_nearest, repeat_disable;    // r = free nutrient, g = corpse energy, b = waste
+uniform sampler2D soil_tex : filter_nearest, repeat_disable;    // r = free nutrient, g = corpse energy, b = waste, a = vent strength
 uniform float extent = 128.0;    // world units per side
 uniform float cells = 128.0;     // cells per side
 uniform float px_size = 0.125;   // world units per pixel (shared with the creatures)
 uniform float max_height = 40.0;
-uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead, 5 waste
+uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead, 5 waste, 6 vents
 uniform vec3 brush = vec3(0.0, 0.0, -1.0);  // x, z, radius; radius <= 0 hides it
 uniform vec3 brush_color : source_color = vec3(1.0);
 uniform vec3 tint = vec3(1.0);   // day / night
@@ -59,9 +59,12 @@ void fragment() {
 	float h_w = height_of(cell + vec2(-1.0, 0.0)), h_e = height_of(cell + vec2(1.0, 0.0));
 	float temp = texture(temp_tex, uv).r;
 	float light = texture(light_tex, uv).r;
-	vec3 soil = texture(soil_tex, uv).rgb;
+	vec4 soil4 = texture(soil_tex, uv);
+	vec3 soil = soil4.rgb;
+	float vent = soil4.a;
 
 	vec3 col;
+	vec3 vent_glow = vec3(-1.0);
 	if (overlay == 1) {
 		col = steps3((temp + 30.0) / 70.0, vec3(0.12, 0.25, 0.75), vec3(0.92, 0.94, 0.90), vec3(0.85, 0.22, 0.12));
 	} else if (overlay == 2) {
@@ -72,6 +75,8 @@ void fragment() {
 		col = steps3(soil.g / 150.0, vec3(0.08, 0.08, 0.10), vec3(0.50, 0.25, 0.40), vec3(0.98, 0.92, 0.85));
 	} else if (overlay == 5) {
 		col = steps3(soil.b / 30.0, vec3(0.08, 0.10, 0.08), vec3(0.45, 0.42, 0.12), vec3(0.80, 0.90, 0.20));
+	} else if (overlay == 6) {
+		col = steps3(vent / 3.0, vec3(0.08, 0.07, 0.07), vec3(0.55, 0.20, 0.10), vec3(1.00, 0.80, 0.30));
 	} else {
 		// Height bands, with the boundary between two bands dithered.
 		const vec3 BANDS[6] = vec3[](
@@ -101,7 +106,20 @@ void fragment() {
 
 		// Waste: fouled ground goes murky olive where it builds up.
 		col = mix(col, vec3(0.42, 0.40, 0.16), clamp((soil.b - 10.0) / 60.0, 0.0, 0.45));
+
+		// Vents: the ground darkens to basalt, with glowing cracks that get
+		// denser the stronger the vent. Not tinted by night: they glow in the dark.
+		if (vent > 0.0) {
+			col = mix(col, vec3(0.20, 0.17, 0.17), clamp(0.35 + vent * 0.25, 0.0, 0.85));
+			float crack = hash(floor(pix / 2.0) + 77.0);
+			if (crack < clamp(vent * 0.12, 0.03, 0.36)) {
+				vent_glow = crack < vent * 0.04 ? vec3(1.0, 0.85, 0.35) : vec3(0.95, 0.35, 0.10);
+			}
+		}
 	}
+
+	col *= overlay == 0 ? tint : vec3(1.0);
+	if (vent_glow.r >= 0.0) col = vent_glow;   // glowing cracks ignore the night
 
 	// Brush ring, on the pixel grid.
 	if (brush.z > 0.0) {
@@ -110,5 +128,5 @@ void fragment() {
 		else if (d < brush.z) col = mix(col, brush_color, 0.08);
 	}
 
-	ALBEDO = col * (overlay == 0 ? tint : vec3(1.0));
+	ALBEDO = col;
 }

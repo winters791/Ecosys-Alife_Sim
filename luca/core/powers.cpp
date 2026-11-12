@@ -15,7 +15,7 @@ namespace {
 // refresh touches many cells, and nothing alive can tell the difference.
 constexpr uint64_t RAMP_STEP = 8;
 
-bool is_brush(PowerKind k) { return k == PowerKind::Terrain || k == PowerKind::Heat; }
+bool is_brush(PowerKind k) { return k == PowerKind::Terrain || k == PowerKind::Heat || k == PowerKind::Vent; }
 
 const char* kind_name(PowerKind k) {
     switch (k) {
@@ -23,6 +23,7 @@ const char* kind_name(PowerKind k) {
         case PowerKind::Heat:    return "heat";
         case PowerKind::Sun:     return "sun";
         case PowerKind::Climate: return "climate";
+        case PowerKind::Vent:    return "vent";
     }
     return "?";
 }
@@ -32,6 +33,8 @@ std::string num(float v, int decimals = 1) {
     std::snprintf(buf, sizeof buf, "%.*f", decimals, static_cast<double>(std::abs(v)));
     return buf;
 }
+
+}  // namespace
 
 // Which ninth of the map a point is in. y = 0 is the sunny edge, so "south".
 std::string region_name(const World& w, float x, float y) {
@@ -45,6 +48,8 @@ std::string region_name(const World& w, float x, float y) {
     };
     return names[row][col];
 }
+
+namespace {
 
 std::string describe_start(const PowerCommand& c, const World& w) {
     const bool up = c.amount >= 0.0f;
@@ -64,6 +69,11 @@ std::string describe_start(const PowerCommand& c, const World& w) {
                        region_name(w, c.x, c.y) + ".";
             return std::string(up ? "A warm spot begins to form in " : "A cold spot begins to form in ") +
                    region_name(w, c.x, c.y) + " (" + num(c.amount) + " °C)" + over + ".";
+        case PowerKind::Vent:
+            if (c.duration == 0)
+                return std::string(up ? "A vent opens in " : "A vent closes in ") + region_name(w, c.x, c.y) + ".";
+            return std::string(up ? "A vent begins to open in " : "A vent begins to close in ") +
+                   region_name(w, c.x, c.y) + over + ".";
         case PowerKind::Sun:
             if (c.duration == 0)
                 return std::string(up ? "The sun brightens" : "The sun dims") + " by " + num(c.amount, 2) + "x.";
@@ -88,6 +98,8 @@ std::string describe_end(const PowerCommand& c, const World& w) {
         case PowerKind::Heat:
             return "The " + std::string(c.amount >= 0.0f ? "warm" : "cold") + " spot in " +
                    region_name(w, c.x, c.y) + " stops changing.";
+        case PowerKind::Vent:
+            return "The vent in " + region_name(w, c.x, c.y) + std::string(c.amount >= 0.0f ? " is fully open." : " has closed.");
         case PowerKind::Sun:
             if (std::abs(w.sun_scale() - 1.0f) < 0.005f) return "The sun is back to its original strength.";
             return "The sun settles at " + num(w.sun_scale(), 2) + "x its original strength.";
@@ -116,6 +128,7 @@ void PowerSystem::apply(const PowerCommand& cmd, float amount, World& world) {
     switch (cmd.kind) {
         case PowerKind::Terrain: world.brush(BrushField::Height, cmd.x, cmd.y, cmd.radius, amount); break;
         case PowerKind::Heat:    world.brush(BrushField::Heat, cmd.x, cmd.y, cmd.radius, amount); break;
+        case PowerKind::Vent:    world.brush(BrushField::Vent, cmd.x, cmd.y, cmd.radius, amount); break;
         case PowerKind::Sun:     world.add_sun(amount); break;
         case PowerKind::Climate: world.add_climate(amount); break;
     }
@@ -184,7 +197,8 @@ bool parse_power_script(std::istream& in, std::vector<PowerCommand>& out, std::s
         else if (kind == "heat")    cmd.kind = PowerKind::Heat;
         else if (kind == "sun")     cmd.kind = PowerKind::Sun;
         else if (kind == "climate") cmd.kind = PowerKind::Climate;
-        else return fail("unknown power '" + kind + "' (terrain, heat, sun, climate)");
+        else if (kind == "vent")    cmd.kind = PowerKind::Vent;
+        else return fail("unknown power '" + kind + "' (terrain, heat, vent, sun, climate)");
 
         if (is_brush(cmd.kind)) {
             if (!(ss >> cmd.x >> cmd.y >> cmd.radius >> cmd.amount))

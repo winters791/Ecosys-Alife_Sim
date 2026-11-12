@@ -11,7 +11,7 @@
 namespace luca {
 
 // Per-cell layers a brush can paint on.
-enum class BrushField { Height, Heat };
+enum class BrushField { Height, Heat, Vent };
 
 class World {
 public:
@@ -26,6 +26,7 @@ public:
     // centre, fading smoothly to zero at `radius` (world units).
     //   Height: terrain height, kept inside [0, height_limit].
     //   Heat:   a local temperature offset in °C (hot springs, cold sinks).
+    //   Vent:   vent strength, kept inside [0, vent_max]; also warms the ground.
     void brush(BrushField field, float x, float y, float radius, float amount);
 
     // Global sun multiplier (1 = the configured sun). May be pushed below
@@ -71,6 +72,11 @@ public:
     int   downhill(int cell) const { return downhill_[cell]; }
     float steepness(int cell) const { return steep_[cell]; }
     float temperature(int cell) const { return temperature_[cell] + air_swing_; }  // right now
+    // Vents: strength 0..vent_max, and the energy a cell's vent gives each tick.
+    float vent(int cell) const { return vent_[cell]; }
+    float vent_energy(int cell) const { return vent_[cell] * cfg_.vent_power; }
+    bool  any_vents() const { return vent_cells_ > 0; }
+    uint32_t vent_revision() const { return vent_rev_; }
     float mean_temperature(int cell) const { return temperature_[cell]; }        // averaged over a day
 
     LocalEnv env(int cell) const { return {light_[cell] * daylight_, temperature_[cell] + air_swing_, height_[cell]}; }
@@ -85,6 +91,7 @@ public:
     const std::vector<float>& heights() const { return height_; }
     const std::vector<float>& lights() const { return light_; }  // at noon
     const std::vector<float>& temperatures() const { return temperature_; }  // daily means (add air_swing() for now)
+    const std::vector<float>& vents() const { return vent_; }
 
 private:
     // Recompute the derived fields (light, temperature) from the layers.
@@ -103,9 +110,11 @@ private:
     float daylight_  = 1.0f;
     float day_phase_ = 0.25f;
     float air_swing_ = 0.0f;
-    uint32_t height_rev_ = 0, climate_rev_ = 0;
+    uint32_t height_rev_ = 0, climate_rev_ = 0, vent_rev_ = 0;
+    int      vent_cells_ = 0;         // cells with any vent at all
     std::vector<float> height_;       // layer: terrain
     std::vector<float> heat_;         // layer: local temperature offset
+    std::vector<float> vent_;         // layer: vent strength
     std::vector<float> shade_;        // derived from height: fraction of the sun that reaches the ground
     std::vector<int>   downhill_;     // derived from height: lowest neighbour, or -1
     std::vector<float> steep_;        // derived from height: 0..1

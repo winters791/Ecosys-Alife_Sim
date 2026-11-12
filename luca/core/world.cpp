@@ -73,6 +73,8 @@ void World::generate(const SimConfig& cfg) {
     const int cells = n_ * n_;
     height_.assign(cells, 0.0f);
     heat_.assign(cells, 0.0f);
+    vent_.assign(cells, 0.0f);
+    vent_cells_ = 0;
     shade_.assign(cells, 1.0f);
     downhill_.assign(cells, -1);
     steep_.assign(cells, 0.0f);
@@ -176,7 +178,7 @@ void World::refresh_temperature(int x0, int y0, int x1, int y1) {
         const float row_base = cfg_.temp_sea_level + climate_ - cfg_.temp_latitude_drop * latitude(y);
         for (int x = x0; x <= x1; ++x) {
             const int i = y * n_ + x;
-            temperature_[i] = row_base - cfg_.temp_lapse * height_[i] + heat_[i];
+            temperature_[i] = row_base - cfg_.temp_lapse * height_[i] + heat_[i] + cfg_.vent_heat * vent_[i];
         }
     }
 }
@@ -187,7 +189,7 @@ void World::brush(BrushField field, float x, float y, float radius, float amount
     const int x1 = std::clamp(static_cast<int>(std::floor((x + radius) / cell_size_)), 0, n_ - 1);
     const int y0 = std::clamp(static_cast<int>(std::floor((y - radius) / cell_size_)), 0, n_ - 1);
     const int y1 = std::clamp(static_cast<int>(std::floor((y + radius) / cell_size_)), 0, n_ - 1);
-    std::vector<float>& layer = field == BrushField::Height ? height_ : heat_;
+    std::vector<float>& layer = field == BrushField::Height ? height_ : field == BrushField::Heat ? heat_ : vent_;
     for (int cy = y0; cy <= y1; ++cy)
         for (int cx = x0; cx <= x1; ++cx) {
             const float dx = (static_cast<float>(cx) + 0.5f) * cell_size_ - x;
@@ -196,10 +198,17 @@ void World::brush(BrushField field, float x, float y, float radius, float amount
             if (d >= radius) continue;
             const float w = 0.5f * (1.0f + std::cos(3.14159265f * d / radius));
             float& v = layer[cy * n_ + cx];
+            const bool had_vent = field == BrushField::Vent && v > 0.0f;
             v += amount * w;
             if (field == BrushField::Height) v = std::clamp(v, 0.0f, cfg_.height_limit);
+            if (field == BrushField::Vent) {
+                v = std::clamp(v, 0.0f, cfg_.vent_max);
+                if (v < 1e-3f) v = 0.0f;   // the faint edge of a closed vent is no vent
+                vent_cells_ += (v > 0.0f) - had_vent;
+            }
         }
     refresh_temperature(x0, y0, x1, y1);
+    if (field == BrushField::Vent) ++vent_rev_;
     if (field == BrushField::Height) {
         ++height_rev_;
         refresh_terrain(x0, y0, x1, y1);

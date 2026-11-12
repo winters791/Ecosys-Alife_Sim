@@ -39,7 +39,10 @@ struct SimConfig {
 
     // Matter. Building a body takes matter out of the soil; it comes back when
     // the body dies and its corpse is broken down. The total never changes.
-    float nutrient_mean = 2.0f;      // average free matter per cell at the start
+    // Average free matter (chemical A) per cell at the start. 6 since the
+    // chemistry layer (2026-11-12): a store is now made of matter too (a full
+    // LUCA store is 2.9 units of D), and at 2 most plants could not fill theirs.
+    float nutrient_mean = 6.0f;
     float nutrient_patchiness = 0.8f; // 0 = even, 1 = rich patches and bare ground
     // Rain: every 64 ticks this fraction of a cell's free matter moves to its
     // lowest neighbour, on a steep slope (less on a gentle one, none on the flat).
@@ -61,6 +64,15 @@ struct SimConfig {
     // that it takes up the blueprint of one of that body's parts. 0 = never.
     float gene_transfer_chance = 0.0001f;
 
+    // Vents (2026-11-12): hot springs on the sea floor, placed only by the
+    // player's vent brush (none at the start). A vent of strength 1 gives
+    // vent_power energy per tick into its cell, day and night, to bodies with
+    // the chemosynthesis gene; what nobody takes is lost, like unused light.
+    // It also warms the cell by vent_heat °C per unit of strength.
+    float vent_power = 1.0f;   // a strength-1 vent gives what a cell of sun gives, averaged over a day
+    float vent_heat  = 12.0f;  // °C per unit of strength
+    float vent_max   = 3.0f;   // strongest a vent can be painted
+
     // Windfalls: now and then a lump of food falls on a random cell and lies
     // there like a corpse with no matter in it (energy only, so the matter
     // books don't change). Anything with a mouth in that cell can eat it, and
@@ -71,6 +83,11 @@ struct SimConfig {
     // light life takes in. Each lump holds windfall_size. 0 = none.
     float windfall_rate = 0.001f;
     float windfall_size = 250.0f;   // about one LUCA corpse
+
+    // A world that acts on its own (events.hpp): storms, eruptions, meteors and
+    // climate drift, cast as ordinary powers. 1 = about one event every 5,000
+    // ticks; 0 = none (the default, so headless baselines are unchanged).
+    float event_rate = 0.0f;
 
     // Population
     int   initial_population = 200;

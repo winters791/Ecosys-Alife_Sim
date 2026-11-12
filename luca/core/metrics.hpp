@@ -23,7 +23,7 @@ public:
     double out_transfer = 0.0, out_decay = 0.0, out_waste = 0.0, out_poison = 0.0;
     double eaten_living = 0.0, eaten_dead = 0.0;
     double out_fouling = 0.0, out_waste_decay = 0.0, excreted = 0.0, eaten_waste = 0.0;
-    double in_windfall = 0.0;
+    double in_windfall = 0.0, in_vent = 0.0, grown_mass = 0.0;
     std::size_t windfalls = 0;
     std::size_t births = 0, deaths = 0;
     std::size_t gene_transfers = 0, gene_transfers_cross = 0, gene_transfers_novel = 0;

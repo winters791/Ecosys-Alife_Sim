@@ -37,6 +37,7 @@ add_library(luca_core STATIC
   core/species.cpp
   core/world.cpp
   core/powers.cpp
+  core/events.cpp
   core/sim.cpp
   core/metrics.cpp
 )

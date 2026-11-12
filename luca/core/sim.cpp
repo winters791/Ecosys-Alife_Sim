@@ -26,17 +26,47 @@ constexpr float    TWO_PI         = 6.28318531f;
 // (It used to turn ~0.5 rad every tick however far it went; a body creeping
 // 0.01 a tick then spun in place, its loops smaller than a pixel.)
 constexpr float    WANDER_PATH    = 1.0f;
+// Growing up (2026-11-12): how fast a young body may build itself, and how
+// much of what it holds it keeps back rather than turning into body.
+constexpr float    GROW_STEP      = 0.05f;  // most of its adult mass it can add in one go (every 8 ticks)
+constexpr float    GROW_MIN       = 0.01f;  // least worth stopping to build (except the last bit)
+constexpr float    GROW_RESERVE   = 0.3f;   // of what it can hold, kept back for the night
 constexpr int      SOCIAL_CELLS   = 2;     // the danger / kin sense looks this many cells out at most
 constexpr float    SOCIAL_FAST    = 0.25f; // a body covering this much a tick counts as fully "moving"
 
+// Species splits (check_splits). A species is looked at only when it has at
+// least twice SPLIT_MIN alive; a sample of up to SPLIT_SAMPLE members is cut
+// into two clusters, and they count as two species when each holds at least
+// SPLIT_SHARE of the sample, their centres are SPLIT_GAP apart or more, and that
+// gap is SPLIT_SEPARATION times the clusters' mean spread. After relabelling,
+// both sides must still hold SPLIT_MIN.
+constexpr uint64_t SPLIT_INTERVAL   = 2000;
+constexpr uint32_t SPLIT_MIN        = 15;
+constexpr std::size_t SPLIT_SAMPLE  = 48;
+constexpr float    SPLIT_SHARE      = 0.25f;
+constexpr float    SPLIT_GAP        = 0.8f;
+constexpr float    SPLIT_SEPARATION = 3.0f;
+constexpr int      SPLIT_ROUNDS     = 3;
+// Following (watch_followed): a trait is "theirs" once TRAIT_ON of them carry
+// it and lost once no more than TRAIT_OFF do, so a trait hovering near half
+// doesn't raise an alert every time it is looked at.
+constexpr uint64_t WATCH_INTERVAL   = 200;
+constexpr float    TRAIT_ON         = 0.6f;
+constexpr float    TRAIT_OFF        = 0.4f;
+constexpr float    SIZE_ALERT       = 0.2f;  // mean adult mass this far from the last report
+constexpr uint32_t WATCH_MIN        = 20;    // fewer alive than this: a mean size is noise, and doubling is nothing
+constexpr int      MOVING_TRAIT     = static_cast<int>(PartType::Count);
+
 }  // namespace
 
-Simulation::Simulation(const SimConfig& cfg) : cfg_(cfg), rng_(cfg.seed * 0x2545F4914F6CDD1Dull + 1) {
+Simulation::Simulation(const SimConfig& cfg)
+    : cfg_(cfg), rng_(cfg.seed * 0x2545F4914F6CDD1Dull + 1), events_(cfg.seed, cfg.event_rate) {
     world_.generate(cfg_);
     const std::size_t cells = static_cast<std::size_t>(world_.num_cells());
     cell_demand_.assign(cells, 0.0f);
     cell_corpse_demand_.assign(cells, 0.0f);
     cell_waste_demand_.assign(cells, 0.0f);
+    cell_vent_demand_.assign(cells, 0.0f);
     biomass_.assign(cells, 0.0f);
 
     // Starting soil: patches of rich ground and stretches of poor ground,
@@ -65,14 +95,16 @@ void Simulation::seed_population() {
         // The first LUCAs are identical: one species.
         const uint32_t sp = species_.all().empty() ? species_.found_root(luca, tick_, "Luca")
                                                    : species_.classify_newcomer(luca, tick_);
-        admit(x, y, std::min(cfg_.initial_energy, p.energy_capacity), next_lineage_++, sp, 0, luca, p);
+        // They arrive with a body and a store of D: matter and energy from outside the books, once.
+        admit(x, y, pure(CHEM_D, std::min(cfg_.initial_energy, p.energy_capacity) / TOP_LEVEL), pure(CHEM_D, p.mass),
+              next_lineage_++, sp, 0, luca, p);
     }
 }
 
-void Simulation::admit(float x, float y, float energy, uint32_t lineage, uint32_t species, uint32_t generation,
+void Simulation::admit(float x, float y, const Mix& store, const Mix& body, uint32_t lineage, uint32_t species, uint32_t generation,
                        Genome genome, const Phenotype& pheno, float body_temp) {
     if (body_temp < -273.0f) body_temp = felt_temperature(pheno, world_.env(world_.cell_index(x, y)));
-    c_.add(x, y, energy, body_temp, next_id_++, lineage, species, generation, std::move(genome), pheno);
+    c_.add(x, y, store, body, body_temp, next_id_++, lineage, species, generation, std::move(genome), pheno);
     if (!species_.born(species)) return;
 
     // The species has taken hold: enough alive at once to be more than a freak.
@@ -85,33 +117,37 @@ void Simulation::admit(float x, float y, float energy, uint32_t lineage, uint32_
     const std::string how = describe_difference(s.representative, from.representative);
     chronicle_.add(tick_, "A new species: " + s.name + " branches from " + from.name +
                               (how.empty() ? "." : ". It " + how + "."));
+    alert(s.parent, "A new species branches from your " + from.name + ": " + s.name +
+                        (how.empty() ? "." : ". It " + how + "."));
 }
 
-uint64_t Simulation::add_creature(float x, float y, float energy, const Genome& genome) {
+uint64_t Simulation::add_creature(float x, float y, float energy, const Genome& genome, float grown) {
     Genome g = genome;
     clamp_genome(g);
-    const Phenotype p = compile_phenotype(g);
+    const Phenotype p = compile_phenotype(g, grown);
     const uint64_t id = next_id_;
     const uint32_t sp = species_.classify_newcomer(g, tick_);
-    admit(world_.clamp_coord(x), world_.clamp_coord(y), std::clamp(energy, 0.0f, p.energy_capacity),
-          next_lineage_++, sp, 0, std::move(g), p);
+    // Placed from outside: its body and its store (of D) are new matter and energy.
+    admit(world_.clamp_coord(x), world_.clamp_coord(y), pure(CHEM_D, std::clamp(energy, 0.0f, p.energy_capacity) / TOP_LEVEL),
+          pure(CHEM_D, p.mass), next_lineage_++, sp, 0, std::move(g), p);
     return id;
 }
 
 double Simulation::stored_energy() const {
     double s = 0.0;
-    for (float e : c_.energy) s += e;
-    for (const Phenotype& p : c_.pheno) s += p.body_energy;
-    for (float e : soil_.corpse_energy) s += e;
+    for (const Mix& m : c_.pool) s += m.energy();
+    for (const Mix& m : c_.tissue) s += m.energy();
+    for (const Mix& m : soil_.corpse) s += m.energy();
     for (float e : soil_.waste) s += e;
     return s;
 }
 
 double Simulation::total_matter() const {
     double s = 0.0;
-    for (const Phenotype& p : c_.pheno) s += p.mass;
+    for (const Mix& m : c_.pool) s += m.mass();
+    for (const Mix& m : c_.tissue) s += m.mass();
     for (float m : soil_.nutrient) s += m;
-    for (float m : soil_.corpse_matter) s += m;
+    for (const Mix& m : soil_.corpse) s += m.mass();
     return s;
 }
 
@@ -135,6 +171,10 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     in[IN_COLD]   = want;
     in[IN_CORPSE] = std::min(soil_.corpse_energy[cell] * (1.0f / 250.0f), 1.0f);   // about one body's worth = 1
     in[IN_MOVED]  = p.max_speed > 0.0f ? std::min(c_.moved[i] / p.max_speed, 1.0f) : 0.0f;
+    // Touch: what crossed its membrane last tick, against what it burns.
+    const float burn = std::max(p.upkeep, 1e-3f);
+    in[IN_EATING] = std::min(c_.ate[i] / (2.0f * burn), 1.0f);
+    in[IN_HURT]   = std::min(c_.hurt[i] / burn, 1.0f);
     float w[NUM_OUTPUTS];
     think(c_.brain[i], c_.brain_state[i], in, w);
 
@@ -217,11 +257,16 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     const float nx = world_.clamp_coord(c_.x[i] + ux * dist);
     const float ny = world_.clamp_coord(c_.y[i] + uy * dist);
     const float dh = world_.height(world_.cell_index(nx, ny)) - env.height;
+    // A body can only spend as fast as its enzymes release (burn): a step it
+    // can't pay for this tick, on top of upkeep and heat, it doesn't take.
+    // So a fast or climbing body needs enzymes with the rate to power it.
+    const float step_cost = std::max(0.0f, movement_cost(p, dist, dh));
+    if (step_cost + cost_upkeep_[i] + cost_thermal_[i] > power(p, c_.pool[i])) return;
     new_x_[i] = nx;
     new_y_[i] = ny;
     new_hx_[i] = ux;
     new_hy_[i] = uy;
-    cost_move_[i] = std::max(0.0f, movement_cost(p, dist, dh));
+    cost_move_[i] = step_cost;
 }
 
 // -----------------------------------------------------------------------------
@@ -246,6 +291,7 @@ void Simulation::step() {
 
     // God powers act first, then the sun moves, so every creature sees the
     // same world this tick.
+    events_.update(tick_, world_, powers_, chronicle_);
     powers_.update(tick_, world_, chronicle_);
     world_.set_time(tick_);
     drop_windfalls();
@@ -265,9 +311,11 @@ void Simulation::step() {
     corpse_gain_.resize(n);
     waste_want_.resize(n);
     waste_gain_.resize(n);
+    vent_want_.resize(n);
+    vent_gain_.resize(n);
     drain_want_.assign(n, 0.0f);
     drained_.assign(n, 0.0f);
-    intake_.assign(n, 0.0f);
+    intake_.assign(n, Mix{});
     poisoned_.assign(n, 0.0f);
 
     // --- Phase 0: bin creatures into cells; living mass per cell --------------
@@ -282,18 +330,22 @@ void Simulation::step() {
     std::fill(cell_demand_.begin(), cell_demand_.end(), 0.0f);
     std::fill(cell_corpse_demand_.begin(), cell_corpse_demand_.end(), 0.0f);
     std::fill(cell_waste_demand_.begin(), cell_waste_demand_.end(), 0.0f);
+    const bool vents = world_.any_vents();
+    if (vents) std::fill(cell_vent_demand_.begin(), cell_vent_demand_.end(), 0.0f);
     const bool dark = world_.daylight() <= 0.0f;
     for (std::size_t i = 0; i < n; ++i) {
         const Phenotype& p = c_.pheno[i];
         const int cell = cell_of_[i];
         // A body on the move catches less light (it moved last tick; see energy.cpp).
-        demand_[i] = dark ? 0.0f : std::max(0.0f, light_demand(p, world_.env(cell)) * light_while_moving(c_.moved[i]) * (1.0f - c_.sleep[i]));
+        demand_[i] = dark ? 0.0f : std::max(0.0f, light_demand(p, world_.env(cell)) * light_while_moving(c_.moved[i]) * c_.unfold[i] * (1.0f - c_.sleep[i]));
         gain_[i] = demand_[i];
         cell_demand_[cell] += demand_[i];
-        corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
+        corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) / TOP_LEVEL * (1.0f - c_.sleep[i]) : 0.0f;   // mass a tick
         cell_corpse_demand_[cell] += corpse_want_[i];
         waste_want_[i] = p.detox > 0.0f ? std::max(0.0f, waste_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
         cell_waste_demand_[cell] += waste_want_[i];
+        vent_want_[i] = vents && p.chemo > 0.0f ? std::max(0.0f, vent_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
+        if (vent_want_[i] > 0.0f) cell_vent_demand_[cell] += vent_want_[i];
     }
 
     if (!dark) share_light_by_canopy();
@@ -348,7 +400,8 @@ void Simulation::step() {
                         const float gx = c_.hx[q.who], gy = c_.hy[q.who];
                         membrane += ARMOUR_RESIST * theirs.armour[body_dir(-ddx * gx - ddy * gy, -gx * ddy + gy * ddx)];
                     }
-                    const float flow = contact_flow(p, pull, c_.pheno[q.who], membrane) * (1.0f - c_.sleep[i]);
+                    // As mass a tick from its store: a flow of energy as if the store were all D.
+                    const float flow = contact_flow(p, pull, c_.pheno[q.who], membrane) / TOP_LEVEL * (1.0f - c_.sleep[i]);
                     if (flow <= 0.0f) continue;
                     contacts_.push_back({static_cast<uint32_t>(i), q.who, flow});
                     drain_want_[q.who] += flow;
@@ -366,10 +419,16 @@ void Simulation::step() {
         // Light was shared out by the canopy rule above. The dead are shared evenly.
         corpse_gain_[i] = 0.0f;
         if (corpse_want_[i] > 0.0f) {
-            const float have = soil_.corpse_energy[cell], want = cell_corpse_demand_[cell];
+            const float have = soil_.corpse[cell].mass(), want = cell_corpse_demand_[cell];
             corpse_gain_[i] = corpse_want_[i] * (want > have ? have / want : 1.0f);
         }
         // Waste is shared out the same way.
+        // A vent's flow is shared the same way.
+        vent_gain_[i] = 0.0f;
+        if (vent_want_[i] > 0.0f) {
+            const float have = world_.vent_energy(cell), want = cell_vent_demand_[cell];
+            vent_gain_[i] = vent_want_[i] * (want > have ? have / want : 1.0f);
+        }
         waste_gain_[i] = 0.0f;
         if (waste_want_[i] > 0.0f) {
             const float have = soil_.waste[cell], want = cell_waste_demand_[cell];
@@ -390,21 +449,24 @@ void Simulation::step() {
     }
 
     // --- Phase 2a: flows between touching bodies ------------------------------
-    // A body can't give more than it holds: if several pull on it at once,
-    // each gets the same fraction of what it asked for.
+    // What flows is the giver's store, chemicals as they are mixed in it. A
+    // body can't give more than it holds: if several pull on it at once, each
+    // gets the same fraction of what it asked for.
     for (const Contact& k : contacts_) {
-        const float have = c_.energy[k.giver], want = drain_want_[k.giver];
+        const Mix& from = c_.pool[k.giver];
+        const float have = from.mass(), want = drain_want_[k.giver];
         const float amount = want > have ? k.flow * (have / want) : k.flow;
+        if (amount <= 0.0f || have <= 0.0f) continue;
         drained_[k.giver] += amount;
-        intake_[k.taker] += amount;
+        intake_[k.taker].add(from, amount / have);
         // A poisonous body costs its eater energy for every unit taken.
-        poisoned_[k.taker] += amount * c_.pheno[k.giver].toxicity;
+        poisoned_[k.taker] += amount * from.density() * c_.pheno[k.giver].toxicity;
 
         // Gene transfer: now and then, something of the body being drained is
         // taken up as a blueprint. It goes into the taker's genome only: its
         // own body is already built and does not change, but its children
         // are built from the new plan (and pay for the extra part).
-        if (amount > 0.0f && cfg_.gene_transfer_chance > 0.0f && rng_.chance(cfg_.gene_transfer_chance)) {
+        if (cfg_.gene_transfer_chance > 0.0f && rng_.chance(cfg_.gene_transfer_chance)) {
             float before[static_cast<int>(PartType::Count)] = {};
             for (const Part& part : c_.genome[k.taker].parts) before[static_cast<int>(part.type)] += part.size;
             PartType copied = PartType::Photo;
@@ -429,73 +491,76 @@ void Simulation::step() {
     for (std::size_t i = 0; i < n; ++i) {
         const Phenotype& p = c_.pheno[i];
         const int cell = cell_of_[i];
-        float e = std::max(0.0f, c_.energy[i] - drained_[i]);
+        Mix& pool = c_.pool[i];
+        float& soil_a = soil_.nutrient[cell];
         const LocalEnv env_here = world_.env(cell);
 
-        // In: light, the living, the dead.
-        const float from_living = intake_[i] * p.efficiency;
-        float lost = intake_[i] - from_living;
-        float from_dead = 0.0f;
-        if (corpse_gain_[i] > 0.0f) {
-            float& ce = soil_.corpse_energy[cell];
-            const float take = std::min(corpse_gain_[i], ce);
-            if (take > 0.0f) {
-                // Breaking a corpse down frees its matter in proportion.
-                const float freed = soil_.corpse_matter[cell] * (take / ce);
-                soil_.corpse_matter[cell] -= freed;
-                soil_.nutrient[cell] += freed;
-                ce -= take;
-                from_dead = take * p.efficiency;
-                lost += take - from_dead;
-            }
-        }
-        // Waste: one look at the cell's waste does all three things. A body
+        // Out: what others drained, in proportion to what its store holds.
+        const float hurt = drained_[i] > 0.0f ? take_share(pool, drained_[i]).energy() : 0.0f;
+
+        // In: the living and the dead arrive as chemicals. The share lost on
+        // the way (1 - efficiency) burns: its energy is heat and its matter
+        // falls to the soil as A. What the store has no room for goes the same way.
+        float lost = 0.0f, overflow = 0.0f;
+        auto take_in = [&](const Mix& meal) {
+            const float m = meal.mass();
+            if (m <= 0.0f) return 0.0f;
+            const float room = std::max(0.0f, p.pool_capacity - pool.mass());
+            const float keep = std::min(p.efficiency, room / m);
+            const float e = meal.energy();
+            pool.add(meal, keep);
+            soil_a += m * (1.0f - keep);
+            lost += e * (1.0f - p.efficiency);
+            overflow += e * (p.efficiency - keep);
+            return e * keep;
+        };
+        const float from_living = take_in(intake_[i]);
+        const float from_dead = corpse_gain_[i] > 0.0f ? take_in(soil_.take_corpse(cell, corpse_gain_[i])) : 0.0f;
+
+        // Waste (still energy without matter until chemistry stage 2): a body
         // with detox takes some up first; then it pays for living in what is
-        // left; then it adds its own. (Read here rather than in phase 1 to
-        // touch the cell once: the field is a tick's excretion fresher for
-        // later bodies in the same cell, which is far below its size.)
+        // left; then it adds its own.
         float& w = soil_.waste[cell];
-        float from_waste = 0.0f;
+        float waste_taken = 0.0f;
         if (waste_gain_[i] > 0.0f) {
-            const float take = std::min(waste_gain_[i], w);
-            w -= take;
-            from_waste = take * p.efficiency;
-            lost += take - from_waste;
+            waste_taken = std::min(waste_gain_[i], w);
+            w -= waste_taken;
         }
-        e += gain_[i] + from_living + from_dead + from_waste;
-        stats_.eaten_waste += from_waste;
-        c_.fed_waste[i] += from_waste;
-        stats_.energy_in += gain_[i];
+        const float waste_kept = waste_taken * p.efficiency;
+        lost += waste_taken - waste_kept;
+
+        // Light, a vent's flow and waste come in as energy with no matter: the
+        // body keeps them by running its enzymes uphill, turning A from the
+        // soil into richer chemicals in its store (charge). Light and vent
+        // energy it can't keep is never taken in; waste it took is lost as heat.
+        const float offered = gain_[i] + vent_gain_[i] + waste_kept;
+        const float stored = offered > 0.0f ? charge(p, pool, soil_a, offered) : 0.0f;
+        const float kept = offered > 0.0f ? stored / offered : 0.0f;
+        const float from_light = gain_[i] * kept, from_vent = vent_gain_[i] * kept, from_waste = waste_kept * kept;
+        overflow += waste_kept - from_waste;
+
+        stats_.energy_in += from_light + from_vent;
+        stats_.in_vent += from_vent;
         stats_.eaten_living += from_living;
         stats_.eaten_dead += from_dead;
+        stats_.eaten_waste += from_waste;
         stats_.out_transfer += lost;
-        stats_.energy_out += lost;
-        c_.fed_light[i] += gain_[i];
+        stats_.out_waste += overflow;
+        stats_.energy_out += lost + overflow;
+        c_.fed_light[i] += from_light;
+        c_.fed_vent[i] += from_vent;
+        c_.fed_waste[i] += from_waste;
         c_.fed_living[i] += from_living;
         c_.fed_dead[i] += from_dead;
+        c_.ate[i] = from_living + from_dead;   // felt next tick (touch)
+        c_.hurt[i] = hurt;
 
-        // Poison: paid out of whatever it now holds; it can cost more than the meal gave.
-        if (poisoned_[i] > 0.0f) {
-            const float burned = std::min(poisoned_[i], e);
-            e -= burned;
-            stats_.out_poison += burned;
-            stats_.energy_out += burned;
-        }
-
-        // A full body can't hold more; the surplus is lost as heat.
-        if (e > p.energy_capacity) {
-            const float waste = e - p.energy_capacity;
-            e = p.energy_capacity;
-            stats_.out_waste += waste;
-            stats_.energy_out += waste;
-        }
-
-        // Pay costs; can never pay more than you have.
-        // Living in waste costs everyone in the cell, asleep or awake.
+        // Costs, all paid by burning its store (burn): poison from what it
+        // ate, upkeep, heat, moving, and living in waste. A body that cannot
+        // pay them in full dies.
         const float foul = std::max(0.0f, fouling_cost(p, w));
-        const float want = cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i] + foul;
-        const float paid = std::min(want, e);
-        e -= paid;
+        const float want = poisoned_[i] + cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i] + foul;
+        const float paid = want > 0.0f ? burn(p, pool, soil_a, want) : 0.0f;
         if (want > 0.0f) {
             const float f = paid / want;  // pro-rata if it couldn't pay in full
             // Part of its upkeep leaves the body as waste, still holding energy;
@@ -509,9 +574,12 @@ void Simulation::step() {
             stats_.out_thermal  += cost_thermal_[i] * f;
             stats_.out_movement += cost_move_[i] * f;
             stats_.out_fouling  += foul * f;
+            stats_.out_poison   += poisoned_[i] * f;
         }
+        const bool starved = paid + 1e-5f * want + 1e-7f < want;
 
         c_.moved[i] = std::hypot(new_x_[i] - c_.x[i], new_y_[i] - c_.y[i]);
+        c_.unfold[i] = next_unfold(c_.unfold[i], c_.moved[i]);
         c_.x[i] = new_x_[i];
         c_.y[i] = new_y_[i];
         c_.hx[i] = new_hx_[i];
@@ -523,65 +591,93 @@ void Simulation::step() {
         c_.body_temp[i] = next_body_temp(p, env_here, c_.body_temp[i]);
         c_.sleep[i] = next_sleep(p, env_here, c_.body_temp[i], c_.sleep[i]);
 
-        if (e <= 0.0f) {
-            // Death: the body stays where it fell, as matter and as food.
+        if (starved) {
+            // Death: the body and whatever is left in its store stay where it
+            // fell, as chemicals: food for whatever can take them.
+            Mix remains = c_.tissue[i];
+            remains.add(pool);
+            soil_.add_corpse(static_cast<std::size_t>(cell), remains);
+            pool.clear();
             c_.energy[i] = 0.0f;
-            soil_.corpse_energy[cell] += p.body_energy;
-            soil_.corpse_matter[cell] += p.mass;
             dead_.push_back(static_cast<uint32_t>(i));
             continue;
         }
 
-        // Reproduction: divide when energy passes the threshold. The child's
-        // body is built from soil matter and from the parent's energy; neither
-        // is created. No free matter in the soil here = no child yet.
-        // A body tries once every 8 ticks: when the soil is nearly bare a
-        // failed try (mutate, compile, find the child too heavy) would
-        // otherwise be repeated by every ready parent on every tick.
-        if (e >= p.repro_threshold && (c_.age[i] & 7u) == 0 && c_.sleep[i] < AWAKE && soil_.nutrient[cell] >= p.mass * 0.75f) {
+        // Growing up: every 8 ticks a young body builds more of itself out of
+        // its store, keeping back a reserve, at most GROW_STEP of its adult
+        // mass at a time. Its body is made of whatever its store holds, so
+        // chemicals only move from store to body: neither book changes.
+        if (p.grown < 1.0f && (c_.age[i] & 7u) == 4 && c_.sleep[i] < AWAKE) {
+            const float adult_mass = p.mass / p.grown;
+            const float rich = pool.density();
+            const float spare = pool.energy() - GROW_RESERVE * p.energy_capacity;
+            const float dm = rich > 0.0f ? std::min({GROW_STEP * adult_mass, adult_mass - p.mass, pool.mass(), spare / rich}) : 0.0f;
+            if (dm > 0.0f && dm >= std::min(GROW_MIN * adult_mass, adult_mass - p.mass)) {
+                float to = (p.mass + dm) / adult_mass;
+                if (to > 0.999f) to = 1.0f;
+                const Phenotype bigger = compile_phenotype(c_.genome[i], to);
+                const float matter = bigger.mass - p.mass;
+                if (matter > 0.0f && matter <= pool.mass()) {
+                    c_.tissue[i].add(take_share(pool, matter));
+                    stats_.grown_mass += matter;
+                    c_.pheno[i] = bigger;   // `p` refers to this slot, so it now reads the bigger body
+                }
+            }
+        }
+
+        // Reproduction: divide when the store is worth the threshold. The
+        // child's body is built out of the parent's store, as it is mixed;
+        // then the throw is paid; then the child takes its share of what is
+        // left. Nothing is created. A body tries once every 8 ticks.
+        // Only a grown body breeds; its child is born at the birth size in its
+        // own (mutated) genome, and grows the rest itself.
+        if (p.grown >= 1.0f && pool.energy() >= p.repro_threshold && (c_.age[i] & 7u) == 0 && c_.sleep[i] < AWAKE &&
+            pool.mass() > p.mass * 0.75f * p.birth_size) {
             Genome g = mutate(c_.genome[i], rng_);
-            const Phenotype cp = compile_phenotype(g);
+            const Phenotype cp = compile_phenotype(g, g.birth_size);
             // Dispersal is paid for: a child lands touching its parent, unless
             // the parent has the means to fling it further, which costs energy.
             const float ang = rng_.uniform(0.0f, TWO_PI);
             const float flung = rng_.uniform() * p.throw_range;
             const float thrown = flung > 0.0f ? std::max(0.0f, throw_cost(cp.mass, flung)) : 0.0f;
-            const float spare = e - cp.body_energy - thrown;
-            if (spare > 0.0f && soil_.nutrient[cell] >= cp.mass) {
-                const float child_e = std::min(spare * p.offspring_share, cp.energy_capacity);
-                e -= cp.body_energy + child_e + thrown;
-                stats_.out_movement += thrown;
-                stats_.energy_out += thrown;
-                soil_.nutrient[cell] -= cp.mass;
+            if (pool.mass() > cp.mass && pool.energy() - cp.mass * pool.density() - thrown > 0.0f) {
+                Mix body = take_share(pool, cp.mass);
+                const float paid_throw = thrown > 0.0f ? burn(p, pool, soil_a, thrown) : 0.0f;
+                stats_.out_movement += paid_throw;
+                stats_.energy_out += paid_throw;
+                Mix store = take_share(pool, std::min(pool.mass() * p.offspring_share, cp.pool_capacity));
                 float bx, by;
                 land_child(c_.x[i], c_.y[i], std::cos(ang), std::sin(ang), p.reach + cp.reach + flung, bx, by);
                 births_.push_back(Birth{
-                    bx, by,
-                    child_e, c_.body_temp[i], c_.lineage[i], species_.classify(c_.species[i], g, tick_), c_.generation[i] + 1,
+                    bx, by, store, body, c_.body_temp[i], c_.lineage[i], species_.classify(c_.species[i], g, tick_), c_.generation[i] + 1,
                     std::move(g), cp});
             }
         }
-        c_.energy[i] = e;
+        c_.energy[i] = pool.energy();
     }
 
     // Deaths first (descending, so swap-remove never moves a dead creature),
     // then births appended at the end.
     for (auto it = dead_.rbegin(); it != dead_.rend(); ++it) {
         const uint32_t sp = c_.species[*it];
-        if (species_.died(sp, tick_) && species_.get(sp).established) {
+        if (species_.died(sp, tick_)) {
             const Species& s = species_.get(sp);
-            chronicle_.add(tick_, s.name + " is extinct, after " + with_commas(tick_ - s.born_tick) + " ticks.");
+            const std::string text = s.name + " is extinct, after " + with_commas(tick_ - s.born_tick) + " ticks.";
+            if (s.established) chronicle_.add(tick_, text);
+            alert(sp, "Your " + text);
         }
         c_.remove_swap(*it);
     }
     for (Birth& b : births_)
-        admit(b.x, b.y, b.energy, b.lineage, b.species, b.generation, std::move(b.genome), b.pheno, b.body_temp);
+        admit(b.x, b.y, b.store, b.body, b.lineage, b.species, b.generation, std::move(b.genome), b.pheno, b.body_temp);
 
     stats_.deaths = dead_.size();
     stats_.births = births_.size();
     ++tick_;
     if (tick_ % FIELD_INTERVAL == 0) { weather_corpses(); spread_waste(); }
     if (tick_ % WASH_INTERVAL == 0) wash_soil();
+    if (tick_ % SPLIT_INTERVAL == 0) check_splits();
+    if (!watch_.empty() && tick_ % WATCH_INTERVAL == 0) watch_followed();
     if (tick_ % 50 == 0 || c_.size() == 0) {
         take_census();
         detect_events();
@@ -637,18 +733,16 @@ void Simulation::land_child(float x, float y, float ux, float uy, float dist, fl
     }
 }
 
-// Corpses nobody eats still fall apart, slowly: energy to heat, matter to soil.
+// Corpses nobody eats still fall apart, slowly: their chemicals burn down to A in the soil, the energy to heat.
 void Simulation::weather_corpses() {
-    const std::size_t cells = soil_.corpse_matter.size();
+    const std::size_t cells = soil_.corpse.size();
     for (std::size_t c = 0; c < cells; ++c) {
-        float& cm = soil_.corpse_matter[c];
-        float& ce = soil_.corpse_energy[c];
-        if (cm <= 0.0f && ce <= 0.0f) continue;
-        const float rate = (cm < 1e-3f && ce < 1e-3f) ? 1.0f : CORPSE_WEATHERING;  // sweep up crumbs
-        const float de = ce * rate, dm = cm * rate;
-        ce -= de;
-        cm -= dm;
-        soil_.nutrient[c] += dm;
+        const float cm = soil_.corpse[c].mass();
+        if (cm <= 0.0f) continue;
+        const float rate = cm < 1e-3f ? 1.0f : CORPSE_WEATHERING;  // sweep up crumbs
+        const Mix gone = soil_.take_corpse(c, cm * rate);
+        const float de = gone.energy();
+        soil_.nutrient[c] += gone.mass();   // burned down to A
         stats_.out_decay += de;
         stats_.energy_out += de;
     }
@@ -658,8 +752,9 @@ void Simulation::weather_corpses() {
 // average, in lumps of windfall_size. The number of lumps per tick has the
 // right mean (whole lumps, plus one more by chance for the fraction), so on a
 // 128 x 128 map at the default rate one falls about every 16 ticks. It lands
-// in the cell's corpse energy with no matter, so it is eaten, smelled and
-// weathered exactly like the dead. It is new energy: booked under energy_in.
+// in the cell's corpses as D made out of the cell's own A, so it is eaten,
+// smelled and weathered exactly like the dead. It is new energy (booked under
+// energy_in) but no new matter.
 void Simulation::drop_windfalls() {
     if (cfg_.windfall_rate <= 0.0f || cfg_.windfall_size <= 0.0f) return;
     const int cells = world_.num_cells();
@@ -669,9 +764,15 @@ void Simulation::drop_windfalls() {
     if (rng_.uniform() < lumps) ++count;
     for (int k = 0; k < count; ++k) {
         const int cell = std::min(static_cast<int>(rng_.uniform() * static_cast<float>(cells)), cells - 1);
-        soil_.corpse_energy[static_cast<std::size_t>(cell)] += cfg_.windfall_size;
-        stats_.in_windfall += cfg_.windfall_size;
-        stats_.energy_in += cfg_.windfall_size;
+        // The lump is D made from the cell's own A (no matter arrives from
+        // outside), as much as the cell holds, up to windfall_size of energy.
+        const std::size_t at = static_cast<std::size_t>(cell);
+        const float made = std::min(cfg_.windfall_size / TOP_LEVEL, soil_.nutrient[at]);
+        if (made <= 0.0f) continue;
+        soil_.nutrient[at] -= made;
+        soil_.add_corpse(at, pure(CHEM_D, made));
+        stats_.in_windfall += made * TOP_LEVEL;
+        stats_.energy_in += made * TOP_LEVEL;
         ++stats_.windfalls;
     }
 }
@@ -736,16 +837,221 @@ void Simulation::take_census() {
         if (p.sense_cells > 0) ++k.sighted;
         if (p.part_total[static_cast<int>(PartType::Armour)] > 0.0f) ++k.armoured;
         if (p.toxicity > 0.0f) ++k.poisonous;
-        const float l = c_.fed_light[i], v = c_.fed_living[i], d = c_.fed_dead[i], w = c_.fed_waste[i];
-        const float total = l + v + d + w;
+        if (p.grown < 1.0f) ++k.growing;
+        const float l = c_.fed_light[i], v = c_.fed_living[i], d = c_.fed_dead[i], w = c_.fed_waste[i], h = c_.fed_vent[i];
+        const float total = l + v + d + w + h;
         if (total < 20.0f)           ++k.young;
         else if (l > 0.6f * total)   ++k.producers;
         else if (v > 0.6f * total)   ++k.hunters;
         else if (d > 0.6f * total)   ++k.scavengers;
         else if (w > 0.6f * total)   ++k.cleaners;
+        else if (h > 0.6f * total)   ++k.chemotrophs;
         else                         ++k.mixed;
     }
     census_ = k;
+}
+
+// -----------------------------------------------------------------------------
+// Species splits (design doc 9.3 step 3). A species founded by one drifting
+// newborn can go on to become two kinds of creature without any single
+// newborn crossing the threshold: either side of a mountain, or two ways of
+// life side by side. Look inside each big species for two clusters (a
+// two-centre clustering on a sample, centres being sample members), and if
+// they are well apart, make the one further from the founder a new species.
+// Deterministic: samples are taken by stride over the creature arrays.
+// -----------------------------------------------------------------------------
+void Simulation::check_splits() {
+    const std::size_t n = c_.size();
+    const std::size_t kinds = species_.all().size();   // splits below add to the list; look only at these
+    if (n == 0) return;
+
+    // Members of each species, in creature order (a counting sort).
+    std::vector<uint32_t> start(kinds + 1, 0), members(n);
+    for (std::size_t i = 0; i < n; ++i) ++start[c_.species[i] + 1];
+    for (std::size_t k = 0; k < kinds; ++k) start[k + 1] += start[k];
+    {
+        std::vector<uint32_t> at(start.begin(), start.end() - 1);
+        for (std::size_t i = 0; i < n; ++i) members[at[c_.species[i]]++] = static_cast<uint32_t>(i);
+    }
+
+    std::vector<uint32_t> sample;
+    std::vector<float> dist;          // sample x sample distances
+    std::vector<uint8_t> side;
+    for (uint32_t sp = 0; sp < kinds; ++sp) {
+        const uint32_t count = start[sp + 1] - start[sp];
+        if (count < 2 * SPLIT_MIN || !species_.get(sp).established) continue;
+        const uint32_t* m = members.data() + start[sp];
+
+        // A sample spread evenly over the members.
+        const std::size_t k = std::min<std::size_t>(count, SPLIT_SAMPLE);
+        sample.resize(k);
+        for (std::size_t j = 0; j < k; ++j) sample[j] = m[j * count / k];
+        dist.assign(k * k, 0.0f);
+        for (std::size_t a = 0; a < k; ++a)
+            for (std::size_t b = a + 1; b < k; ++b)
+                dist[a * k + b] = dist[b * k + a] = genome_distance(c_.genome[sample[a]], c_.genome[sample[b]]);
+        auto farthest = [&](std::size_t from) {
+            std::size_t best = from;
+            for (std::size_t j = 0; j < k; ++j) if (dist[from * k + j] > dist[from * k + best]) best = j;
+            return best;
+        };
+        std::size_t ca = farthest(0), cb = farthest(ca);
+        if (dist[ca * k + cb] < SPLIT_GAP) continue;
+
+        // Two centres: assign each to the nearer, move each centre to the
+        // member with the least total distance to its own side, repeat.
+        side.assign(k, 0);
+        for (int round = 0; round < SPLIT_ROUNDS; ++round) {
+            for (std::size_t j = 0; j < k; ++j) side[j] = dist[j * k + cb] < dist[j * k + ca] ? 1 : 0;
+            for (int s = 0; s < 2; ++s) {
+                float best = 1e30f;
+                std::size_t centre = s ? cb : ca;
+                for (std::size_t j = 0; j < k; ++j) {
+                    if (side[j] != s) continue;
+                    float sum = 0.0f;
+                    for (std::size_t q = 0; q < k; ++q) if (side[q] == s) sum += dist[j * k + q];
+                    if (sum < best) { best = sum; centre = j; }
+                }
+                (s ? cb : ca) = centre;
+            }
+        }
+        std::size_t on_b = 0;
+        float spread = 0.0f;
+        for (std::size_t j = 0; j < k; ++j) {
+            side[j] = dist[j * k + cb] < dist[j * k + ca] ? 1 : 0;
+            on_b += side[j];
+            spread += dist[j * k + (side[j] ? cb : ca)];
+        }
+        spread /= static_cast<float>(k);
+        const float gap = dist[ca * k + cb];
+        const float min_side = SPLIT_SHARE * static_cast<float>(k);
+        if (static_cast<float>(on_b) < min_side || static_cast<float>(k - on_b) < min_side) continue;
+        if (gap < SPLIT_GAP || gap < SPLIT_SEPARATION * spread) continue;
+
+        // The side further from the founder leaves.
+        const Genome& founder = species_.get(sp).representative;
+        if (genome_distance(c_.genome[sample[ca]], founder) > genome_distance(c_.genome[sample[cb]], founder)) std::swap(ca, cb);
+        const Genome stay = c_.genome[sample[ca]];
+        const Genome leave = c_.genome[sample[cb]];
+
+        // Every member goes to the nearer centre; both sides must stay viable.
+        std::vector<uint32_t> leavers;
+        float sx[2] = {}, sy[2] = {};
+        for (uint32_t j = 0; j < count; ++j) {
+            const uint32_t i = m[j];
+            const bool go = genome_distance(c_.genome[i], leave) < genome_distance(c_.genome[i], stay);
+            if (go) leavers.push_back(i);
+            sx[go] += c_.x[i];
+            sy[go] += c_.y[i];
+        }
+        const uint32_t gone = static_cast<uint32_t>(leavers.size());
+        if (gone < SPLIT_MIN || count - gone < SPLIT_MIN) continue;
+
+        const std::string old_name = species_.get(sp).name;
+        const uint32_t to = species_.split_off(sp, leave, tick_);
+        for (uint32_t i : leavers) {
+            species_.move_member(sp, to);
+            c_.species[i] = to;
+        }
+        const std::string new_name = species_.get(to).name;
+        const std::string here = region_name(world_, sx[0] / static_cast<float>(count - gone), sy[0] / static_cast<float>(count - gone));
+        const std::string there = region_name(world_, sx[1] / static_cast<float>(gone), sy[1] / static_cast<float>(gone));
+        const std::string how = describe_difference(leave, stay);
+        std::string text = old_name + " splits in two";
+        text += here == there ? " in " + here + ": " + new_name + " goes its own way"
+                              : ": " + new_name + " in " + there + ", " + old_name + " in " + here;
+        text += how.empty() ? "." : ". " + new_name + " " + how + ".";
+        chronicle_.add(tick_, text);
+        alert(sp, "Your " + text);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Following a species (design doc 4.8): observation only.
+// -----------------------------------------------------------------------------
+void Simulation::follow(uint32_t species, bool on) {
+    if (species >= species_.all().size()) return;
+    auto it = std::find_if(watch_.begin(), watch_.end(), [&](const Watch& w) { return w.species == species; });
+    if (!on) {
+        if (it != watch_.end()) watch_.erase(it);
+        return;
+    }
+    if (it != watch_.end()) return;
+    watch_.push_back({species, survey(species, 0)});
+}
+
+bool Simulation::following(uint32_t species) const {
+    return std::any_of(watch_.begin(), watch_.end(), [&](const Watch& w) { return w.species == species; });
+}
+
+std::vector<uint32_t> Simulation::followed() const {
+    std::vector<uint32_t> ids;
+    for (const Watch& w : watch_) ids.push_back(w.species);
+    return ids;
+}
+
+void Simulation::alert(uint32_t species, const std::string& text) {
+    if (following(species)) alerts_.add(tick_, text);
+}
+
+Simulation::Survey Simulation::survey(uint32_t species, uint32_t old_traits) const {
+    Survey v;
+    uint32_t have[MOVING_TRAIT + 1] = {};
+    double mass = 0.0;
+    for (std::size_t i = 0; i < c_.size(); ++i) {
+        if (c_.species[i] != species) continue;
+        const Phenotype& p = c_.pheno[i];
+        ++v.count;
+        for (int t = 0; t < MOVING_TRAIT; ++t) have[t] += p.part_total[t] > 0.0f;
+        have[MOVING_TRAIT] += p.has_brain && p.max_speed > 0.0f;
+        mass += p.mass / p.grown;
+    }
+    v.traits = old_traits;
+    if (v.count == 0) return v;
+    v.mass = static_cast<float>(mass / v.count);
+    for (int t = 0; t <= MOVING_TRAIT; ++t) {
+        const float share = static_cast<float>(have[t]) / static_cast<float>(v.count);
+        if (share >= TRAIT_ON) v.traits |= 1u << t;
+        else if (share <= TRAIT_OFF) v.traits &= ~(1u << t);
+    }
+    return v;
+}
+
+void Simulation::watch_followed() {
+    static const char* const parts[MOVING_TRAIT] = {"sun patches", "mouths", "tails", "legs",
+                                                    "eyes", "armour", "fat stores", "poison"};
+    for (Watch& w : watch_) {
+        const Species& s = species_.get(w.species);
+        if (!s.alive()) continue;
+        const Survey now = survey(w.species, w.seen.traits);
+        const std::string your = "Your " + s.name;
+        for (int t = 0; t <= MOVING_TRAIT; ++t) {
+            const bool had = w.seen.traits >> t & 1u, has = now.traits >> t & 1u;
+            if (had == has) continue;
+            if (t == MOVING_TRAIT) alerts_.add(tick_, has ? your + " have begun to move." : your + " no longer move.");
+            else alerts_.add(tick_, has ? "Most of your " + s.name + " now have " + parts[t] + "."
+                                        : your + " have lost their " + parts[t] + ".");
+        }
+        w.seen.traits = now.traits;
+        if (w.seen.mass > 0.0f && now.count >= WATCH_MIN && std::abs(now.mass / w.seen.mass - 1.0f) >= SIZE_ALERT) {
+            const int pct = static_cast<int>(std::lround(100.0f * std::abs(now.mass / w.seen.mass - 1.0f)));
+            alerts_.add(tick_, your + (now.mass > w.seen.mass ? " are getting bigger: " : " are getting smaller: ") +
+                                   std::to_string(pct) + (now.mass > w.seen.mass ? "% heavier" : "% lighter") +
+                                   " than at the last report.");
+            w.seen.mass = now.mass;
+        } else if (w.seen.mass <= 0.0f) {
+            w.seen.mass = now.mass;
+        }
+        if (2 * now.count <= w.seen.count) {
+            alerts_.add(tick_, your + " are dwindling: " + with_commas(now.count) + " left, from " + with_commas(w.seen.count) + ".");
+            w.seen.count = now.count;
+        } else if (now.count >= 2 * w.seen.count && now.count >= WATCH_MIN) {
+            alerts_.add(tick_, your + " are thriving: " + with_commas(now.count) + " alive.");
+            w.seen.count = now.count;
+        } else if (w.seen.count == 0) {
+            w.seen.count = now.count;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -775,6 +1081,7 @@ void Simulation::detect_events() {
     first(hunters_logged_, census_.hunters, "The first hunters: some creatures now live mostly by draining the living.");
     first(scavengers_logged_, census_.scavengers, "The first scavengers: some creatures now live mostly on the dead.");
     first(cleaners_logged_, census_.cleaners, "The first cleaners: some creatures now live mostly on what others give off.");
+    first(chemotrophs_logged_, census_.chemotrophs, "Life at the vents: some creatures now live mostly on the warmth of the deep.");
 
     // First time the world holds 1,000 / 10,000 / 100,000 ... creatures.
     while (pop >= next_milestone_) {

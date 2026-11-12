@@ -1,6 +1,6 @@
 #pragma once
 // God powers: the player's hands. Every power edits the ENVIRONMENT (terrain,
-// heat, sun, climate) through World's edit functions. There is no power that
+// heat, vents, sun, climate) through World's edit functions. There is no power that
 // touches a creature, and there never should be.
 //
 // A power is a command: "at tick T, change X by `amount`, spread over
@@ -30,6 +30,7 @@ enum class PowerKind : uint8_t {
     Heat,     // brush: local warm (+) or cold (-) spot, in °C
     Sun,      // global: change the sun multiplier (0.2 = 20% brighter)
     Climate,  // global: warm (+) or cool (-) the whole world, in °C
+    Vent,     // brush: open (+) or close (-) a vent, in units of strength (0..vent_max)
 };
 
 struct PowerCommand {
@@ -75,6 +76,7 @@ private:
 //
 //   <tick> terrain <x> <y> <radius> <amount> [duration]
 //   <tick> heat    <x> <y> <radius> <amount> [duration]
+//   <tick> vent    <x> <y> <radius> <amount> [duration]
 //   <tick> sun     <amount> [duration]
 //   <tick> climate <amount> [duration]
 //
@@ -83,5 +85,9 @@ bool parse_power_script(std::istream& in, std::vector<PowerCommand>& out, std::s
 
 // Writes commands back out in the same format (round-trips with the parser).
 void write_power_script(std::ostream& out, const std::vector<PowerCommand>& commands);
+
+// Which ninth of the map a point is in, in words: "the north-west".
+// Also used by the species split check for where each half lives.
+std::string region_name(const World& w, float x, float y);
 
 }  // namespace luca

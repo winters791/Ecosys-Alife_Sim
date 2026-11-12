@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "chem.hpp"
+
 namespace luca {
 
 enum class PartType : uint8_t {
@@ -26,6 +28,17 @@ const char* part_name(PartType t);
 // other part a stalk would do nothing, so the genome never holds one.
 inline bool can_have_stalk(PartType t) { return t == PartType::Absorber || t == PartType::Photo; }
 
+// An enzyme (chemistry layer, design doc 2.1.1): it turns chemical x into y
+// or y into x, whichever way the body needs, at most `rate` units of mass a
+// tick each way. Downhill it releases the difference in levels (chem.hpp) for
+// the body to spend; uphill it stores light (or a vent's flow) in the richer
+// chemical. A reaction from or to A draws on or gives to the cell's soil.
+// Every enzyme costs upkeep in proportion to its rate (phenotype.cpp).
+struct Enzyme {
+    uint8_t x = CHEM_A, y = CHEM_D;   // kept with x below y by clamp_genome
+    float   rate = 0.0f;
+};
+
 struct Part {
     PartType type = PartType::Photo;
     float size  = 1.0f;
@@ -42,9 +55,17 @@ struct Part {
 //
 // A link carries one node's value to another, times a weight. With no hidden
 // neurons the brain is a plain set of reflexes: "lean towards light, more so
-// when hungry". Hidden neurons (tanh) let it combine senses, and because a
-// hidden neuron may listen to hidden neurons (its own value from the tick
-// before, or another's), a brain can also remember.
+// when hungry". Hidden neurons let it combine senses, and because a hidden
+// neuron may listen to hidden neurons (its own value from the tick before, or
+// another's), a brain can also remember.
+//
+// Hidden neurons are a CTRNN (continuous-time recurrent net, 2026-11-12).
+// Each has a state y, a time constant tau (ticks) and a bias; it fires
+// tanh(y + bias), and each tick its state moves 1/tau of the way towards what
+// its links feed it (Euler, one tick a step). A neuron with tau = 1 forgets
+// at once, as every neuron did before; a slow one smooths its inputs, holds
+// on to what it felt hours ago, or with links back to itself and others can
+// keep a rhythm. Tau and bias are genes of the neuron; both evolve.
 //
 // Nothing here says "chase" or "flee". An output is only how hard to lean
 // towards (+) or away from (-) one thing the body can sense; selection finds
@@ -58,6 +79,10 @@ enum BrainInput : int {
     IN_COLD,       // -1 too hot .. +1 too cold for its comfort
     IN_CORPSE,     // dead matter in its own cell
     IN_MOVED,      // how fast it went last tick
+    // Touch (2026-11-12): what crossed its membrane last tick. Every body
+    // feels these; no sensor is needed.
+    IN_EATING,     // what it took in from the living and the dead: 1 = twice its upkeep
+    IN_HURT,       // what was drained out of it: 1 = its upkeep
     NUM_INPUTS
 };
 enum BrainOutput : int {
@@ -99,9 +124,16 @@ struct BrainLink {
 struct Brain {
     uint8_t hidden = 0;             // number of hidden neurons
     std::vector<BrainLink> links;   // no links = no brain
+    // Per hidden neuron (only the first `hidden` mean anything).
+    float tau[MAX_HIDDEN];          // time constant in ticks, 1 .. limits::MAX_TAU
+    float bias[MAX_HIDDEN];         // added to its state before it fires
 
+    Brain() { reset_neurons(); }
     bool empty() const { return links.empty(); }
-    void clear() { hidden = 0; links.clear(); }
+    void clear() { hidden = 0; links.clear(); reset_neurons(); }
+    void reset_neurons() {
+        for (int k = 0; k < MAX_HIDDEN; ++k) { tau[k] = 1.0f; bias[k] = 0.0f; }
+    }
     // Set the weight from one node to another (adding the link if need be).
     void connect(int from, int to, float weight);
     // Take out hidden neuron k and every link that touches it.
@@ -127,7 +159,10 @@ struct Genome {
     // Copying and upkeep of the body itself (2026-11-12).
     float mutability        = 0.0f;   // log2 of how sloppily it is copied: 0 = the usual rates, -3 = an eighth, +2 = four times
     float repair            = 0.0f;   // 0..1: energy spent repairing wear, so it ages more slowly
+    float chemo             = 0.0f;   // 0..1: chemosynthesis, living on the energy of a vent (2026-11-12)
+    float birth_size        = 0.5f;   // fraction of adult mass a child is born at; it grows the rest (2026-11-12)
     std::vector<Part>  parts;
+    std::vector<Enzyme> enzymes;   // its chemistry (see Enzyme)
     Brain brain;                 // empty = no behaviour; see above
 };
 
@@ -139,11 +174,15 @@ constexpr int   MAX_PARTS  = 12;     // upkeep already prices parts; this just b
 constexpr float MIN_TOLERANCE = 0.5f, MAX_TOLERANCE = 30.0f;
 constexpr float MIN_THRESHOLD = 2.0f, MAX_THRESHOLD = 2000.0f;
 constexpr float MIN_SHARE = 0.05f,  MAX_SHARE = 0.95f;
-constexpr float MAX_WEIGHT = 3.0f;
+constexpr float MAX_WEIGHT = 3.0f;    // also the most a neuron's bias can be
+constexpr float MIN_TAU    = 1.0f,  MAX_TAU = 1000.0f;   // a neuron's time constant, ticks (a day is 600)
 constexpr float MAX_THROW  = 6.0f;   // cells
 constexpr float MAX_BITE   = 3.0f;   // at most four times the plain pull
 constexpr float MAX_STALK  = 1.0f;   // world units: a part can sit at most this far out
 constexpr float MIN_MUTABILITY = -3.0f, MAX_MUTABILITY = 2.0f;   // an eighth to four times the usual mutation rates
+constexpr float MIN_BIRTH  = 0.1f,  MAX_BIRTH  = 1.0f;   // born at a tenth of adult mass, up to full size
+constexpr int   MAX_ENZYMES = 8;
+constexpr float MIN_ENZYME_RATE = 0.0005f, MAX_ENZYME_RATE = 0.2f;   // units of mass a tick
 }  // namespace limits
 
 // Pull every gene back inside its range. Called after mutation and on import.

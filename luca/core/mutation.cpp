@@ -39,6 +39,16 @@ constexpr float P_ADD_LINK   = 0.06f;  // a new connection between two nodes
 constexpr float P_DEL_LINK   = 0.04f;  // a connection is lost
 constexpr float P_ADD_NEURON = 0.015f; // a new hidden neuron grows in the middle of a link
 constexpr float P_DEL_NEURON = 0.010f; // a hidden neuron dies, with its links
+constexpr float P_TAU        = 0.15f;  // chance each neuron's time constant is nudged
+constexpr float TAU_STEP     = 0.5f;   // sd of a nudge, in e-folds (x1.65)
+constexpr float P_BIAS       = 0.15f;  // chance each neuron's bias is nudged
+// Enzymes (chemistry layer): a new one, a lost one, a copy, and one end of a
+// reaction swapped for another chemical (a copy then a swap is how a new
+// reaction appears beside the old one).
+constexpr float P_ENZ_ADD    = 0.010f;
+constexpr float P_ENZ_DELETE = 0.010f;
+constexpr float P_ENZ_COPY   = 0.010f;
+constexpr float P_ENZ_SWAP   = 0.010f;
 constexpr float P_NEW_TRAIT = 0.10f;   // of the times a missing optional trait is touched, how often it appears
 constexpr float P_LOSE_BRAIN = 0.05f;  // a brain with nothing to drive withers
 
@@ -70,6 +80,10 @@ void mutate_brain(Brain& b, Rng& rng, float rate) {
     auto chance = [&](float p) { return rng.chance(std::min(1.0f, p * rate)); };
     for (BrainLink& l : b.links)
         if (chance(P_WEIGHT)) l.weight += rng.normal() * 0.2f;
+    for (int k = 0; k < b.hidden; ++k) {
+        if (chance(P_TAU)) b.tau[k] *= std::exp(rng.normal() * TAU_STEP);
+        if (chance(P_BIAS)) b.bias[k] += rng.normal() * 0.2f;
+    }
 
     // Lose a link.
     if (chance(P_DEL_LINK) && b.links.size() > 1)
@@ -83,6 +97,10 @@ void mutate_brain(Brain& b, Rng& rng, float rate) {
     if (chance(P_ADD_NEURON) && b.hidden < MAX_HIDDEN && !b.links.empty() &&
         b.links.size() + 2 <= static_cast<std::size_t>(MAX_LINKS)) {
         const BrainLink through = b.links[rng.below(static_cast<uint32_t>(b.links.size()))];
+        // A new neuron's time constant is anything from one tick to the most
+        // there is, evenly in log: fast relays and slow memories are equally likely.
+        b.tau[b.hidden] = std::exp(rng.uniform(0.0f, std::log(limits::MAX_TAU)));
+        b.bias[b.hidden] = 0.0f;
         const int fresh = hidden_node(b.hidden++);
         b.links.push_back({through.from, static_cast<uint8_t>(fresh), 1.0f});
         b.links.push_back({static_cast<uint8_t>(fresh), through.to, rng.normal() * 0.3f});
@@ -126,6 +144,8 @@ Genome mutate(const Genome& parent, Rng& rng) {
     if (chance(P_GENE)) g.squareness += rng.normal() * 0.06f;
     if (chance(P_GENE)) g.mutability += rng.normal() * 0.15f;
     if (chance(P_GENE)) nudge_optional(g.repair, 0.08f, rng);
+    if (chance(P_GENE)) nudge_optional(g.chemo, 0.08f, rng);
+    if (chance(P_GENE)) g.birth_size += rng.normal() * 0.05f;
     for (float& s : g.shape)
         if (chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
     for (Part& p : g.parts)
@@ -162,6 +182,29 @@ Genome mutate(const Genome& parent, Rng& rng) {
 
     if (chance(P_RETYPE) && !g.parts.empty())
         g.parts[rng.below(static_cast<uint32_t>(g.parts.size()))].type = static_cast<PartType>(rng.below(NUM_TYPES));
+
+    // --- Enzymes ----------------------------------------------------------------
+    for (Enzyme& e : g.enzymes)
+        if (chance(P_GENE)) scale(e.rate, 0.15f, rng);
+    if (chance(P_ENZ_DELETE) && !g.enzymes.empty())
+        g.enzymes.erase(g.enzymes.begin() + rng.below(static_cast<uint32_t>(g.enzymes.size())));
+    if (chance(P_ENZ_COPY) && !g.enzymes.empty() && g.enzymes.size() < static_cast<std::size_t>(limits::MAX_ENZYMES)) {
+        Enzyme copy = g.enzymes[rng.below(static_cast<uint32_t>(g.enzymes.size()))];
+        copy.rate *= 0.5f;
+        g.enzymes.push_back(copy);
+    }
+    if (chance(P_ENZ_SWAP) && !g.enzymes.empty()) {
+        Enzyme& e = g.enzymes[rng.below(static_cast<uint32_t>(g.enzymes.size()))];
+        uint8_t& end = rng.uniform() < 0.5f ? e.x : e.y;
+        end = static_cast<uint8_t>(rng.below(NCHEM));   // clamp_genome mends x == y
+    }
+    if (chance(P_ENZ_ADD) && g.enzymes.size() < static_cast<std::size_t>(limits::MAX_ENZYMES)) {
+        Enzyme e;
+        e.x = static_cast<uint8_t>(rng.below(NCHEM));
+        e.y = static_cast<uint8_t>(rng.below(NCHEM));
+        e.rate = rng.uniform(0.002f, 0.01f);
+        g.enzymes.push_back(e);
+    }
 
     // --- Brain ------------------------------------------------------------------
     bool can_move = false;

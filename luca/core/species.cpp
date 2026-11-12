@@ -26,12 +26,17 @@ constexpr float W_ELONGATE  = 1.5f;   // round to three times as long is 0..1
 constexpr float W_SQUARE    = 1.0f;   // rounded to boxy is 0..1
 constexpr float W_MUTABILITY = 0.3f;  // per doubling of the mutation rate
 constexpr float W_REPAIR    = 1.5f;   // none to full is 0..1
+constexpr float W_CHEMO     = 1.5f;   // none to full is 0..1
+constexpr float W_BIRTH     = 1.5f;   // a tenth to full size is 0.1..1
 constexpr float W_STALK     = 0.8f;   // per world unit of stalk, summed over a kind of part
+constexpr float W_ENZ_KIND  = 0.6f;   // one can run a reaction the other cannot
+constexpr float W_ENZ_RATE  = 0.4f;   // per e-fold between the rates of a reaction both run
 constexpr float W_PART_KIND = 0.6f;   // one has a kind of part the other lacks entirely
 constexpr float W_PART_SIZE = 0.5f;   // per unit of total size of one kind
 constexpr float W_BRAIN     = 0.4f;   // one has a brain, the other none
 constexpr float W_WEIGHTS   = 0.06f;  // per unit of link weight that differs (a link one lacks counts in full)
 constexpr float W_NEURON    = 0.3f;   // per hidden neuron one has and the other lacks
+constexpr float W_TAU       = 0.05f;  // per e-fold between the time constants of neurons both have
 // The eight lump genes (shape[]) are left out: they only change the drawing.
 // Where parts sit (theta) is left out too: it drifts within a species.
 
@@ -71,10 +76,23 @@ float genome_distance(const Genome& a, const Genome& b) {
     term(W_DORMANCY,  a.dormancy - b.dormancy);
     term(W_MUTABILITY, a.mutability - b.mutability);
     term(W_REPAIR,    a.repair - b.repair);
+    term(W_CHEMO,     a.chemo - b.chemo);
+    term(W_BIRTH,     a.birth_size - b.birth_size);
     term(W_DETOX,     a.detox - b.detox);
     term(W_ELONGATE,  a.elongation - b.elongation);
     term(W_SQUARE,    a.squareness - b.squareness);
 
+    // Chemistry: the summed rate of each of the six reactions.
+    {
+        float ra[NCHEM][NCHEM] = {}, rb[NCHEM][NCHEM] = {};
+        for (const Enzyme& e : a.enzymes) ra[e.x][e.y] += e.rate;
+        for (const Enzyme& e : b.enzymes) rb[e.x][e.y] += e.rate;
+        for (int x = 0; x < NCHEM; ++x)
+            for (int y = x + 1; y < NCHEM; ++y) {
+                if ((ra[x][y] > 0.0f) != (rb[x][y] > 0.0f)) term(W_ENZ_KIND, 1.0f);
+                else if (ra[x][y] > 0.0f) term(W_ENZ_RATE, std::log(ra[x][y] / rb[x][y]));
+            }
+    }
     const PartSums pa = sum_parts(a), pb = sum_parts(b);
     for (int t = 0; t < NUM_TYPES; ++t) {
         term(W_PART_SIZE, pa.size[t] - pb.size[t]);
@@ -99,7 +117,14 @@ float genome_distance(const Genome& a, const Genome& b) {
             for (const BrainLink& la : a.brain.links) shared = shared || (la.from == lb.from && la.to == lb.to);
             if (!shared) sum += std::abs(lb.weight);
         }
+        // Neurons both have: how differently they keep time, and their biases.
+        float slow = 0.0f;
+        for (int k = 0; k < std::min(a.brain.hidden, b.brain.hidden); ++k) {
+            slow += std::abs(std::log(a.brain.tau[k] / b.brain.tau[k]));
+            sum += std::abs(a.brain.bias[k] - b.brain.bias[k]);
+        }
         term(W_WEIGHTS, sum);
+        term(W_TAU, slow);
         term(W_NEURON, static_cast<float>(a.brain.hidden) - static_cast<float>(b.brain.hidden));
     }
     return std::sqrt(sq);
@@ -177,6 +202,19 @@ bool SpeciesRegistry::died(uint32_t species, uint64_t tick) {
     s.extinct_tick = tick;
     --living_;
     return true;
+}
+
+uint32_t SpeciesRegistry::split_off(uint32_t from, const Genome& rep, uint64_t tick) {
+    const uint32_t id = found(from, rep, tick, {});
+    species_[id].by_split = true;
+    return id;
+}
+
+bool SpeciesRegistry::move_member(uint32_t from, uint32_t to) {
+    Species& a = species_[from];
+    if (a.population == 0) return false;
+    --a.population;   // never its last member: a split leaves both halves alive
+    return born(to);
 }
 
 std::size_t SpeciesRegistry::living_established() const {

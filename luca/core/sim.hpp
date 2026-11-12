@@ -11,6 +11,7 @@
 #include "rng.hpp"
 #include "soil.hpp"
 #include "species.hpp"
+#include "events.hpp"
 #include "spatial_grid.hpp"
 #include "world.hpp"
 
@@ -24,6 +25,8 @@ struct TickStats {
     std::size_t deaths = 0;
     double energy_in       = 0.0;  // everything that enters the world: light absorbed plus windfalls
     double in_windfall     = 0.0;  // part of energy_in: food dropped on the map (see drop_windfalls)
+    double in_vent         = 0.0;  // part of energy_in: taken up from vents (chemosynthesis)
+    double grown_mass      = 0.0;  // matter young bodies took from the soil to grow (not a flow of energy)
     std::size_t windfalls  = 0;    // lumps dropped this tick
     double energy_out      = 0.0;  // everything lost as heat
     double out_upkeep      = 0.0;  // breakdown of energy_out
@@ -54,8 +57,10 @@ struct Census {
     std::size_t hunters = 0;      // mostly taken from living bodies
     std::size_t scavengers = 0;   // mostly taken from corpses
     std::size_t cleaners = 0;     // mostly taken from waste
+    std::size_t chemotrophs = 0;  // mostly taken from vents
     std::size_t mixed = 0;        // no single source above 60%
     std::size_t young = 0;        // hasn't eaten enough yet to say
+    std::size_t growing = 0;      // not yet full size (any way of life); can't breed yet
     std::size_t movers = 0;       // can move
     std::size_t sighted = 0;      // has a sensor
     std::size_t armoured = 0;
@@ -74,7 +79,7 @@ public:
     // stats are compiled here, under this world's physics. Its body is new
     // matter and energy arriving from outside, so do this between audits.
     // Returns the creature's id.
-    uint64_t add_creature(float x, float y, float energy, const Genome& genome);
+    uint64_t add_creature(float x, float y, float energy, const Genome& genome, float grown = 1.0f);
     uint64_t next_id() const { return next_id_; }   // the id the next creature will get (it decides its birth facing)
 
     // Advance one tick.
@@ -90,6 +95,14 @@ public:
     // to letting step() do it: the next step() finds nothing left to add.
     void flush_powers() { powers_.update(tick_, world_, chronicle_); }
 
+    // The world acting on its own (events.hpp). The rate can change at any
+    // time; what was cast stays in the power log either way.
+    void  set_event_rate(float rate) { events_.set_rate(rate); }
+    float event_rate() const { return events_.rate(); }
+    const WorldEvents& events() const { return events_; }
+    // Start one event of a kind now, whatever the rate (tests, scripts).
+    void trigger_event(EventKind kind) { events_.trigger(kind, tick_, world_, powers_, chronicle_); }
+
     const SimConfig& config() const { return cfg_; }
     const World&     world() const { return world_; }
     const Creatures& creatures() const { return c_; }
@@ -102,6 +115,14 @@ public:
     const Census&    census() const { return census_; }             // refreshed every 50 ticks
     const SpeciesRegistry& species() const { return species_; }     // every species there has ever been
 
+    // Following a species (design doc 4.8). Observation only: a followed
+    // species gets no help. What happens to it is written to alerts() ("Your
+    // Velox have lost their eyes."), not to the chronicle.
+    void follow(uint32_t species, bool on = true);
+    bool following(uint32_t species) const;
+    std::vector<uint32_t> followed() const;
+    const Chronicle& alerts() const { return alerts_; }
+
     // All energy held in the world: in living creatures, locked in their
     // bodies, and left in corpses.
     double stored_energy() const;
@@ -113,9 +134,22 @@ private:
     void detect_events();
 
     void take_census();
+    // Every SPLIT_INTERVAL ticks: split any big species that has become two
+    // separate clusters of genomes (design doc 9.3 step 3). No randomness.
+    void check_splits();
+    // Every WATCH_INTERVAL ticks, for followed species only: what changed.
+    void watch_followed();
+    void alert(uint32_t species, const std::string& text);
+    // What a species looks like right now, for following it.
+    struct Survey {
+        uint32_t count = 0;
+        uint32_t traits = 0;   // bit per part type most of them carry, and bit 8: most can move
+        float    mass = 0.0f;  // mean adult mass
+    };
+    Survey survey(uint32_t species, uint32_t old_traits) const;
     // Add a creature and keep the species books; all arrivals go through here.
     // body_temp < -273 means "as warm as the ground it lands on" (newcomers).
-    void admit(float x, float y, float energy, uint32_t lineage, uint32_t species, uint32_t generation,
+    void admit(float x, float y, const Mix& store, const Mix& body, uint32_t lineage, uint32_t species, uint32_t generation,
                Genome genome, const Phenotype& pheno, float body_temp = -1000.0f);
     void weather_corpses();
     void wash_soil();
@@ -128,7 +162,9 @@ private:
     void decide_movement(std::size_t i, int cell, const LocalEnv& env);
 
     struct Birth {
-        float x, y, energy, body_temp;  // a child starts as warm as its parent
+        float x, y;
+        Mix store, body;                // its share of the parent's store, and its body, built from it
+        float body_temp;                // a child starts as warm as its parent
         uint32_t lineage, species, generation;
         Genome genome;
         Phenotype pheno;
@@ -146,8 +182,16 @@ private:
     Census      census_;
     TickStats   stats_;
     PowerSystem powers_;
+    WorldEvents events_;
     Chronicle   chronicle_;
     SpeciesRegistry species_;
+
+    struct Watch {
+        uint32_t species = 0;
+        Survey   seen;          // what it looked like when last reported on
+    };
+    std::vector<Watch> watch_;  // followed species
+    Chronicle          alerts_;
 
     // Detector state
     std::size_t peak_pop_ = 0;        // highest population since the last die-off
@@ -157,7 +201,7 @@ private:
     std::size_t day_peak_ = 0;        // highest population so far today
     uint64_t    day_seen_ = 0;
     bool        extinct_logged_ = false;
-    bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false, cleaners_logged_ = false;
+    bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false, cleaners_logged_ = false, chemotrophs_logged_ = false;
     bool        sighted_logged_ = false, armoured_logged_ = false, poisonous_logged_ = false, transfer_logged_ = false;
 
     // Scratch buffers, reused every tick to avoid allocation.
@@ -173,8 +217,11 @@ private:
     std::vector<float> corpse_want_, corpse_gain_;
     std::vector<float> cell_waste_demand_;   // per cell
     std::vector<float> waste_want_, waste_gain_;
+    std::vector<float> cell_vent_demand_;    // per cell
+    std::vector<float> vent_want_, vent_gain_;
     std::vector<float> waste_flow_;          // per cell: waste on its way to the neighbours
-    std::vector<float> drain_want_, drained_, intake_, poisoned_;
+    std::vector<float> drain_want_, drained_, poisoned_;   // drain in mass from the store; poison in energy
+    std::vector<Mix> intake_;                               // chemicals taken in from living bodies this tick
     struct Contact { uint32_t taker, giver; float flow; };
     std::vector<Contact> contacts_;
     struct Near { float x, y, reach; uint32_t who; };  // one creature, in cell order

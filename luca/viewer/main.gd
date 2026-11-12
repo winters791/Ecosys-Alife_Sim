@@ -13,6 +13,7 @@ extends Node3D
 ##   Space                pause / resume           1-5: speed
 ##   Tab                  next overlay             [ ]: brush size
 ##   C                    colour creatures by species      T: tree of life
+##   F                    follow the inspected creature's species (alerts in the chronicle)
 ##
 ## Command line (after `--`):  --size=128 --seed=42 --pop=600
 ##   --shot=PATH --frames=N   save a screenshot after N frames and quit
@@ -21,23 +22,28 @@ extends Node3D
 ##   --tree  or --tree=NAME   start with the tree of life open (zoomed in on a species)
 ##   --test-poison            draw every body as poisonous (to check the art)
 ##   --inspect=x,z            open the inspector on the creature nearest that spot
+##   --follow                 also follow that creature's species
 ##   --parade                 an empty world with one hand-made creature of each body plan
 ##   --species                start with creatures coloured by species
 ##   --warmup=N               run N ticks before the first frame (skip ahead to evolved life)
+##   --events=F               how often the world acts on its own (default 1, 0 = never)
 
 const PX_SIZE := 0.125            # world units per sprite pixel: 8 pixels to a cell
 const ZOOMS := [0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]  # screen pixels per sprite pixel
 const FRAME_BUDGET_MS := 10.0     # sim time allowed per frame; beyond it the world just runs slower
 const SPEED_TICKS := [0, 1, 4, 16, 100000]
 const SPEED_NAMES := ["Pause", "1x", "4x", "16x", "Max"]
-const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead", "Waste"]
+const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead", "Waste", "Vents"]
 const GRADUAL_TICKS := 1000       # how long a power takes in Gradual mode
 const NIGHT_GROUND := Vector3(0.30, 0.34, 0.58)
 const NIGHT_BLOBS := Vector3(0.58, 0.62, 0.82)
 
-enum Tool { LOOK, RAISE, LOWER, WARM, COOL }
-const TOOL_NAMES := ["Look", "Raise land", "Lower land", "Warm spot", "Cold spot"]
-const TOOL_COLORS := [Color(1, 1, 1), Color(1.0, 0.85, 0.4), Color(0.6, 0.75, 1.0), Color(1.0, 0.45, 0.3), Color(0.5, 0.9, 1.0)]
+## Vent strength runs 0..3 (`vent_max`), against tens of height units for the land brush.
+const VENT_BRUSH := 0.05
+
+enum Tool { LOOK, RAISE, LOWER, WARM, COOL, VENT, SEAL }
+const TOOL_NAMES := ["Look", "Raise land", "Lower land", "Warm spot", "Cold spot", "Open vent", "Close vent"]
+const TOOL_COLORS := [Color(1, 1, 1), Color(1.0, 0.85, 0.4), Color(0.6, 0.75, 1.0), Color(1.0, 0.45, 0.3), Color(0.5, 0.9, 1.0), Color(1.0, 0.55, 0.15), Color(0.55, 0.5, 0.6)]
 
 var world: LucaWorld
 var world_size := 128
@@ -100,6 +106,7 @@ var shot_frames := 120
 var demo := false
 var frame := 0
 var warmup := 0
+var event_rate := 1.0                   # storms, eruptions, meteors, climate drift (core/events.hpp)
 var start_zoom := -1.0
 var start_at := Vector2(-1, -1)
 var start_tree := false
@@ -109,6 +116,12 @@ var parts_tex: ImageTexture    # every creature's parts, one texel each (see Luc
 var parts_rows := 0
 var start_tree_root := ""   # species name to zoom the tree into (testing)
 var start_inspect := Vector2(-1, -1)   # open the inspector on the creature nearest here (testing)
+var start_follow := false               # and follow its species
+var inspected_species := -1             # species of the inspected creature
+var follow_button: Button
+var alerts_seen := 0
+const ALERT_COLOR := "ffc857"
+var start_vents: Array[Vector3] = []   # --vent=x,z,strength: open a vent before the warmup (testing)
 
 
 func _ready() -> void:
@@ -122,6 +135,7 @@ func _ready() -> void:
 		elif arg.begins_with("--frames="): shot_frames = int(arg.get_slice("=", 1))
 		elif arg == "--demo": demo = true
 		elif arg == "--species": by_species = true
+		elif arg == "--follow": start_follow = true
 		elif arg == "--test-poison": test_poison = true
 		elif arg == "--parade":
 			parade = true
@@ -131,10 +145,14 @@ func _ready() -> void:
 			start_tree = true
 			start_tree_root = arg.get_slice("=", 1)
 		elif arg.begins_with("--warmup="): warmup = int(arg.get_slice("=", 1))
+		elif arg.begins_with("--events="): event_rate = float(arg.get_slice("=", 1))
 		elif arg.begins_with("--zoom="): start_zoom = float(arg.get_slice("=", 1))
 		elif arg.begins_with("--inspect="):
 			var at := arg.get_slice("=", 1).split(",")
 			if at.size() == 2: start_inspect = Vector2(float(at[0]), float(at[1]))
+		elif arg.begins_with("--vent="):
+			var v := arg.get_slice("=", 1).split(",")
+			if v.size() >= 2: start_vents.append(Vector3(float(v[0]), float(v[1]), float(v[2]) if v.size() > 2 else 2.0))
 		elif arg.begins_with("--at="):
 			var at := arg.get_slice("=", 1).split(",")
 			if at.size() == 2: start_at = Vector2(float(at[0]), float(at[1]))
@@ -142,11 +160,16 @@ func _ready() -> void:
 	world = LucaWorld.new()
 	world.setup(world_size, seed_value, population, true)
 	if parade:
+		event_rate = 0.0   # an art check: keep the ground still
+	world.set_event_rate(event_rate)
+	if parade:
 		var placed: int = world.spawn_parade(world.get_extent() * 0.5 - 9.0, 20.0)
 		if start_at.x < 0.0:
 			start_at = Vector2(world.get_extent() * 0.5 - 12.5 + 1.6 * (placed - 1), 20.0)   # a little left of centre, clear of the panel
 		if start_zoom <= 0.0:
 			start_zoom = 6.0
+	for v in start_vents:
+		world.cast_power(LucaWorld.POWER_VENT, v.x, v.y, 4.0, v.z, 0, false)
 	if warmup > 0:
 		world.step(warmup, 1e12)
 	world_size = world.get_world_size()
@@ -232,7 +255,7 @@ func _upload_fields() -> void:
 ## The soil changes a little every tick (things die, things are built), so
 ## it is re-sent a few times a second rather than tracked with a counter.
 func _upload_soil() -> void:
-	var img := Image.create_from_data(world_size, world_size, false, Image.FORMAT_RGBF, world.get_soil().to_byte_array())
+	var img := Image.create_from_data(world_size, world_size, false, Image.FORMAT_RGBAF, world.get_soil().to_byte_array())
 	if soil_tex == null:
 		soil_tex = ImageTexture.create_from_image(img)
 		terrain_mat.set_shader_parameter("soil_tex", soil_tex)
@@ -409,6 +432,11 @@ func _build_ui() -> void:
 	gradual_box.focus_mode = Control.FOCUS_NONE
 	gradual_box.toggled.connect(func(on: bool) -> void: gradual = on)
 	tools.add_child(gradual_box)
+	# The world acting on its own: storms, eruptions, meteors, climate drift.
+	_slider(tools, "World acts on its own (0 = never)", 0.0, 4.0, event_rate,
+		func(v: float) -> void:
+			event_rate = v
+			world.set_event_rate(v))
 
 	_heading(tools, "VIEW")
 	overlay_button = OptionButton.new()
@@ -436,6 +464,7 @@ func _build_ui() -> void:
 	var history := _panel(Control.PRESET_TOP_RIGHT, Vector2(380, 240))
 	_heading(history, "CHRONICLE")
 	chronicle_box = RichTextLabel.new()
+	chronicle_box.bbcode_enabled = true
 	chronicle_box.scroll_following = true
 	chronicle_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	chronicle_box.custom_minimum_size = Vector2(360, 200)
@@ -448,7 +477,7 @@ func _build_ui() -> void:
 	tree_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	tree_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	tree_panel.visible = false
-	(tree_panel.get_theme_stylebox("panel") as StyleBoxFlat).bg_color = Color(0.08, 0.09, 0.11, 0.96)
+	(tree_panel.get_theme_stylebox("panel") as StyleBoxFlat).bg_color = Color(0.065, 0.072, 0.095, 1.0)
 	tree_title = Label.new()
 	tree_title.add_theme_color_override("font_color", Color(0.65, 0.72, 0.80))
 	tree_title.add_theme_font_size_override("font_size", 12)
@@ -465,6 +494,28 @@ func _build_ui() -> void:
 	inspector_label = Label.new()
 	inspector_label.text = "Pick Look, then click a blob."
 	inspector.add_child(inspector_label)
+	follow_button = _button(inspector, "Follow its species  (F)", _toggle_follow, true)
+	follow_button.disabled = true
+
+
+## Follow the inspected creature's species, or stop. Observation only: a
+## followed species gets no help, but what happens to it shows in the chronicle.
+func _toggle_follow() -> void:
+	if inspected_species < 0:
+		follow_button.set_pressed_no_signal(false)
+		return
+	var on := not world.is_following(inspected_species)
+	world.follow_species(inspected_species, on)
+	var info: Dictionary = world.inspect_id(inspected_id)
+	var name: String = info.get("species", "")
+	chronicle_box.append_text("[color=#%s]%s %s.[/color]\n" % [ALERT_COLOR, "Now following" if on else "No longer following", name])
+	_update_follow_button(on, name)
+
+
+func _update_follow_button(on: bool, name: String) -> void:
+	follow_button.disabled = inspected_species < 0
+	follow_button.set_pressed_no_signal(on)
+	follow_button.text = ("Following %s  (F to stop)" % name) if on else ("Follow %s  (F)" % name if name != "" else "Follow its species  (F)")
 
 
 func _set_speed(index: int) -> void:
@@ -493,6 +544,7 @@ func _toggle_tree() -> void:
 	var win := get_viewport().get_visible_rect().size
 	tree_view.custom_minimum_size = Vector2(maxf(win.x - 80.0, 560.0), maxf(win.y - 90.0, 360.0))
 	tree_panel.reset_size()
+	tree_panel.position = ((win - tree_panel.size) * 0.5).floor()
 	tree_panel.move_to_front()
 	_update_tree()
 	tree_view.grab_focus()
@@ -546,6 +598,10 @@ func _dab(seconds: float) -> void:
 		return
 	var power := LucaWorld.POWER_TERRAIN if tool in [Tool.RAISE, Tool.LOWER] else LucaWorld.POWER_HEAT
 	var direction := -1.0 if tool in [Tool.LOWER, Tool.COOL] else 1.0
+	if tool in [Tool.VENT, Tool.SEAL]:
+		# Vent strength runs 0..3, so the brush is gentler: about half a unit a second.
+		power = LucaWorld.POWER_VENT
+		direction = (-1.0 if tool == Tool.SEAL else 1.0) * VENT_BRUSH
 	if gradual:
 		# One slow change per click: the full strength, spread over many ticks.
 		world.cast_power(power, hover.x, hover.z, brush_radius, direction * brush_strength * 2.0, GRADUAL_TICKS, false)
@@ -561,7 +617,9 @@ func _inspect() -> void:
 	var info: Dictionary = world.inspect(hover.x, hover.z, 3.0)
 	if info.is_empty():
 		inspected_id = -1
+		inspected_species = -1
 		inspector_label.text = "Nothing lives here."
+		_update_follow_button(false, "")
 		return
 	inspected_id = info["id"]
 	_show_creature(info)
@@ -573,13 +631,16 @@ func _diet(info: Dictionary) -> String:
 	var living: float = info["fed_living"]
 	var dead: float = info["fed_dead"]
 	var waste: float = info["fed_waste"]
-	var total := light + living + dead + waste
+	var vent: float = info["fed_vent"]
+	var total := light + living + dead + waste + vent
 	if total < 1.0:
 		return "has not fed yet"
 	var text := "sun %d%%, the living %d%%, the dead %d%%" % [
 		roundi(100.0 * light / total), roundi(100.0 * living / total), roundi(100.0 * dead / total)]
 	if waste > 0.0:
 		text += ", waste %d%%" % roundi(100.0 * waste / total)
+	if vent > 0.0:
+		text += ", vents %d%%" % roundi(100.0 * vent / total)
 	return text
 
 
@@ -602,8 +663,26 @@ func _shape_words(info: Dictionary) -> String:
 	return "%s, %.1f times as long as wide" % [length, 1.0 + 2.0 * e]
 
 
+## The brain in words, with each hidden neuron's time constant and how it is
+## firing right now (-1 .. +1), drawn as a small bar.
+func _brain_words(info: Dictionary) -> String:
+	if info["brain_neurons"] < 0:
+		return "No brain"
+	var n: int = info["brain_neurons"]
+	var text := "Brain: %d hidden neuron%s, %d links" % [n, "" if n == 1 else "s", info["brain_links"]]
+	var taus: PackedFloat32Array = info["brain_taus"]
+	var firing: PackedFloat32Array = info["brain_firing"]
+	for k in taus.size():
+		var f := firing[k]
+		var bar := "▮".repeat(roundi(absf(f) * 5.0))
+		text += "\n  neuron %d: τ %s ticks   %s%s" % [k + 1, _commas(roundi(taus[k])), "+" if f >= 0.0 else "−", bar]
+	return text
+
+
 func _show_creature(info: Dictionary) -> void:
 	inspected_at = Vector2(info["x"], info["z"])
+	inspected_species = info["species_id"]
+	_update_follow_button(info["species_followed"], info["species"])
 	var parts: PackedStringArray = info["parts"]
 	var senses := "blind" if info["sense_cells"] == 0 else "senses %d cells" % info["sense_cells"]
 	inspector_label.text = "\n".join([
@@ -612,18 +691,21 @@ func _show_creature(info: Dictionary) -> void:
 		"Age %d ticks" % info["age"],
 		"Energy %.0f of %.0f  (divides at %.0f)" % [info["energy"], info["energy_capacity"], info["repro_threshold"]],
 		"Eats: " + _diet(info),
+		"Enzymes: %s" % (", ".join(info["enzymes"]) if info["enzymes"].size() > 0 else "none"),
+		"Holds %s   body of %s" % [info["store_chemicals"] if info["store_chemicals"] != "" else "nothing", info["body_chemicals"]],
 		"Radius %.2f   mass %.2f   %s" % [info["radius"], info["mass"], _shape_words(info)],
 		"Upkeep %.2f / tick   speed %.2f" % [info["upkeep"], info["max_speed"]],
-		"Young land touching it" if info["throw_range"] < 0.05 else "Flings its young up to %.1f cells" % info["throw_range"],
+		("Young land touching it" if info["throw_range"] < 0.05 else "Flings its young up to %.1f cells" % info["throw_range"]) + ", born at %d%% of its mass" % roundi(100.0 * info["birth_size"]),
+		"Fully grown" if info["grown"] >= 1.0 else "Still growing: %d%% of its adult mass, can't breed yet" % roundi(100.0 * info["grown"]),
 		"Pull %.2f   membrane %.2f   %s" % [info["absorb"], info["membrane"], senses],
-		"No brain" if info["brain_neurons"] < 0 else "Brain: %d hidden neurons, %d links" % [info["brain_neurons"], info["brain_links"]],
+		_brain_words(info),
 		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
-		"Can't eat waste" if info["detox"] <= 0.0 else "Eats waste (detox %.2f)" % info["detox"],
+		("Can't eat waste" if info["detox"] <= 0.0 else "Eats waste (detox %.2f)" % info["detox"]) + ("   can't feed at vents" if info["chemo"] <= 0.0 else "   feeds at vents (chemo %.2f)" % info["chemo"]),
 		"Copied with %s the usual mistakes   %s" % [_rate_words(info["mutability"]), "no repair" if info["repair"] <= 0.0 else "repairs itself: ages %.1fx slower" % (1.0 + 2.0 * info["repair"])],
 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
 		"Body %.1f °C   comfort %.0f ± %.0f °C" % [info["body_temperature"], info["thermal_optimum"], info["thermal_tolerance"]],
-		"Here: light %.2f, %.1f °C, soil %.1f, waste %.1f" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"], info["cell_waste"]],
+		"Here: light %.2f, %.1f °C, soil %.1f, waste %.1f%s" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"], info["cell_waste"], "" if info["cell_vent"] <= 0.0 else ", vent %.2f" % info["cell_vent"]],
 		"Parts: " + ("\n  ".join(parts) if parts.size() > 0 else "none"),
 	])
 
@@ -666,6 +748,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_5: _set_speed(4)
 			KEY_TAB: _set_overlay(overlay + 1)
 			KEY_T: _toggle_tree()
+			KEY_F: _toggle_follow()
 			KEY_C: (find_child("SpeciesCheck", true, false) as CheckBox).button_pressed = not by_species
 			KEY_MINUS: _zoom(-1, cam_target)
 			KEY_EQUAL: _zoom(1, cam_target)
@@ -744,6 +827,8 @@ func _process(delta: float) -> void:
 		if not info.is_empty():
 			inspected_id = info["id"]
 			_show_creature(info)
+			if start_follow:
+				_toggle_follow()
 
 	if shot_path != "" and frame >= shot_frames:
 		await RenderingServer.frame_post_draw
@@ -808,10 +893,10 @@ func _clock() -> String:
 
 func _update_ui() -> void:
 	var census: Dictionary = world.get_census()
-	stats_label.text = "%sTick %s\nPopulation %s\nSun-fed %s   Hunters %s   Scavengers %s\nCleaners %s   Mixed diet %s   Able to move %s\n%d ticks/s   %.2f ms/tick   %d fps\nSun %.2fx    Climate %+.1f °C" % [
+	stats_label.text = "%sTick %s\nPopulation %s\nSun-fed %s   Hunters %s   Scavengers %s\nCleaners %s   Vent-fed %s   Mixed diet %s   Able to move %s\n%d ticks/s   %.2f ms/tick   %d fps\nSun %.2fx    Climate %+.1f °C" % [
 		_clock(), _commas(world.get_tick()), _commas(world.get_population()),
 		_commas(census.get("producers", 0)), _commas(census.get("hunters", 0)), _commas(census.get("scavengers", 0)),
-		_commas(census.get("cleaners", 0)), _commas(census.get("mixed", 0)), _commas(census.get("movers", 0)),
+		_commas(census.get("cleaners", 0)), _commas(census.get("chemotrophs", 0)), _commas(census.get("mixed", 0)), _commas(census.get("movers", 0)),
 		ticks_per_second, world.get_tick_ms(), Engine.get_frames_per_second(),
 		world.get_sun_scale(), world.get_climate_offset()]
 
@@ -819,6 +904,12 @@ func _update_ui() -> void:
 		var lines: PackedStringArray = ["Species %d  (%d with 10 or more)" % [world.get_species_count(1), world.get_species_count(10)]]
 		for s: Dictionary in world.get_top_species(6):
 			lines.append("[color=#%s]██[/color] %s  %s" % [_species_color(s["hue"]).to_html(false), s["name"], _commas(s["population"])])
+		var followed: Array = world.get_followed()
+		if not followed.is_empty():
+			lines.append("[color=#%s]Following[/color]" % ALERT_COLOR)
+			for s: Dictionary in followed:
+				lines.append("[color=#%s]██[/color] %s  %s" % [_species_color(s["hue"]).to_html(false), s["name"],
+					_commas(s["population"]) if s["alive"] else "extinct"])
 		species_box.text = "\n".join(lines)
 
 	if frame % 30 == 2:
@@ -829,13 +920,21 @@ func _update_ui() -> void:
 		for line in world.get_chronicle(chronicle_seen):
 			chronicle_box.append_text(line + "\n")
 		chronicle_seen = size
+	# Alerts about followed species, in their own colour.
+	var alert_count := world.get_alerts_size()
+	if alert_count > alerts_seen:
+		for line in world.get_alerts(alerts_seen):
+			chronicle_box.append_text("[color=#%s]%s[/color]\n" % [ALERT_COLOR, line])
+		alerts_seen = alert_count
 
 	# Follow the picked creature as it moves; say so when it dies.
 	if inspected_id >= 0 and frame % 6 == 0:
 		var info: Dictionary = world.inspect_id(inspected_id)
 		if info.is_empty():
 			inspected_id = -1
+			inspected_species = -1
 			inspector_label.text = "It died."
+			_update_follow_button(false, "")
 		else:
 			_show_creature(info)
 

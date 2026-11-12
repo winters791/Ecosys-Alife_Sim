@@ -29,9 +29,12 @@ void usage() {
         "  --day N          ticks per day, 0 = no night     (default 600)\n"
         "  --day-swing F    °C between warm afternoon and cold night (default 10)\n"
         "  --windfall F     food dropped per cell per tick, 0 = none (default 0.001)\n"
-        "  --nutrients F    mean free matter per cell     (default 0.8)\n"
+        "  --events F       the world acts on its own: storms, eruptions, meteors,\n"
+        "                   climate drift; 1 = one every ~5,000 ticks (default 0)\n"
+        "  --nutrients F    mean free matter per cell     (default 6)\n"
         "  --interval N     ticks between metrics rows    (default 100)\n"
         "  --script FILE    god-power script (format: core/powers.hpp)\n"
+        "  --follow NAME    follow a species by name (from when it appears); alerts.txt\n"
         "  --out DIR        output directory              (default out)\n"
         "  --no-snapshot    skip end-of-run snapshot files\n"
         "  --quiet          no progress lines");
@@ -44,7 +47,7 @@ bool arg_is(const char* a, const char* name) { return std::strcmp(a, name) == 0;
 int main(int argc, char** argv) {
     luca::SimConfig cfg;
     long long ticks = 20000;
-    std::string out_dir = "out", script_path;
+    std::string out_dir = "out", script_path, follow_name;
     bool snapshot = true, quiet = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -61,10 +64,12 @@ int main(int argc, char** argv) {
         else if (arg_is(a, "--day"))         cfg.day_length = std::atoi(next());
         else if (arg_is(a, "--day-swing"))   cfg.temp_day_swing = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--windfall"))    cfg.windfall_rate = static_cast<float>(std::atof(next()));
+        else if (arg_is(a, "--events"))      cfg.event_rate = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--nutrients"))   cfg.nutrient_mean = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--interval"))    cfg.metrics_interval = std::atoi(next());
         else if (arg_is(a, "--out"))         out_dir = next();
         else if (arg_is(a, "--script"))      script_path = next();
+        else if (arg_is(a, "--follow"))      follow_name = next();
         else if (arg_is(a, "--no-snapshot")) snapshot = false;
         else if (arg_is(a, "--quiet"))       quiet = true;
         else if (arg_is(a, "--light")) {
@@ -98,7 +103,19 @@ int main(int argc, char** argv) {
         }
         for (const luca::PowerCommand& cmd : commands) sim.cast(cmd);
     }
-    std::size_t chronicle_shown = 0;
+    std::size_t chronicle_shown = 0, alerts_shown = 0, species_seen = 0;
+    // Follow a species by name as soon as one with that name exists.
+    auto look_for_followed = [&] {
+        if (follow_name.empty()) return;
+        const auto& all = sim.species().all();
+        for (; species_seen < all.size(); ++species_seen)
+            if (all[species_seen].name == follow_name) {
+                sim.follow(all[species_seen].id);
+                follow_name.clear();
+                return;
+            }
+    };
+    look_for_followed();
 
     luca::MetricsWriter metrics;
     if (!metrics.open(metrics_path)) {
@@ -112,12 +129,16 @@ int main(int argc, char** argv) {
 
     for (long long t = 0; t < ticks; ++t) {
         sim.step();
+        look_for_followed();
         interval.add(sim.last_stats());
         total_ms += sim.last_stats().tick_ms;
 
         if (!quiet)
             for (const auto& entries = sim.chronicle().entries(); chronicle_shown < entries.size(); ++chronicle_shown)
                 std::printf("  ~ %s\n", luca::format_entry(entries[chronicle_shown]).c_str());
+        if (!quiet)
+            for (const auto& entries = sim.alerts().entries(); alerts_shown < entries.size(); ++alerts_shown)
+                std::printf("  ! %s\n", luca::format_entry(entries[alerts_shown]).c_str());
 
         const bool last = (t + 1 == ticks);
         if ((t + 1) % cfg.metrics_interval == 0 || last) {
@@ -147,6 +168,10 @@ int main(int argc, char** argv) {
     {
         std::ofstream f(out_dir + "/chronicle.txt");
         for (const auto& e : sim.chronicle().entries()) f << luca::format_entry(e) << '\n';
+        if (!sim.followed().empty()) {
+            std::ofstream a(out_dir + "/alerts.txt");
+            for (const auto& e : sim.alerts().entries()) a << luca::format_entry(e) << '\n';
+        }
         // Everything that was cast, replayable with --script.
         std::ofstream p(out_dir + "/powers.txt");
         luca::write_power_script(p, sim.powers().log());
