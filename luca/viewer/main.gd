@@ -788,7 +788,7 @@ func _show_creature(info: Dictionary) -> void:
 		_brain_words(info),
 		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
-		"Burns %s" % info["burns"] + ("   can't feed at vents" if info["chemo"] <= 0.0 else "   feeds at vents (chemo %.2f)" % info["chemo"]),
+		"Burns %s" % info["burns"] + ("   can live on what vents make" if info["burns_vent"] else "   can't feed at vents"),
 		"Copied with %s the usual mistakes   %s" % [_rate_words(info["mutability"]), "no repair" if info["repair"] <= 0.0 else "repairs itself: ages %.1fx slower" % (1.0 + 2.0 * info["repair"])],
 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
 		"Body %.1f °C   comfort %.0f ± %.0f °C" % [info["body_temperature"], info["thermal_optimum"], info["thermal_tolerance"]],

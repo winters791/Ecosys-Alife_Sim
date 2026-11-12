@@ -107,21 +107,32 @@ float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, f
 // that ends at A gives the A to the cell's soil (`soil_a`); one that starts
 // from A takes it from there, and only while the store has room.
 
+// A two-input enzyme (stage 4) needs both its inputs, so it runs as far as
+// the scarcer allows, and one that leaves the store fuller than it found it
+// (A in from the soil) only as far as there is room.
+//
+// `two`, if given, gains the units turned over by two-input enzymes (observation).
 // Releases up to `want` energy from the store. Returns what it released:
 // less if the store or its enzymes can't give more.
-float burn(const Phenotype& p, Mix& pool, float& soil_a, float want);
+float burn(const Phenotype& p, Mix& pool, float& soil_a, float want, float* two = nullptr);
 // The most `burn` could release from this store this tick.
-float power(const Phenotype& p, const Mix& pool);
+float power(const Phenotype& p, const Mix& pool, float soil_a);
 // Stores up to `energy` in the store. Returns what it stored: less if there
 // is no A to hand, no room, or no enzyme to do it.
-float charge(const Phenotype& p, Mix& pool, float& soil_a, float energy);
+float charge(const Phenotype& p, Mix& pool, float& soil_a, float energy, float* two = nullptr);
+// Neutral exchanges (stage 4): each enzyme in Phenotype::neutral runs once a
+// tick at its rate, as far as its inputs and room allow, turning chemicals
+// the body can't burn into ones it can. Releases and costs nothing. Returns
+// the units turned over.
+float convert(const Phenotype& p, Mix& pool, float& soil_a);
 
 // Energy per tick this creature tries to pull out of dead matter in its cell.
 float corpse_demand(const Phenotype& p);
 
 // Fraction of pulled energy that arrives in a plain body; the rest is lost as
 // heat. This is why every step up a food chain supports fewer creatures. The
-// digestion gene raises it for its owner (Phenotype::efficiency), at a price.
+// same for every body since chemistry stage 3 (the digestion gene is gone);
+// since stage 2 the rest spills into the cell rather than burning.
 constexpr float TRANSFER_EFFICIENCY = 0.7f;
 
 // --- Loose chemicals: chemistry stage 2 (2026-11-12) -----------------------------
@@ -140,12 +151,13 @@ float uptake_rate(const Phenotype& p);
 // Energy a body loses per tick to `foul_mass` units of loose chemicals it
 // can't burn, in its cell.
 float fouling_cost(const Phenotype& p, float foul_mass);
-// --- Vents (2026-11-12) -------------------------------------------------------
-// A vent gives its cell a steady flow of energy, day and night (World::vent_energy).
-// Only bodies with the chemo gene take it up; they share the cell's flow like
-// the dead and keep all of it (it is a second sun, not a meal). What nobody
-// takes is lost. Booked under energy_in.
-float vent_demand(const Phenotype& p);
+// --- Vents (2026-11-12; a chemical since chemistry stage 3) ------------------
+// Each tick a vent brings up VENT_CHEM from below, loose in its cell,
+// World::vent_energy worth of it. Energy and matter are both new (energy_in
+// and in_vent; TickStats::matter_in). There is no gene for it: bodies that can burn VENT_CHEM take it
+// up through their skin like any loose chemical, and bodies that can't are
+// fouled by it. C, not D, so living on a vent needs an enzyme a plant lacks.
+constexpr int VENT_CHEM = CHEM_C;
 // Each field update (8 ticks), this fraction of a cell's loose chemicals moves
 // to its four neighbours (a quarter each), and this fraction breaks down to A.
 constexpr float WASTE_SPREAD = 0.2f;

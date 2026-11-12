@@ -580,13 +580,12 @@ void test_feeding_genes_and_kin_sense() {
     CHECK(biter.upkeep > plain.upkeep);
     Genome idle = make_luca();
     idle.bite = 1.0f;
-    idle.digestion = 1.0f;
-    CHECK(compile_phenotype(idle).upkeep > prey.upkeep + 0.1f);   // pure cost to a plant
+    CHECK(compile_phenotype(idle).upkeep > prey.upkeep + 0.05f);   // pure cost to a plant
 
-    // Digestion: keeps more of a meal. Measured from the books of a real meal.
+    // Every eater keeps the same share of a meal (chemistry stage 3: no
+    // digestion gene). Measured from the books of a real meal: the rest spills.
     Genome gut_g = with_part(PartType::Absorber, 1.5f);
-    gut_g.digestion = 1.0f;
-    CHECK(std::abs(compile_phenotype(gut_g).efficiency - 0.95f) < 1e-5f);
+    CHECK(std::abs(compile_phenotype(gut_g).efficiency - TRANSFER_EFFICIENCY) < 1e-6f);
     CHECK(std::abs(plain.efficiency - TRANSFER_EFFICIENCY) < 1e-6f);
     SimConfig cfg = small_config();
     cfg.nutrient_mean = 0.0f;   // nobody breeds
@@ -600,7 +599,7 @@ void test_feeding_genes_and_kin_sense() {
             eaten += sim.last_stats().eaten_living;
             lost += sim.last_stats().excreted;
         }
-        CHECK(eaten > 0.0 && std::abs(lost / (eaten + lost) - 0.05) < 1e-3);
+        CHECK(eaten > 0.0 && std::abs(lost / (eaten + lost) - (1.0 - TRANSFER_EFFICIENCY)) < 1e-3);
         CHECK(run_audited(sim, 500) < 1e-4);
     }
 
@@ -1685,31 +1684,63 @@ void test_vents() {
     CHECK(std::abs(w.vent_energy(cell) - cfg.vent_power) < 1e-4f);
     CHECK(std::abs(w.mean_temperature(cell) - cold - cfg.vent_heat) < 1e-3f);   // vents are warm
 
-    // Phenotype: chemosynthesis costs upkeep whether or not there is a vent.
-    Genome chemo_g = make_luca();
-    chemo_g.chemo = 1.0f;
-    CHECK(std::abs(compile_phenotype(chemo_g).upkeep - compile_phenotype(make_luca()).upkeep - 0.1f) < 1e-4f);
+    // A vent brings up loose C from below (chemistry stage 3): no gene, no
+    // bodies needed. Energy and matter are both new; the soil is untouched.
+    {
+        const float soil_before = sim.soil().nutrient[cell], c_before = sim.soil().dissolved[cell].v[VENT_CHEM];
+        const double matter = sim.total_matter(), brought = sim.matter_brought_up();
+        sim.step();
+        const float made = cfg.vent_power / LEVEL[VENT_CHEM];
+        CHECK(std::abs(sim.soil().dissolved[cell].v[VENT_CHEM] - c_before - made) < 1e-5f);
+        CHECK(sim.soil().nutrient[cell] == soil_before);
+        CHECK(std::abs(sim.soil().vent_made[cell] - sim.soil().dissolved[cell].v[VENT_CHEM]) < 1e-6f);
+        const double in = sim.last_stats().matter_in;
+        CHECK(in >= made * 0.999 && std::abs(sim.matter_brought_up() - brought - in) < 1e-9);
+        CHECK(std::abs(sim.total_matter() - matter - in) < 1e-5 * matter);   // the matter books: up by what came up
+        CHECK(std::abs(sim.last_stats().in_vent - in * LEVEL[VENT_CHEM]) < 1e-3);
+    }
 
-    // Two chemo bodies share the vent; a plain LUCA beside them gets nothing.
-    const uint64_t a = sim.add_creature(20.3f, 20.4f, 300.0f, chemo_g);
-    const uint64_t b = sim.add_creature(20.7f, 20.6f, 300.0f, chemo_g);
+    // Two bodies that can burn C live on it; a plain LUCA beside them can't,
+    // and is fouled by it instead; one far from the vent gets nothing.
+    Genome eater_g = make_luca();
+    eater_g.enzymes.push_back(Enzyme{CHEM_A, CHEM_C, 0.015f});
+    const uint64_t a = sim.add_creature(20.3f, 20.4f, 300.0f, eater_g);
+    const uint64_t b = sim.add_creature(20.7f, 20.6f, 300.0f, eater_g);
     const uint64_t plain = sim.add_creature(20.5f, 20.2f, 300.0f, make_luca());
-    const uint64_t far = sim.add_creature(40.5f, 40.5f, 300.0f, chemo_g);   // no vent here
-    double in_vent = 0.0;
+    const uint64_t far = sim.add_creature(40.5f, 40.5f, 300.0f, eater_g);   // no vent here
+    double in_vent = 0.0, fouled = 0.0;
     for (int k = 0; k < 50; ++k) {
         sim.step();
         in_vent += sim.last_stats().in_vent;
-        CHECK(sim.last_stats().in_vent <= w.vent_energy(cell) * 1.0001);    // never more than the vent gives
+        fouled += sim.last_stats().out_fouling;
     }
     const Creatures& c = sim.creatures();
     const std::size_t ia = find(sim, a), ib = find(sim, b), ip = find(sim, plain), iff = find(sim, far);
     CHECK(ia < c.size() && ib < c.size() && ip < c.size() && iff < c.size());
     if (failures) return;
-    CHECK(c.fed_vent[ia] > 20.0f && std::abs(c.fed_vent[ia] - c.fed_vent[ib]) < 1e-3f);   // shared alike
-    CHECK(std::abs(in_vent - 50.0 * cfg.vent_power) < 0.5);                               // the whole flow, between them
+    CHECK(c.fed_vent[ia] > 5.0f && std::abs(c.fed_vent[ia] - c.fed_vent[ib]) < 1e-3f * c.fed_vent[ia]);   // shared alike
+    CHECK(c.fed_vent[ia] + c.fed_vent[ib] < in_vent);                                   // never more than the vents made
+    CHECK(c.pool[ia].v[CHEM_C] > 0.0f);
     CHECK(c.fed_vent[ip] == 0.0f && c.fed_vent[iff] == 0.0f);
+    CHECK(fouled > 0.0);
     CHECK(c.energy[ia] > c.energy[ip]);
-    CHECK(run_audited(sim, 500) < 1e-4);
+    {
+        const double kept = sim.total_matter() - sim.matter_brought_up();
+        CHECK(run_audited(sim, 500) < 1e-4);
+        CHECK(std::abs(sim.total_matter() - sim.matter_brought_up() - kept) < 1e-5 * kept);
+    }
+
+    // A vent works on bare ground: what it brings up needs nothing from the soil.
+    {
+        SimConfig bare = cfg;
+        bare.nutrient_mean = 0.0f;
+        Simulation dead(bare);
+        dead.cast(open);
+        dead.flush_powers();
+        dead.step();
+        CHECK(dead.world().any_vents() && dead.last_stats().in_vent >= cfg.vent_power * 0.999);
+        CHECK(std::abs(dead.total_matter() - dead.matter_brought_up()) < 1e-6);
+    }
 
     // Closing the vent takes it away.
     PowerCommand close = open;
@@ -1726,6 +1757,129 @@ void test_vents() {
     std::ostringstream out;
     write_power_script(out, cmds);
     CHECK(out.str().find("100 vent 10 12 3 1.5 200") != std::string::npos);
+}
+
+// Chemistry stage 4: two-input reactions, X + Y <-> Z + W, one unit of each.
+// They run as far as the scarcer input allows; a neutral one (equal levels on
+// both sides) turns what the body can't burn into what it can, at no cost.
+void test_two_input_reactions() {
+    using namespace luca;
+    auto two = [](uint8_t x, uint8_t x2, uint8_t y, uint8_t y2, float rate) {
+        Enzyme e{x, y, rate};
+        e.x2 = x2;
+        e.y2 = y2;
+        return e;
+    };
+
+    // One way to write each reaction: sides sorted, the poorer side first.
+    {
+        const Enzyme e = canonical_enzyme(two(CHEM_B, CHEM_B, CHEM_D, CHEM_A, 0.01f));   // D + A (222) is richer than B + B (148)
+        CHECK(e.x == CHEM_B && e.x2 == CHEM_B && e.y == CHEM_A && e.y2 == CHEM_D);
+        const Enzyme n = canonical_enzyme(two(CHEM_D, CHEM_A, CHEM_C, CHEM_B, 0.01f));   // neutral: 222 both sides
+        CHECK(n.x == CHEM_A && n.x2 == CHEM_D && n.y == CHEM_B && n.y2 == CHEM_C);
+        const Enzyme same = canonical_enzyme(two(CHEM_B, CHEM_C, CHEM_C, CHEM_B, 0.01f));  // does nothing: mended
+        CHECK(!(same.x == same.y && same.x2 == same.y2));
+        Enzyme half = two(CHEM_A, CHEM_B, CHEM_D, NO_CHEM, 0.01f);                         // one slot only: one-to-one
+        half = canonical_enzyme(half);
+        CHECK(!half.two() && half.x == CHEM_A && half.y == CHEM_D);
+        CHECK(enzyme_words(e) == "B+B-A+D" && enzyme_words(make_luca().enzymes[0]) == "A-D");
+    }
+
+    // Downhill D + A -> B + B: needs A from the soil as well as D, releases 74
+    // a unit, and leaves the store a unit fuller (room permitting).
+    {
+        Genome g = make_luca();
+        g.enzymes = {two(CHEM_D, CHEM_A, CHEM_B, CHEM_B, 0.01f)};
+        const Phenotype p = compile_phenotype(g);
+        CHECK(p.can_burn(CHEM_D) && !p.can_burn(CHEM_B) && p.any_two && p.neutral == 0);
+        Mix pool = pure(CHEM_D, 1.0f);
+        float soil = 0.004f, flow = 0.0f;
+        const float got = burn(p, pool, soil, 100.0f, &flow);
+        CHECK(std::abs(got - 0.004f * 74.0f) < 1e-5f);            // as far as the soil's A goes
+        CHECK(std::abs(pool.v[CHEM_B] - 0.008f) < 1e-6f && std::abs(pool.v[CHEM_D] - 0.996f) < 1e-6f && soil == 0.0f);
+        CHECK(std::abs(flow - 0.004f) < 1e-6f);
+        CHECK(std::abs(power(p, pure(CHEM_D, 1.0f), 1.0f) - 0.01f * 74.0f) < 1e-5f);   // capped by its rate
+        CHECK(power(p, pure(CHEM_D, 1.0f), 0.0f) == 0.0f);                              // and by the soil
+    }
+
+    // Uphill A + A -> B + B on light: takes two A a unit from the soil.
+    {
+        Genome g = make_luca();
+        g.enzymes = {two(CHEM_A, CHEM_A, CHEM_B, CHEM_B, 0.01f)};
+        const Phenotype p = compile_phenotype(g);
+        Mix pool;
+        float soil = 1.0f;
+        const float stored = charge(p, pool, soil, 0.74f);
+        CHECK(std::abs(stored - 0.74f) < 1e-5f && std::abs(pool.v[CHEM_B] - 0.01f) < 1e-6f && std::abs(soil - 0.99f) < 1e-6f);
+    }
+
+    // A neutral exchange B + C -> A + D on a body that burns D: B and C now
+    // count as food (kept, taken up), and turn into D at no cost.
+    Genome user_g = make_luca();
+    user_g.enzymes.push_back(two(CHEM_B, CHEM_C, CHEM_A, CHEM_D, 0.01f));
+    const Phenotype user = compile_phenotype(user_g);
+    CHECK(user.neutral != 0 && user.can_burn(CHEM_B) && user.can_burn(CHEM_C) && user.can_burn(CHEM_D));
+    {
+        Mix pool = pure(CHEM_B, 0.003f);
+        pool.v[CHEM_C] = 0.5f;
+        float soil = 0.0f;
+        const float moved = convert(user, pool, soil);
+        CHECK(std::abs(moved - 0.003f) < 1e-6f);                                       // the scarcer input
+        CHECK(pool.v[CHEM_B] == 0.0f && std::abs(pool.v[CHEM_D] - 0.003f) < 1e-6f && std::abs(soil - 0.003f) < 1e-6f);
+    }
+    // One that would only turn food into food never runs: this body burns B
+    // and D already, so B + C <-> A + D has one burnable on each side.
+    {
+        Genome g = make_luca();
+        g.enzymes = {Enzyme{CHEM_A, CHEM_B, 0.01f}, Enzyme{CHEM_A, CHEM_D, 0.01f}, two(CHEM_B, CHEM_C, CHEM_A, CHEM_D, 0.01f)};
+        const Phenotype p = compile_phenotype(g);
+        CHECK(p.neutral == 0 && !p.can_burn(CHEM_C));
+        CHECK(p.upkeep > compile_phenotype(make_luca()).upkeep);   // and still costs upkeep
+    }
+
+    // Mutation: one-to-one enzymes gain a second pair, and every genome stays canonical.
+    {
+        Rng rng(5);
+        Genome g = make_luca();
+        bool gained = false;
+        for (int k = 0; k < 4000; ++k) {
+            g = mutate(g, rng);
+            for (const Enzyme& e : g.enzymes) {
+                gained = gained || e.two();
+                const Enzyme c = canonical_enzyme(e);
+                CHECK(c.x == e.x && c.y == e.y && c.x2 == e.x2 && c.y2 == e.y2);
+            }
+            if (failures) return;
+            if (g.enzymes.empty()) g = make_luca();
+        }
+        CHECK(gained);
+        Genome a = make_luca(), b = make_luca();
+        b.enzymes.push_back(two(CHEM_B, CHEM_C, CHEM_A, CHEM_D, 0.015f));
+        CHECK(genome_distance(a, b) > 0.5f);   // a new kind of reaction
+    }
+
+    // In a world: a body living on loose B and C beside a body that gives
+    // them off. Both books balance.
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;   // nobody breeds
+    cfg.light_mode = LightMode::Uniform;
+    Simulation sim(cfg);
+    Genome giver_g = make_luca();
+    giver_g.enzymes = {Enzyme{CHEM_B, CHEM_D, 0.01f}, Enzyme{CHEM_C, CHEM_D, 0.01f}};   // burns D to B and to C, gives both off
+    sim.add_creature(20.3f, 20.5f, 400.0f, giver_g);
+    const uint64_t uid = sim.add_creature(20.7f, 20.5f, 100.0f, user_g);
+    const double matter0 = sim.total_matter();
+    double neutral = 0.0;
+    for (int t = 0; t < 400; ++t) {
+        sim.step();
+        neutral += sim.last_stats().neutral_flow;
+    }
+    const std::size_t iu = find(sim, uid);
+    CHECK(iu < sim.creatures().size());
+    if (failures) return;
+    CHECK(neutral > 0.0 && sim.creatures().fed_waste[iu] > 0.0f);
+    CHECK(std::abs(sim.total_matter() - matter0) / matter0 < 1e-5);
+    CHECK(run_audited(sim, 500) < 1e-4);
 }
 
 int main() {
@@ -1761,6 +1915,7 @@ int main() {
     test_growing_up();
     test_vents();
     test_windfalls();
+    test_two_input_reactions();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;
 }

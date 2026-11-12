@@ -49,6 +49,9 @@ constexpr float P_ENZ_ADD    = 0.010f;
 constexpr float P_ENZ_DELETE = 0.010f;
 constexpr float P_ENZ_COPY   = 0.010f;
 constexpr float P_ENZ_SWAP   = 0.010f;
+// Stage 4: a one-to-one enzyme gains a second input and output (random
+// chemicals), or a two-input one loses them.
+constexpr float P_ENZ_PAIR   = 0.010f;
 constexpr float P_NEW_TRAIT = 0.10f;   // of the times a missing optional trait is touched, how often it appears
 constexpr float P_LOSE_BRAIN = 0.05f;  // a brain with nothing to drive withers
 
@@ -137,13 +140,11 @@ Genome mutate(const Genome& parent, Rng& rng) {
     if (chance(P_GENE)) g.offspring_share += rng.normal() * 0.03f;
     if (chance(P_GENE)) nudge_optional(g.seed_throw, 0.15f, rng);
     if (chance(P_GENE)) nudge_optional(g.bite, 0.10f, rng);
-    if (chance(P_GENE)) nudge_optional(g.digestion, 0.05f, rng);
     if (chance(P_GENE)) nudge_optional(g.dormancy, 0.08f, rng);
     if (chance(P_GENE)) g.elongation += rng.normal() * 0.06f;
     if (chance(P_GENE)) g.squareness += rng.normal() * 0.06f;
     if (chance(P_GENE)) g.mutability += rng.normal() * 0.15f;
     if (chance(P_GENE)) nudge_optional(g.repair, 0.08f, rng);
-    if (chance(P_GENE)) nudge_optional(g.chemo, 0.08f, rng);
     if (chance(P_GENE)) g.birth_size += rng.normal() * 0.05f;
     for (float& s : g.shape)
         if (chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
@@ -194,8 +195,16 @@ Genome mutate(const Genome& parent, Rng& rng) {
     }
     if (chance(P_ENZ_SWAP) && !g.enzymes.empty()) {
         Enzyme& e = g.enzymes[rng.below(static_cast<uint32_t>(g.enzymes.size()))];
-        uint8_t& end = rng.uniform() < 0.5f ? e.x : e.y;
-        end = static_cast<uint8_t>(rng.below(NCHEM));   // clamp_genome mends x == y
+        uint8_t* ends[4] = {&e.x, &e.y, &e.x2, &e.y2};
+        *ends[rng.below(e.two() ? 4u : 2u)] = static_cast<uint8_t>(rng.below(NCHEM));   // clamp_genome mends a reaction that does nothing
+    }
+    if (chance(P_ENZ_PAIR) && !g.enzymes.empty()) {
+        Enzyme& e = g.enzymes[rng.below(static_cast<uint32_t>(g.enzymes.size()))];
+        if (e.two()) e.x2 = e.y2 = NO_CHEM;
+        else {
+            e.x2 = static_cast<uint8_t>(rng.below(NCHEM));
+            e.y2 = static_cast<uint8_t>(rng.below(NCHEM));
+        }
     }
     if (chance(P_ENZ_ADD) && g.enzymes.size() < static_cast<std::size_t>(limits::MAX_ENZYMES)) {
         Enzyme e;

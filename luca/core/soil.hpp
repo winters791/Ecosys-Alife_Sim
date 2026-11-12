@@ -13,9 +13,14 @@
 //                  that can burn them, foul to the rest.
 //   waste          what the loose chemicals are worth (kept in step with
 //                  `dissolved` by Simulation::step; the viewer and metrics read it)
+//   vent_made      observation only: how much of the cell's loose VENT_CHEM
+//                  (energy.hpp) a vent made, as against spills and leavings.
+//                  It drifts and breaks down with the rest, and uptake takes it
+//                  in proportion, so food from a vent can be told apart.
 //
 // Matter is conserved: nutrient + the mass of every corpse + loose chemicals +
-// every living body and store is the same number for the whole run.
+// every living body and store changes only by what vents bring up from below
+// (Simulation::matter_brought_up).
 
 #include <vector>
 
@@ -29,6 +34,7 @@ struct Soil {
     std::vector<float> corpse_energy;
     std::vector<Mix>   dissolved;
     std::vector<float> waste;
+    std::vector<float> vent_made;
 
     void resize(std::size_t cells) {
         nutrient.assign(cells, 0.0f);
@@ -36,6 +42,7 @@ struct Soil {
         corpse_energy.assign(cells, 0.0f);
         dissolved.assign(cells, Mix{});
         waste.assign(cells, 0.0f);
+        vent_made.assign(cells, 0.0f);
     }
 
     void add_corpse(std::size_t cell, const Mix& m) {

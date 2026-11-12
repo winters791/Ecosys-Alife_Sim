@@ -4,6 +4,7 @@
 // file exports. Everything else is recomputed from it.
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "chem.hpp"
@@ -28,16 +29,29 @@ const char* part_name(PartType t);
 // other part a stalk would do nothing, so the genome never holds one.
 inline bool can_have_stalk(PartType t) { return t == PartType::Absorber || t == PartType::Photo; }
 
-// An enzyme (chemistry layer, design doc 2.1.1): it turns chemical x into y
-// or y into x, whichever way the body needs, at most `rate` units of mass a
-// tick each way. Downhill it releases the difference in levels (chem.hpp) for
-// the body to spend; uphill it stores light (or a vent's flow) in the richer
-// chemical. A reaction from or to A draws on or gives to the cell's soil.
-// Every enzyme costs upkeep in proportion to its rate (phenotype.cpp).
+// An enzyme (chemistry layer, design doc 2.1.1): a reversible reaction
+// between a poorer side and a richer side, run at most `rate` units a tick
+// each way. One-to-one, x <-> y; or two-input (chemistry stage 4),
+// x + x2 <-> y + y2, one unit of each, so matter balances. Downhill (richer to
+// poorer) it releases the difference in levels (chem.hpp) for the body to
+// spend; uphill it stores light in the richer side. A reaction that releases
+// nothing either way (equal levels, e.g. B + C <-> A + D) is neutral: it runs
+// on its own each tick, turning chemicals the body can't burn into ones it
+// can (energy.hpp, convert). A from or to A draws on or gives to the cell's
+// soil. Every enzyme costs upkeep in proportion to its rate (phenotype.cpp).
+constexpr uint8_t NO_CHEM = 0xFF;   // the second slot of a one-to-one enzyme
 struct Enzyme {
-    uint8_t x = CHEM_A, y = CHEM_D;   // kept with x below y by clamp_genome
+    uint8_t x = CHEM_A, y = CHEM_D;   // the poorer and richer side (canonical_enzyme)
     float   rate = 0.0f;
+    uint8_t x2 = NO_CHEM, y2 = NO_CHEM;   // second input and output; NO_CHEM on both for one-to-one
+    bool two() const { return x2 != NO_CHEM; }
 };
+// The one way an enzyme is written: chemicals in range; both second slots set
+// or neither; each side sorted; the poorer side first (by level; for a
+// neutral reaction, the side that sorts first); the two sides never the same.
+Enzyme canonical_enzyme(Enzyme e);
+// E.g. "A-D" or "A+D-B+C" (poorer side first), for files and the viewer.
+std::string enzyme_words(const Enzyme& e);
 
 struct Part {
     PartType type = PartType::Photo;
@@ -149,7 +163,6 @@ struct Genome {
     float repro_threshold   = 10.0f;  // energy needed before dividing
     float offspring_share   = 0.5f;   // fraction of energy handed to the child
     float bite              = 0.0f;   // drains the living faster: pull is multiplied by 1 + bite
-    float digestion         = 0.0f;   // 0..1: keeps more of what it eats (70% up to 95%)
     float dormancy          = 0.0f;   // 0..1: how deeply it sleeps through dark and cold
     float seed_throw        = 0.0f;   // how far it can fling a child, in cells; 0 = the child lands touching it
     // Body outline (2026-11-11). A LUCA is round: both 0.
@@ -158,7 +171,6 @@ struct Genome {
     // Copying and upkeep of the body itself (2026-11-12).
     float mutability        = 0.0f;   // log2 of how sloppily it is copied: 0 = the usual rates, -3 = an eighth, +2 = four times
     float repair            = 0.0f;   // 0..1: energy spent repairing wear, so it ages more slowly
-    float chemo             = 0.0f;   // 0..1: chemosynthesis, living on the energy of a vent (2026-11-12)
     float birth_size        = 0.5f;   // fraction of adult mass a child is born at; it grows the rest (2026-11-12)
     std::vector<Part>  parts;
     std::vector<Enzyme> enzymes;   // its chemistry (see Enzyme)

@@ -66,7 +66,6 @@ Simulation::Simulation(const SimConfig& cfg)
     cell_demand_.assign(cells, 0.0f);
     cell_corpse_demand_.assign(cells, 0.0f);
     cell_uptake_demand_.assign(cells * NCHEM, 0.0f);
-    cell_vent_demand_.assign(cells, 0.0f);
     biomass_.assign(cells, 0.0f);
 
     // Starting soil: patches of rich ground and stretches of poor ground,
@@ -262,7 +261,7 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     // can't pay for this tick, on top of upkeep and heat, it doesn't take.
     // So a fast or climbing body needs enzymes with the rate to power it.
     const float step_cost = std::max(0.0f, movement_cost(p, dist, dh));
-    if (step_cost + cost_upkeep_[i] + cost_thermal_[i] > power(p, c_.pool[i])) return;
+    if (step_cost + cost_upkeep_[i] + cost_thermal_[i] > power(p, c_.pool[i], soil_.nutrient[cell])) return;
     new_x_[i] = nx;
     new_y_[i] = ny;
     new_hx_[i] = ux;
@@ -296,6 +295,7 @@ void Simulation::step() {
     powers_.update(tick_, world_, chronicle_);
     world_.set_time(tick_);
     drop_windfalls();
+    if (world_.any_vents()) run_vents();
 
     const std::size_t n = c_.size();
     cell_of_.resize(n);
@@ -312,8 +312,6 @@ void Simulation::step() {
     corpse_gain_.resize(n);
     uptake_want_.resize(n);
     uptake_gain_.resize(n);
-    vent_want_.resize(n);
-    vent_gain_.resize(n);
     drain_want_.assign(n, 0.0f);
     drained_.assign(n, 0.0f);
     intake_.assign(n, Mix{});
@@ -333,8 +331,6 @@ void Simulation::step() {
     std::fill(cell_demand_.begin(), cell_demand_.end(), 0.0f);
     std::fill(cell_corpse_demand_.begin(), cell_corpse_demand_.end(), 0.0f);
     std::fill(cell_uptake_demand_.begin(), cell_uptake_demand_.end(), 0.0f);
-    const bool vents = world_.any_vents();
-    if (vents) std::fill(cell_vent_demand_.begin(), cell_vent_demand_.end(), 0.0f);
     const bool dark = world_.daylight() <= 0.0f;
     for (std::size_t i = 0; i < n; ++i) {
         const Phenotype& p = c_.pheno[i];
@@ -350,8 +346,6 @@ void Simulation::step() {
         if (uptake_want_[i] > 0.0f)
             for (int ch = CHEM_B; ch < NCHEM; ++ch)
                 if (p.can_burn(ch)) cell_uptake_demand_[static_cast<std::size_t>(cell) * NCHEM + ch] += uptake_want_[i];
-        vent_want_[i] = vents && p.chemo > 0.0f ? std::max(0.0f, vent_demand(p)) * (1.0f - c_.sleep[i]) : 0.0f;
-        if (vent_want_[i] > 0.0f) cell_vent_demand_[cell] += vent_want_[i];
     }
 
     if (!dark) share_light_by_canopy();
@@ -427,12 +421,6 @@ void Simulation::step() {
         if (corpse_want_[i] > 0.0f) {
             const float have = soil_.corpse[cell].mass(), want = cell_corpse_demand_[cell];
             corpse_gain_[i] = corpse_want_[i] * (want > have ? have / want : 1.0f);
-        }
-        // A vent's flow is shared the same way.
-        vent_gain_[i] = 0.0f;
-        if (vent_want_[i] > 0.0f) {
-            const float have = world_.vent_energy(cell), want = cell_vent_demand_[cell];
-            vent_gain_[i] = vent_want_[i] * (want > have ? have / want : 1.0f);
         }
         // Loose chemicals: each body asks for a share of the stock; if the
         // shares come to more than all of it, they are scaled down.
@@ -536,34 +524,43 @@ void Simulation::step() {
         const float from_dead = corpse_gain_[i] > 0.0f ? take_in(soil_.take_corpse(cell, corpse_gain_[i])) : 0.0f;
 
         // Through its skin it takes up the loose chemicals it can burn, as far
-        // as its store has room.
-        float from_waste = 0.0f;
+        // as its store has room. What a vent made counts as food from the vent
+        // (in proportion to the vent's share of the cell's stock; observation only).
+        float from_waste = 0.0f, from_vent = 0.0f;
         const float asked = uptake_gain_[i].mass();
         if (asked > 0.0f) {
             const float k = std::min(1.0f, std::max(0.0f, p.pool_capacity - pool.mass()) / asked);
             for (int ch = CHEM_B; ch < NCHEM; ++ch) {
                 const float got = std::min(uptake_gain_[i].v[ch] * k, loose.v[ch]);
                 if (got <= 0.0f) continue;
+                float vented = 0.0f;
+                if (ch == VENT_CHEM && soil_.vent_made[cell] > 0.0f) {
+                    vented = got * std::min(1.0f, soil_.vent_made[cell] / loose.v[ch]);
+                    soil_.vent_made[cell] = std::max(0.0f, soil_.vent_made[cell] - vented);
+                }
                 loose.v[ch] -= got;
                 pool.v[ch] += got;
-                from_waste += got * LEVEL[ch];
+                from_waste += (got - vented) * LEVEL[ch];
+                from_vent += vented * LEVEL[ch];
             }
         }
 
-        // Light and a vent's flow come in as energy with no matter: the body
-        // keeps them by running its enzymes uphill, turning A from the soil
-        // into richer chemicals in its store (charge). What it can't keep is
-        // never taken in.
-        const float offered = gain_[i] + vent_gain_[i];
-        const float stored = offered > 0.0f ? charge(p, pool, soil_a, offered) : 0.0f;
-        const float kept = offered > 0.0f ? stored / offered : 0.0f;
-        const float from_light = gain_[i] * kept, from_vent = vent_gain_[i] * kept;
+        // Light comes in as energy with no matter: the body keeps it by
+        // running its enzymes uphill, turning A from the soil into richer
+        // chemicals in its store (charge). What it can't keep is never taken in.
+        float two = 0.0f;   // units turned over by two-input enzymes (observation)
+        const float from_light = gain_[i] > 0.0f ? charge(p, pool, soil_a, gain_[i], &two) : 0.0f;
+        // Neutral exchanges turn what it can't burn into what it can (stage 4).
+        if (p.neutral) {
+            const float moved = convert(p, pool, soil_a);
+            two += moved;
+            stats_.neutral_flow += moved;
+        }
 
-        stats_.energy_in += from_light + from_vent;
-        stats_.in_vent += from_vent;
+        stats_.energy_in += from_light;
         stats_.eaten_living += from_living;
         stats_.eaten_dead += from_dead;
-        stats_.eaten_waste += from_waste;
+        stats_.eaten_waste += from_waste + from_vent;
         c_.fed_light[i] += from_light;
         c_.fed_vent[i] += from_vent;
         c_.fed_waste[i] += from_waste;
@@ -579,7 +576,8 @@ void Simulation::step() {
         for (int ch = CHEM_B; ch < NCHEM; ++ch) foul_mass += p.can_burn(ch) ? 0.0f : loose.v[ch];
         const float foul = foul_mass > 0.0f ? std::max(0.0f, fouling_cost(p, foul_mass)) : 0.0f;
         const float want = poisoned_[i] + cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i] + foul;
-        const float paid = want > 0.0f ? burn(p, pool, soil_a, want) : 0.0f;
+        const float paid = want > 0.0f ? burn(p, pool, soil_a, want, &two) : 0.0f;
+        stats_.two_flow += two;
         if (want > 0.0f) {
             const float f = paid / want;  // pro-rata if it couldn't pay in full
             stats_.energy_out   += paid;
@@ -809,6 +807,28 @@ void Simulation::drop_windfalls() {
     }
 }
 
+// Vents (chemistry stage 3): each vent cell brings up VENT_CHEM from below,
+// loose in the cell, vent_energy worth of it a tick, day and night. Both the
+// energy and the matter are new (energy_in and in_vent; matter_in), so a vent
+// works on bare ground and never strips its own soil. Who eats it is decided
+// by enzymes alone: it is taken up like any loose chemical, and fouls
+// whatever can't burn it. What nobody eats breaks down to A where it drifts,
+// so the ground around a vent grows rich.
+void Simulation::run_vents() {
+    const auto& vent = world_.vents();
+    const float level = LEVEL[VENT_CHEM];
+    for (std::size_t c = 0; c < vent.size(); ++c) {
+        if (vent[c] <= 0.0f) continue;
+        const float made = world_.vent_energy(static_cast<int>(c)) / level;
+        soil_.dissolved[c].v[VENT_CHEM] += made;
+        soil_.vent_made[c] += made;
+        stats_.energy_in += made * level;
+        stats_.in_vent += made * level;
+        stats_.matter_in += made;
+    }
+    matter_brought_up_ += stats_.matter_in;
+}
+
 // Loose chemicals drift: each cell hands WASTE_SPREAD of them to its four
 // neighbours (a quarter each; what would fall off the edge stays put), then
 // WASTE_DECAY of what is left breaks down to A in the soil, its energy lost as
@@ -817,6 +837,7 @@ void Simulation::spread_dissolved() {
     const int n = world_.size();
     const std::size_t cells = soil_.dissolved.size();
     spread_.assign(cells, Mix{});
+    spread_vent_.assign(cells, 0.0f);
     for (int y = 0; y < n; ++y)
         for (int x = 0; x < n; ++x) {
             const int c = y * n + x;
@@ -829,16 +850,28 @@ void Simulation::spread_dissolved() {
                 stats_.energy_out += e;
                 soil_.nutrient[c] += mass;
                 m.clear();
+                soil_.vent_made[c] = 0.0f;
                 continue;
             }
             const Mix part = m.scaled(WASTE_SPREAD * 0.25f);
+            float& vented = soil_.vent_made[c];
+            const float vent_part = vented * (WASTE_SPREAD * 0.25f);
             const int nb[4] = {x > 0 ? c - 1 : -1, x + 1 < n ? c + 1 : -1, y > 0 ? c - n : -1, y + 1 < n ? c + n : -1};
             for (int k : nb)
-                if (k >= 0) { spread_[k].add(part); m.add(part, -1.0f); }
+                if (k >= 0) {
+                    spread_[k].add(part);
+                    m.add(part, -1.0f);
+                    spread_vent_[k] += vent_part;
+                    vented -= vent_part;
+                }
         }
     for (std::size_t c = 0; c < cells; ++c) {
         Mix& m = soil_.dissolved[c];
         m.add(spread_[c]);
+        // The vent's share drifts and breaks down with the rest, and never
+        // exceeds what is there.
+        float& vented = soil_.vent_made[c];
+        vented = std::min((vented + spread_vent_[c]) * (1.0f - WASTE_DECAY), m.v[VENT_CHEM] * (1.0f - WASTE_DECAY));
         const Mix gone = m.scaled(WASTE_DECAY);
         m.add(gone, -1.0f);
         const double e = gone.energy();
@@ -1186,7 +1219,7 @@ void Simulation::detect_events() {
     first(hunters_logged_, census_.hunters, "The first hunters: some creatures now live mostly by draining the living.");
     first(scavengers_logged_, census_.scavengers, "The first scavengers: some creatures now live mostly on the dead.");
     first(cleaners_logged_, census_.cleaners, "The first cleaners: some creatures now live mostly on what others give off.");
-    first(chemotrophs_logged_, census_.chemotrophs, "Life at the vents: some creatures now live mostly on the warmth of the deep.");
+    first(chemotrophs_logged_, census_.chemotrophs, "Life at the vents: some creatures now live mostly on what the vents make.");
 
     // First time the world holds 1,000 / 10,000 / 100,000 ... creatures.
     while (pop >= next_milestone_) {

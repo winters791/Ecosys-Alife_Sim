@@ -36,20 +36,29 @@ struct Phenotype {
     float toxicity   = 0.0f; // energy an eater loses per unit of energy it drains from this body
     float bite       = 1.0f; // multiplies its pull on living bodies (1 = plain)
     float efficiency = 0.0f; // fraction of what it pulls, from the living or the dead, that it keeps
-    float chemo      = 0.0f; // 0..1: how hard it takes up the energy of a vent (see energy.hpp)
 
     float energy_capacity = 0.0f;  // the most energy the body can hold (a store full of D)
     float pool_capacity   = 0.0f;  // the most chemical its store can hold, units of mass (energy_capacity / TOP_LEVEL)
 
-    // Chemistry (chem.hpp): its enzymes, each as the poorer and richer
-    // chemical and the most mass it can turn over a tick, each way.
+    // Chemistry (chem.hpp): its enzymes, each written the way it runs when
+    // burning: `in` (the richer side) to `out` (the poorer side), the second
+    // slot NO_CHEM for a one-to-one reaction (genome.hpp); `step` the energy
+    // released per unit (0 for a neutral one); `rate` the most units it can
+    // turn over a tick, each way. Charging runs them out -> in.
+    // A neutral enzyme (step 0) that runs is written from the side the body
+    // can't burn to the side it can, and its bit is set in `neutral`; one
+    // that would turn burnable into burnable never runs (energy.hpp, convert).
     uint8_t enzymes = 0;
-    uint8_t enz_lo[limits::MAX_ENZYMES] = {};
-    uint8_t enz_hi[limits::MAX_ENZYMES] = {};
+    uint8_t enz_in[limits::MAX_ENZYMES][2] = {};
+    uint8_t enz_out[limits::MAX_ENZYMES][2] = {};
+    float   enz_step[limits::MAX_ENZYMES] = {};
     float   enz_rate[limits::MAX_ENZYMES] = {};
+    uint8_t neutral = 0;     // bit k: enzyme k is a neutral exchange that runs
+    bool    any_two = false; // it carries a two-input enzyme
     // Which chemicals it can burn: bit c is set when some enzyme has c on its
-    // richer side. It takes these up from its cell and keeps them from a meal;
-    // anything else in its store it gives off (chemistry stage 2, energy.hpp).
+    // richer side, or on the side a running neutral enzyme takes from. It
+    // takes these up from its cell and keeps them from a meal; anything else
+    // in its store it gives off (chemistry stage 2, energy.hpp).
     uint8_t burns = 0;
     bool can_burn(int c) const { return (burns >> c) & 1u; }
     float reach           = 0.0f;  // touch distance from its centre, world units

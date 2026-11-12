@@ -91,10 +91,8 @@ constexpr float REPAIR_GAIN     = 2.0f;
 constexpr float REPAIR_SHARE    = 0.15f;
 constexpr float STALK_UPKEEP = 0.06f;
 
-// Feeding specialisations. Both are pure cost to a body that eats nothing.
+// Feeding specialisation: pure cost to a body that eats nothing.
 constexpr float BITE_UPKEEP          = 0.06f;   // upkeep per unit of bite (each unit adds the plain pull again)
-constexpr float DIGEST_GAIN          = 0.25f;   // efficiency added at full digestion: 0.70 -> 0.95
-constexpr float DIGEST_UPKEEP        = 0.10f;   // upkeep at full digestion
 
 // Dormancy: the machinery for shutting down costs a little all the time.
 // Its real price is paid in energy.cpp: a sleeper is helpless and slow to wake.
@@ -105,12 +103,6 @@ constexpr float DORMANCY_UPKEEP      = 0.02f;   // upkeep at full depth
 // chill; a body of radius 2 feels about 30%; a small thin one nearly all of it.
 // Not a new gene: size and fat already cost upkeep.
 constexpr float HEAT_LAG             = 120.0f;
-// Waste (added by Claude, 2026-11-11): taking up the chemical everyone gives
-// off. Priced so a body cleaning up only after itself loses by it (it gets
-// back ~0.03 a tick of its own waste); it pays only where many others foul a cell.
-// Chemosynthesis: paid for whether or not there is a vent, so it only pays
-// where one is. At full strength it takes a whole vent's worth (energy.cpp).
-constexpr float CHEMO_UPKEEP         = 0.1f;    // upkeep at full chemo
 // Enzymes (chemistry layer): upkeep per unit of rate, paid whether or not
 // there is anything to turn over. LUCA's 0.015 costs 0.015 (4% of its upkeep).
 constexpr float ENZYME_UPKEEP        = 1.0f;
@@ -192,7 +184,6 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     const float tolerance      = std::max(0.0f, g.thermal_tolerance);
     const float seed_throw     = std::clamp(g.seed_throw, 0.0f, limits::MAX_THROW);
     const float bite           = std::clamp(g.bite, 0.0f, limits::MAX_BITE);
-    const float digestion      = std::clamp(g.digestion, 0.0f, 1.0f);
     const float dormancy       = std::clamp(g.dormancy, 0.0f, 1.0f);
 
     // A brain only exists if there is something for it to drive.
@@ -221,23 +212,50 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     p.upkeep       = BASE_UPKEEP * std::pow(mass, 0.75f) + part_upkeep  // Kleiber + parts
                    + (skin - 1.0f) * r * r * SKIN_UPKEEP + stalk_upkeep
                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
-                   + bite * BITE_UPKEEP + digestion * DIGEST_UPKEEP + dormancy * DORMANCY_UPKEEP
-                   + std::clamp(g.chemo, 0.0f, 1.0f) * CHEMO_UPKEEP
+                   + bite * BITE_UPKEEP + dormancy * DORMANCY_UPKEEP
                    + std::max(0.0f, -std::clamp(g.mutability, limits::MIN_MUTABILITY, limits::MAX_MUTABILITY)) * FIDELITY_UPKEEP;
     const float repair = std::clamp(g.repair, 0.0f, 1.0f);
-    // Chemistry: compile the enzymes (one per reaction slot, poorer chemical first).
+    // Chemistry: compile the enzymes. First what the downhill ones can burn
+    // (the richer side of each, A aside); then each neutral one runs from the
+    // side holding fewer of those to the side holding more, or not at all.
     float enzyme_rate = 0.0f;
-    for (const Enzyme& e : g.enzymes) {
-        if (p.enzymes >= limits::MAX_ENZYMES) break;
-        const int lo = std::min<int>(std::min(e.x, e.y), NCHEM - 1), hi = std::min<int>(std::max(e.x, e.y), NCHEM - 1);
-        if (lo == hi) continue;
-        const float rate = std::clamp(e.rate, limits::MIN_ENZYME_RATE, limits::MAX_ENZYME_RATE);
-        p.enz_lo[p.enzymes] = static_cast<uint8_t>(lo);
-        p.enz_hi[p.enzymes] = static_cast<uint8_t>(hi);
-        p.enz_rate[p.enzymes] = rate;
-        p.burns |= static_cast<uint8_t>(1u << hi);
-        ++p.enzymes;
-        enzyme_rate += rate;
+    {
+        Enzyme es[limits::MAX_ENZYMES];
+        int ne = 0;
+        for (const Enzyme& e : g.enzymes) {
+            if (ne >= limits::MAX_ENZYMES) break;
+            es[ne++] = canonical_enzyme(e);
+        }
+        auto level = [](uint8_t c) { return c == NO_CHEM ? 0.0f : LEVEL[c]; };
+        auto bit = [](uint8_t c) { return c == NO_CHEM || c == CHEM_A ? 0u : 1u << c; };
+        uint8_t direct = 0;
+        for (int k = 0; k < ne; ++k)
+            if (level(es[k].y) + level(es[k].y2) > level(es[k].x) + level(es[k].x2)) direct |= static_cast<uint8_t>(bit(es[k].y) | bit(es[k].y2));
+        for (int k = 0; k < ne; ++k) {
+            const Enzyme& e = es[k];
+            const float rate = std::clamp(e.rate, limits::MIN_ENZYME_RATE, limits::MAX_ENZYME_RATE);
+            const float step = level(e.y) + level(e.y2) - level(e.x) - level(e.x2);
+            const int j = p.enzymes;
+            bool rich_first = true;   // write the richer side (y) as `in`
+            if (step <= 0.0f) {       // neutral: which way, if any, it runs
+                auto score = [&](uint8_t a, uint8_t b) { return ((direct & bit(a)) ? 1 : 0) + ((direct & bit(b)) ? 1 : 0); };
+                const int sx = score(e.x, e.x2), sy = score(e.y, e.y2);
+                if (sx != sy) {
+                    rich_first = sx < sy ? false : true;   // from the lower score to the higher
+                    p.neutral |= static_cast<uint8_t>(1u << j);
+                }
+            }
+            p.enz_in[j][0]  = rich_first ? e.y : e.x;
+            p.enz_in[j][1]  = rich_first ? e.y2 : e.x2;
+            p.enz_out[j][0] = rich_first ? e.x : e.y;
+            p.enz_out[j][1] = rich_first ? e.x2 : e.y2;
+            p.enz_step[j] = std::max(0.0f, step);
+            p.enz_rate[j] = rate;
+            if (step > 0.0f || (p.neutral >> j & 1u)) p.burns |= static_cast<uint8_t>(bit(p.enz_in[j][0]) | bit(p.enz_in[j][1]));
+            p.any_two = p.any_two || e.two();
+            ++p.enzymes;
+            enzyme_rate += rate;
+        }
     }
     p.upkeep += enzyme_rate * ENZYME_UPKEEP;
     p.upkeep *= 1.0f + REPAIR_SHARE * repair;
@@ -274,8 +292,7 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     p.reach    = REACH_PER_RADIUS * r;
     p.toxicity = std::min(TOXICITY_PER_SIZE * p.part_total[static_cast<int>(PartType::Poison)], MAX_TOXICITY);
     p.bite       = 1.0f + bite;
-    p.efficiency = TRANSFER_EFFICIENCY + DIGEST_GAIN * digestion;
-    p.chemo      = std::clamp(g.chemo, 0.0f, 1.0f);
+    p.efficiency = TRANSFER_EFFICIENCY;   // the same for all since chemistry stage 3 (no digestion gene)
 
     // --- 9. Storage: a body can only hold so much, and can't save up more
     //        than it can hold before dividing --------------------------------

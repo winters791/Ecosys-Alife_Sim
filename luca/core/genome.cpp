@@ -37,6 +37,40 @@ Genome make_luca() {
     return g;
 }
 
+Enzyme canonical_enzyme(Enzyme e) {
+    auto in_range = [](uint8_t c) { return static_cast<uint8_t>(std::min<int>(c, NCHEM - 1)); };
+    e.x = in_range(e.x);
+    e.y = in_range(e.y);
+    if (e.x2 == NO_CHEM || e.y2 == NO_CHEM) {
+        e.x2 = e.y2 = NO_CHEM;
+        if (e.x == e.y) e.y = static_cast<uint8_t>((e.x + 1) % NCHEM);
+        if (e.x > e.y) std::swap(e.x, e.y);
+        return e;
+    }
+    e.x2 = in_range(e.x2);
+    e.y2 = in_range(e.y2);
+    if (e.x > e.x2) std::swap(e.x, e.x2);
+    if (e.y > e.y2) std::swap(e.y, e.y2);
+    if (e.x == e.y && e.x2 == e.y2) {   // the same on both sides: nothing happens; mend one end
+        e.y2 = static_cast<uint8_t>((e.y2 + 1) % NCHEM);
+        if (e.y > e.y2) std::swap(e.y, e.y2);
+    }
+    const float lo = LEVEL[e.x] + LEVEL[e.x2], hi = LEVEL[e.y] + LEVEL[e.y2];
+    if (lo > hi || (lo == hi && (e.x > e.y || (e.x == e.y && e.x2 > e.y2)))) {
+        std::swap(e.x, e.y);
+        std::swap(e.x2, e.y2);
+    }
+    return e;
+}
+
+std::string enzyme_words(const Enzyme& e) {
+    std::string s = chem_name(e.x);
+    if (e.two()) s += std::string("+") + chem_name(e.x2);
+    s += std::string("-") + chem_name(e.y);
+    if (e.two()) s += std::string("+") + chem_name(e.y2);
+    return s;
+}
+
 void Brain::connect(int from, int to, float weight) {
     for (BrainLink& l : links)
         if (l.from == from && l.to == to) {
@@ -78,13 +112,11 @@ void clamp_genome(Genome& g) {
     g.offspring_share   = std::clamp(g.offspring_share, MIN_SHARE, MAX_SHARE);
     g.seed_throw        = std::clamp(g.seed_throw, 0.0f, MAX_THROW);
     g.bite              = std::clamp(g.bite, 0.0f, MAX_BITE);
-    g.digestion         = std::clamp(g.digestion, 0.0f, 1.0f);
     g.dormancy          = std::clamp(g.dormancy, 0.0f, 1.0f);
     g.elongation        = std::clamp(g.elongation, 0.0f, 1.0f);
     g.squareness        = std::clamp(g.squareness, 0.0f, 1.0f);
     g.mutability        = std::clamp(g.mutability, MIN_MUTABILITY, MAX_MUTABILITY);
     g.repair            = std::clamp(g.repair, 0.0f, 1.0f);
-    g.chemo             = std::clamp(g.chemo, 0.0f, 1.0f);
     g.birth_size        = std::clamp(g.birth_size, MIN_BIRTH, MAX_BIRTH);
     if (g.parts.size() > static_cast<std::size_t>(MAX_PARTS)) g.parts.resize(MAX_PARTS);
     for (Part& p : g.parts) {
@@ -93,13 +125,10 @@ void clamp_genome(Genome& g) {
         p.stalk = can_have_stalk(p.type) ? std::clamp(p.stalk, 0.0f, MAX_STALK) : 0.0f;
         p.theta = std::remainder(p.theta, 6.2831853f);  // -pi .. pi
     }
-    // Enzymes: two different chemicals, the poorer first, rate within bounds.
+    // Enzymes: canonical (see canonical_enzyme), rate within bounds.
     if (g.enzymes.size() > static_cast<std::size_t>(MAX_ENZYMES)) g.enzymes.resize(MAX_ENZYMES);
     for (Enzyme& e : g.enzymes) {
-        e.x = static_cast<uint8_t>(std::min<int>(e.x, NCHEM - 1));
-        e.y = static_cast<uint8_t>(std::min<int>(e.y, NCHEM - 1));
-        if (e.x == e.y) e.y = static_cast<uint8_t>((e.x + 1) % NCHEM);
-        if (e.x > e.y) std::swap(e.x, e.y);
+        e = canonical_enzyme(e);
         e.rate = std::isfinite(e.rate) ? std::clamp(e.rate, MIN_ENZYME_RATE, MAX_ENZYME_RATE) : MIN_ENZYME_RATE;
     }
     // The brain: drop links that point at nothing or run the wrong way, and

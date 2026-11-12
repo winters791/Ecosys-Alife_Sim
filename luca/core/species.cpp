@@ -19,13 +19,11 @@ constexpr float W_THRESHOLD = 1.0f;   // per e-fold of reproduction threshold
 constexpr float W_SHARE     = 1.0f;
 constexpr float W_THROW     = 0.4f;   // per cell of seed-throwing range
 constexpr float W_BITE      = 0.8f;   // per unit of bite
-constexpr float W_DIGESTION = 2.0f;   // none to full is 0..1
 constexpr float W_DORMANCY  = 1.5f;   // never sleeps to sleeps fully is 0..1
 constexpr float W_ELONGATE  = 1.5f;   // round to three times as long is 0..1
 constexpr float W_SQUARE    = 1.0f;   // rounded to boxy is 0..1
 constexpr float W_MUTABILITY = 0.3f;  // per doubling of the mutation rate
 constexpr float W_REPAIR    = 1.5f;   // none to full is 0..1
-constexpr float W_CHEMO     = 1.5f;   // none to full is 0..1
 constexpr float W_BIRTH     = 1.5f;   // a tenth to full size is 0.1..1
 constexpr float W_STALK     = 0.8f;   // per world unit of stalk, summed over a kind of part
 constexpr float W_ENZ_KIND  = 0.6f;   // one can run a reaction the other cannot
@@ -71,25 +69,36 @@ float genome_distance(const Genome& a, const Genome& b) {
     term(W_SHARE,     a.offspring_share - b.offspring_share);
     term(W_THROW,     a.seed_throw - b.seed_throw);
     term(W_BITE,      a.bite - b.bite);
-    term(W_DIGESTION, a.digestion - b.digestion);
     term(W_DORMANCY,  a.dormancy - b.dormancy);
     term(W_MUTABILITY, a.mutability - b.mutability);
     term(W_REPAIR,    a.repair - b.repair);
-    term(W_CHEMO,     a.chemo - b.chemo);
     term(W_BIRTH,     a.birth_size - b.birth_size);
     term(W_ELONGATE,  a.elongation - b.elongation);
     term(W_SQUARE,    a.squareness - b.squareness);
 
-    // Chemistry: the summed rate of each of the six reactions.
+    // Chemistry: the summed rate of each reaction either one runs. A
+    // two-input reaction (X + Y -> Z + W) is a kind of its own.
     {
-        float ra[NCHEM][NCHEM] = {}, rb[NCHEM][NCHEM] = {};
-        for (const Enzyme& e : a.enzymes) ra[e.x][e.y] += e.rate;
-        for (const Enzyme& e : b.enzymes) rb[e.x][e.y] += e.rate;
-        for (int x = 0; x < NCHEM; ++x)
-            for (int y = x + 1; y < NCHEM; ++y) {
-                if ((ra[x][y] > 0.0f) != (rb[x][y] > 0.0f)) term(W_ENZ_KIND, 1.0f);
-                else if (ra[x][y] > 0.0f) term(W_ENZ_RATE, std::log(ra[x][y] / rb[x][y]));
+        struct Rx { uint32_t key; float a, b; };
+        Rx rx[2 * limits::MAX_ENZYMES];
+        int n = 0;
+        auto add = [&](const Enzyme& raw, bool first) {
+            const Enzyme e = canonical_enzyme(raw);
+            const uint32_t key = (static_cast<uint32_t>(e.x) << 24) | (static_cast<uint32_t>(e.x2) << 16) | (static_cast<uint32_t>(e.y) << 8) | e.y2;
+            int k = 0;
+            while (k < n && rx[k].key != key) ++k;
+            if (k == n) {
+                if (n == 2 * limits::MAX_ENZYMES) return;
+                rx[n++] = {key, 0.0f, 0.0f};
             }
+            (first ? rx[k].a : rx[k].b) += e.rate;
+        };
+        for (const Enzyme& e : a.enzymes) add(e, true);
+        for (const Enzyme& e : b.enzymes) add(e, false);
+        for (int k = 0; k < n; ++k) {
+            if ((rx[k].a > 0.0f) != (rx[k].b > 0.0f)) term(W_ENZ_KIND, 1.0f);
+            else term(W_ENZ_RATE, std::log(rx[k].a / rx[k].b));
+        }
     }
     const PartSums pa = sum_parts(a), pb = sum_parts(b);
     for (int t = 0; t < NUM_TYPES; ++t) {

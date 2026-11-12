@@ -552,14 +552,23 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["fed_dead"] = c.fed_dead[who];
     d["fed_waste"] = c.fed_waste[who];
     d["fed_vent"] = c.fed_vent[who];
-    d["chemo"] = p.chemo;
+    d["burns_vent"] = p.can_burn(luca::VENT_CHEM);   // can live on what a vent makes
     d["burns"] = burns_words(p);
     d["mutability"] = g.mutability;
     d["repair"] = g.repair;
-    // Chemistry (stage 1): its enzymes, and what its store and body hold.
+    // Chemistry: its enzymes ("A<->D", "A+D<->B+C" for two-input ones), and
+    // what its store and body hold.
     PackedStringArray enzymes;
-    for (const luca::Enzyme& e : g.enzymes)
-        enzymes.push_back(String(luca::chem_name(e.x)) + "<->" + luca::chem_name(e.y) + " " + String::num(e.rate, 3));
+    for (const luca::Enzyme& raw : g.enzymes) {
+        const luca::Enzyme e = luca::canonical_enzyme(raw);
+        String side_lo = luca::chem_name(e.x), side_hi = luca::chem_name(e.y);
+        if (e.two()) {
+            side_lo += String("+") + luca::chem_name(e.x2);
+            side_hi += String("+") + luca::chem_name(e.y2);
+        }
+        const bool neutral = luca::LEVEL[e.x] + (e.two() ? luca::LEVEL[e.x2] : 0.0f) == luca::LEVEL[e.y] + (e.two() ? luca::LEVEL[e.y2] : 0.0f);
+        enzymes.push_back(side_lo + (neutral ? "<=>" : "<->") + side_hi + " " + String::num(e.rate, 3));
+    }
     d["enzymes"] = enzymes;
     String held, body;
     for (int k = 1; k < luca::NCHEM; ++k) {
@@ -716,7 +725,7 @@ Dictionary LucaWorld::get_species_profile(int64_t species_id) const {
     b["bite"] = g.bite;
     b["efficiency"] = p.efficiency;
     b["burns"] = burns_words(p);
-    b["chemo"] = g.chemo;
+    b["burns_vent"] = p.can_burn(luca::VENT_CHEM);
     b["dormancy"] = g.dormancy;
     b["throw_range"] = p.throw_range;
     b["mutability"] = g.mutability;

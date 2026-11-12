@@ -25,7 +25,8 @@ struct TickStats {
     std::size_t deaths = 0;
     double energy_in       = 0.0;  // everything that enters the world: light absorbed plus windfalls
     double in_windfall     = 0.0;  // part of energy_in: food dropped on the map (see drop_windfalls)
-    double in_vent         = 0.0;  // part of energy_in: taken up from vents (chemosynthesis)
+    double in_vent         = 0.0;  // part of energy_in: made by vents (VENT_CHEM out of the cell's A)
+    double matter_in       = 0.0;  // matter brought up from below by vents (units; the only way matter enters)
     double grown_mass      = 0.0;  // matter young bodies took from the soil to grow (not a flow of energy)
     std::size_t windfalls  = 0;    // lumps dropped this tick
     double energy_out      = 0.0;  // everything lost as heat
@@ -43,6 +44,10 @@ struct TickStats {
     double eaten_dead      = 0.0;  // arrived from corpses
     double excreted        = 0.0;  // given off into the cell: meals spilled, chemicals it can't burn
     double eaten_waste     = 0.0;  // taken up from the cell's loose chemicals
+    // Chemistry stage 4 (observation): units turned over by two-input enzymes,
+    // and the part of it done by neutral exchanges (energy.hpp, convert).
+    double two_flow        = 0.0;
+    double neutral_flow    = 0.0;
     // Blueprints taken up through contact (see Simulation::step, phase 2a):
     std::size_t gene_transfers = 0;        // all of them
     std::size_t gene_transfers_cross = 0;  // between different species
@@ -126,8 +131,11 @@ public:
     // All energy held in the world: in living creatures, locked in their
     // bodies, and left in corpses.
     double stored_energy() const;
-    // All matter in the world: soil, corpses and living bodies. Constant.
+    // All matter in the world: soil, corpses, loose chemicals and living
+    // bodies. It changes only by what vents bring up from below, so
+    // total_matter() - matter_brought_up() is constant.
     double total_matter() const;
+    double matter_brought_up() const { return matter_brought_up_; }
 
 private:
     // Population-level event detectors; they only write to the chronicle.
@@ -157,6 +165,8 @@ private:
     void wash_soil();
     void spread_dissolved();
     void drop_windfalls();
+    // Vents turn their cell's A into VENT_CHEM, loose in the cell (energy.hpp).
+    void run_vents();
     void share_light_by_canopy();
     // Where a child flung `dist` from (x, y) along (ux, uy) comes down: it
     // stops short of any step in the ground taller than birth_max_step.
@@ -185,6 +195,7 @@ private:
     TickStats   stats_;
     PowerSystem powers_;
     WorldEvents events_;
+    double matter_brought_up_ = 0.0;   // all the matter vents have brought up since tick 0
     Chronicle   chronicle_;
     SpeciesRegistry species_;
 
@@ -220,9 +231,8 @@ private:
     std::vector<float> cell_uptake_demand_;  // per cell and chemical (cell * NCHEM + c): shares of the stock asked for
     std::vector<float> uptake_want_;         // share of its cell's stock of each chemical it can burn
     std::vector<Mix>   uptake_gain_;         // what it takes up this tick
-    std::vector<float> cell_vent_demand_;    // per cell
-    std::vector<float> vent_want_, vent_gain_;
     std::vector<Mix>   spread_;              // per cell: loose chemicals on their way to the neighbours
+    std::vector<float> spread_vent_;         // per cell: the vent's share of them (observation only)
     std::vector<float> drain_want_, drained_, poisoned_;   // drain in mass from the store; poison in energy
     std::vector<Mix> intake_;                               // chemicals taken in from living bodies this tick
     // Who took most from each body this tick: the one credited if it dies
