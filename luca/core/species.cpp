@@ -190,6 +190,7 @@ uint32_t SpeciesRegistry::classify_newcomer(const Genome& g, uint64_t tick) {
 bool SpeciesRegistry::born(uint32_t species) {
     Species& s = species_[species];
     if (s.population++ == 0) ++living_;
+    ++s.ever_born;
     s.peak = std::max(s.peak, s.population);
     if (s.established || s.population < SPECIES_ESTABLISHED) return false;
     s.established = true;
@@ -214,7 +215,26 @@ bool SpeciesRegistry::move_member(uint32_t from, uint32_t to) {
     Species& a = species_[from];
     if (a.population == 0) return false;
     --a.population;   // never its last member: a split leaves both halves alive
-    return born(to);
+    const bool established = born(to);
+    --species_[to].ever_born;   // moved, not born: its birth stays counted where it happened
+    return established;
+}
+
+void SpeciesRegistry::note_death(uint32_t species, uint64_t who, uint32_t age, uint32_t kills, uint32_t children,
+                                 bool eaten, uint64_t tick) {
+    Species& s = species_[species];
+    ++(eaten ? s.died_eaten : s.died_other);
+    auto beat = [&](Record& r, uint32_t value) {
+        if (value > r.value) r = Record{value, who, tick};
+    };
+    beat(s.eldest, age);
+    beat(s.deadliest, kills);
+    beat(s.most_children, children);
+}
+
+void SpeciesRegistry::note_kill(uint32_t killer, uint32_t victim) {
+    ++species_[killer].kills;
+    ++kill_web_[{killer, victim}];
 }
 
 std::size_t SpeciesRegistry::living_established() const {
@@ -243,6 +263,23 @@ std::string species_name(uint32_t id) {
     name += vowel[k % 5];   k /= 5;
     name += ending[k % 8];
     if (id >= COMBOS) name += " " + std::to_string(id / COMBOS + 1);
+    return name;
+}
+
+std::string creature_name(uint64_t id) {
+    static const char* const first[20] = {"T", "K", "M", "R", "B", "S", "N", "L", "D", "P",
+                                          "V", "G", "Z", "J", "F", "H", "W", "Qu", "Sh", "Ch"};
+    static const char* const vowel[6] = {"a", "e", "i", "o", "u", "y"};
+    static const char* const mid[12] = {"b", "k", "l", "m", "n", "r", "s", "t", "v", "z", "lb", "nk"};
+    static const char* const last[10] = {"i", "o", "a", "us", "ek", "in", "ar", "ot", "ix", "el"};
+    uint64_t h = id * 0x9E3779B97F4A7C15ull;
+    h ^= h >> 31;
+    h *= 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 29;
+    std::string name = first[h % 20];  h /= 20;
+    name += vowel[h % 6];              h /= 6;
+    name += mid[h % 12];               h /= 12;
+    name += last[h % 10];
     return name;
 }
 

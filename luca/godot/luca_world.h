@@ -14,6 +14,7 @@
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_int64_array.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/vector3.hpp>
@@ -64,6 +65,21 @@ public:
     // this array of the nearest listed ancestor, -1 for a root), born,
     // extinct (tick, or -1 while alive), population, peak, hue.
     godot::Array get_species_tree(int min_peak) const;
+    // One species' profile for the species card (observation only): who it
+    // is and where it came from; its record book (eldest, deadliest, most
+    // young, each with a name, living members included); what its members
+    // are like ("habits", from the last census, kept after extinction); its
+    // body (the eldest living member's, or the founder's once extinct) with
+    // every part; whom it kills and who kills it; and up to three living
+    // members to draw ("specimens", with "specimen_names"). Empty for an unknown id.
+    godot::Dictionary get_species_profile(int64_t species_id) const;
+    // Sprite data for a few creatures by id, laid out like the two buffers
+    // below ("instances": 20 floats each; "parts": PARTS_PER_CREATURE texels
+    // each), each body at the origin facing the way it faces in the world.
+    // Ids that have died are skipped; if none are left, the species'
+    // founder is drawn instead and "fossil" is true. "speeds" holds each
+    // drawn body's top speed, so the viewer can walk it about.
+    godot::Dictionary get_sprites(const godot::PackedInt64Array& ids, int64_t species_id) const;
 
     // Fields, one float per cell, row-major (index = y * size + x).
     godot::PackedFloat32Array get_heights() const;

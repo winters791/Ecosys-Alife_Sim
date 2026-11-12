@@ -34,6 +34,9 @@ struct Creatures {
     // Where its energy has come from over its life. Observation only (food
     // web, inspector, chronicle); the sim never reads these to decide anything.
     std::vector<float>     fed_light, fed_living, fed_dead, fed_waste, fed_vent;
+    // Its life story, for the species record book. Observation only too.
+    std::vector<uint32_t>  kills;       // bodies it finished off
+    std::vector<uint32_t>  children;    // young it has had
 
     // Cold: identity and inheritance
     std::vector<uint64_t>  id;          // unique for the whole run; never reused
@@ -54,6 +57,7 @@ struct Creatures {
         x.reserve(n); y.reserve(n); hx.reserve(n); hy.reserve(n); moved.reserve(n); ate.reserve(n); hurt.reserve(n); unfold.reserve(n); wander.reserve(n); sleep.reserve(n); body_temp.reserve(n);
         energy.reserve(n); pool.reserve(n); tissue.reserve(n); age.reserve(n); pheno.reserve(n);
         fed_light.reserve(n); fed_living.reserve(n); fed_dead.reserve(n); fed_waste.reserve(n); fed_vent.reserve(n);
+        kills.reserve(n); children.reserve(n);
         id.reserve(n); lineage.reserve(n); species.reserve(n); generation.reserve(n); genome.reserve(n);
         brain.reserve(n); brain_state.reserve(n); body.reserve(n);
     }
@@ -79,6 +83,8 @@ struct Creatures {
         fed_dead.push_back(0.0f);
         fed_waste.push_back(0.0f);
         fed_vent.push_back(0.0f);
+        kills.push_back(0);
+        children.push_back(0);
         id.push_back(uid);
         energy.push_back(store.energy());
         pool.push_back(store);
@@ -99,7 +105,7 @@ struct Creatures {
     void remove_swap(std::size_t i) {
         swap_pop(x, i); swap_pop(y, i); swap_pop(hx, i); swap_pop(hy, i); swap_pop(moved, i); swap_pop(ate, i); swap_pop(hurt, i); swap_pop(unfold, i); swap_pop(wander, i); swap_pop(sleep, i); swap_pop(body_temp, i);
         swap_pop(energy, i); swap_pop(pool, i); swap_pop(tissue, i); swap_pop(age, i);
-        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(fed_vent, i); swap_pop(id, i);
+        swap_pop(fed_light, i); swap_pop(fed_living, i); swap_pop(fed_dead, i); swap_pop(fed_waste, i); swap_pop(fed_vent, i); swap_pop(kills, i); swap_pop(children, i); swap_pop(id, i);
         swap_pop(pheno, i); swap_pop(lineage, i); swap_pop(species, i); swap_pop(generation, i); swap_pop(genome, i);
         swap_pop(brain, i); swap_pop(brain_state, i); swap_pop(body, i);
     }

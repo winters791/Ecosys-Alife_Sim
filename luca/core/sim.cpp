@@ -316,6 +316,8 @@ void Simulation::step() {
     drain_want_.assign(n, 0.0f);
     drained_.assign(n, 0.0f);
     intake_.assign(n, Mix{});
+    top_taker_.assign(n, 0);
+    top_take_.assign(n, 0.0f);
     poisoned_.assign(n, 0.0f);
 
     // --- Phase 0: bin creatures into cells; living mass per cell --------------
@@ -459,6 +461,10 @@ void Simulation::step() {
         if (amount <= 0.0f || have <= 0.0f) continue;
         drained_[k.giver] += amount;
         intake_[k.taker].add(from, amount / have);
+        if (amount > top_take_[k.giver]) {
+            top_take_[k.giver] = amount;
+            top_taker_[k.giver] = k.taker;
+        }
         // A poisonous body costs its eater energy for every unit taken.
         poisoned_[k.taker] += amount * from.density() * c_.pheno[k.giver].toxicity;
 
@@ -600,6 +606,12 @@ void Simulation::step() {
             pool.clear();
             c_.energy[i] = 0.0f;
             dead_.push_back(static_cast<uint32_t>(i));
+            // The record book: whatever took most from it this tick finished it off.
+            if (drained_[i] > 0.0f) {
+                const uint32_t killer = top_taker_[i];
+                ++c_.kills[killer];
+                species_.note_kill(c_.species[killer], c_.species[i]);
+            }
             continue;
         }
 
@@ -646,6 +658,7 @@ void Simulation::step() {
                 stats_.out_movement += paid_throw;
                 stats_.energy_out += paid_throw;
                 Mix store = take_share(pool, std::min(pool.mass() * p.offspring_share, cp.pool_capacity));
+                ++c_.children[i];
                 float bx, by;
                 land_child(c_.x[i], c_.y[i], std::cos(ang), std::sin(ang), p.reach + cp.reach + flung, bx, by);
                 births_.push_back(Birth{
@@ -660,6 +673,7 @@ void Simulation::step() {
     // then births appended at the end.
     for (auto it = dead_.rbegin(); it != dead_.rend(); ++it) {
         const uint32_t sp = c_.species[*it];
+        species_.note_death(sp, c_.id[*it], c_.age[*it], c_.kills[*it], c_.children[*it], drained_[*it] > 0.0f, tick_);
         if (species_.died(sp, tick_)) {
             const Species& s = species_.get(sp);
             const std::string text = s.name + " is extinct, after " + with_commas(tick_ - s.born_tick) + " ticks.";
@@ -849,6 +863,74 @@ void Simulation::take_census() {
         else                         ++k.mixed;
     }
     census_ = k;
+    take_habits();
+}
+
+// What each living species is like right now, for its profile in the viewer.
+// Species with no members keep their last word. Observation only.
+void Simulation::take_habits() {
+    struct Sum {
+        double count = 0, fed = 0, diet[5] = {}, movers = 0, sighted = 0, sleepers = 0, armoured = 0, poisonous = 0;
+        double radius = 0, age = 0, speed = 0, light = 0, temp = 0, height = 0, x = 0, y = 0;
+    };
+    std::vector<Sum> sum(species_.all().size());
+    const auto& lights = world_.lights();
+    const auto& temps = world_.temperatures();
+    const auto& heights = world_.heights();
+    for (std::size_t i = 0; i < c_.size(); ++i) {
+        Sum& s = sum[c_.species[i]];
+        const Phenotype& p = c_.pheno[i];
+        const int cell = world_.cell_index(c_.x[i], c_.y[i]);
+        s.count += 1;
+        const double food[5] = {c_.fed_light[i], c_.fed_living[i], c_.fed_dead[i], c_.fed_waste[i], c_.fed_vent[i]};
+        const double total = food[0] + food[1] + food[2] + food[3] + food[4];
+        if (total >= 20.0) {
+            s.fed += 1;
+            for (int k = 0; k < 5; ++k) s.diet[k] += food[k] / total;
+        }
+        const bool mover = p.has_brain && p.max_speed > 0.0f;
+        s.movers += mover ? 1 : 0;
+        s.speed += mover ? p.max_speed : 0.0f;
+        s.sighted += p.sense_cells > 0 ? 1 : 0;
+        s.sleepers += p.dormancy > 0.1f ? 1 : 0;
+        s.armoured += p.part_total[static_cast<int>(PartType::Armour)] > 0.0f ? 1 : 0;
+        s.poisonous += p.toxicity > 0.0f ? 1 : 0;
+        s.radius += c_.genome[i].core_radius;
+        s.age += c_.age[i];
+        s.light += lights[cell];
+        s.temp += temps[cell];
+        s.height += heights[cell];
+        s.x += c_.x[i];
+        s.y += c_.y[i];
+    }
+    for (std::size_t sp = 0; sp < sum.size(); ++sp) {
+        const Sum& s = sum[sp];
+        if (s.count == 0) continue;
+        Habits& h = species_.habits(static_cast<uint32_t>(sp));
+        const double n = s.count;
+        h.count = static_cast<uint32_t>(n);
+        h.tick = tick_;
+        for (int k = 0; k < 5; ++k) h.diet[k] = s.fed > 0 ? static_cast<float>(s.diet[k] / s.fed) : 0.0f;
+        h.movers = static_cast<float>(s.movers / n);
+        h.speed = s.movers > 0 ? static_cast<float>(s.speed / s.movers) : 0.0f;
+        h.sighted = static_cast<float>(s.sighted / n);
+        h.sleepers = static_cast<float>(s.sleepers / n);
+        h.armoured = static_cast<float>(s.armoured / n);
+        h.poisonous = static_cast<float>(s.poisonous / n);
+        h.radius = static_cast<float>(s.radius / n);
+        h.age = static_cast<float>(s.age / n);
+        h.light = static_cast<float>(s.light / n);
+        h.temperature = static_cast<float>(s.temp / n);
+        h.height = static_cast<float>(s.height / n);
+        h.x = static_cast<float>(s.x / n);
+        h.y = static_cast<float>(s.y / n);
+        h.spread = 0.0f;
+    }
+    // A second pass for how widely each species ranges.
+    for (std::size_t i = 0; i < c_.size(); ++i) {
+        Habits& h = species_.habits(c_.species[i]);
+        h.spread += std::hypot(c_.x[i] - h.x, c_.y[i] - h.y) / static_cast<float>(h.count);
+    }
 }
 
 // -----------------------------------------------------------------------------
