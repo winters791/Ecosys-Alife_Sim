@@ -86,6 +86,8 @@ var inspected_at := Vector2(-1, -1)
 
 # UI
 var stats_label: Label
+var left_scroll: ScrollContainer   # the left column, scrolled when it is taller than the window
+var left_column: VBoxContainer
 var species_box: RichTextLabel
 var tree_panel: PanelContainer
 var tree_view: Control
@@ -176,6 +178,8 @@ func _ready() -> void:
 		world.step(warmup, 1e12)
 	world_size = world.get_world_size()
 	extent = world.get_extent()
+	if shot_path == "":
+		_fit_window()   # screenshots keep the project's 1440x900, so they stay comparable
 	cam_target = Vector3(extent * 0.5, 0.0, extent * 0.5)
 	if start_at.x >= 0.0:
 		cam_target = Vector3(start_at.x, 0.0, start_at.y)
@@ -203,6 +207,38 @@ func _ready() -> void:
 			if tree_view.species[i]["name"] == start_tree_root:
 				tree_view._zoom_to(i)
 	get_window().size_changed.connect(_place_camera)
+	get_window().size_changed.connect(_fit_left_column)
+	_fit_left_column()
+
+
+## Open the window at most of the screen. The project's 1440x900 is in
+## pixels, which on a Retina display is a 720x450-point postage stamp. The
+## UI is laid out for 1440x900 and the canvas_items stretch scales it with
+## the window, so a bigger window means bigger, more readable panels.
+func _fit_window() -> void:
+	var win := get_window()
+	if win.mode != Window.MODE_WINDOWED:
+		return
+	var usable := DisplayServer.screen_get_usable_rect(win.current_screen)
+	var size := Vector2i((Vector2(usable.size) * 0.92).floor())
+	# Keep the 16:10 shape the panels were laid out for, within the screen.
+	size.x = mini(size.x, int(size.y * 1.6))
+	if size.x <= win.size.x and size.y <= win.size.y:
+		return
+	win.size = size
+	win.position = usable.position + (usable.size - size) / 2
+
+
+## The left column is stats, the species list and every tool. With many
+## species or followed ones it outgrows the window, so it scrolls instead of
+## running off the bottom.
+func _fit_left_column() -> void:
+	if left_scroll == null:
+		return
+	var room := get_viewport().get_visible_rect().size.y - 24.0
+	var want := left_column.get_combined_minimum_size()
+	var bar := 0.0 if want.y <= room else left_scroll.get_v_scroll_bar().get_combined_minimum_size().x + 4.0
+	left_scroll.size = Vector2(want.x + bar, minf(want.y, room))
 
 
 # --- Scene construction --------------------------------------------------------
@@ -389,10 +425,15 @@ func _build_ui() -> void:
 	add_child(layer)
 
 	# Left column: time and stats, with the god powers underneath.
+	left_scroll = ScrollContainer.new()
+	left_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	left_scroll.position = Vector2(12, 12)
+	layer.add_child(left_scroll)
 	var column := VBoxContainer.new()
-	column.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT, Control.PRESET_MODE_MINSIZE, 12)
 	column.add_theme_constant_override("separation", 10)
-	layer.add_child(column)
+	left_scroll.add_child(column)
+	left_column = column
+	column.minimum_size_changed.connect(_fit_left_column)
 	var top := _panel(Control.PRESET_TOP_LEFT, Vector2(330, 0), column)
 	stats_label = Label.new()
 	top.add_child(stats_label)
