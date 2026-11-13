@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -424,6 +425,149 @@ void test_sea() {
     ramp.cast(drain);
     ramp.step();
     CHECK(ramp.world().sea_level() == 0.0f);
+}
+
+// 2.7 stage 3: motors by medium. With the laws neutral, a tail and legs push
+// the same on land and in water; with them set, a tail swims and legs walk,
+// buoyancy takes its share off moving in water, and climbing in water is free.
+void test_water_motors() {
+    using namespace luca;
+    Genome tail = make_luca();
+    tail.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
+    Genome legs = make_luca();
+    legs.parts.push_back({PartType::Legs, 1.0f, 1.5707963f, 0.0f});
+
+    const Phenotype t0 = compile_phenotype(tail), l0 = compile_phenotype(legs);
+    CHECK(t0.walk_speed == t0.swim_speed && l0.walk_speed == l0.swim_speed);   // neutral by default
+    CHECK(movement_cost(t0, 0.1f, 0.5f, true) == movement_cost(t0, 0.1f, 0.5f, false));
+
+    g_laws.FLAGELLUM_ON_LAND = 0.3f;
+    g_laws.LEGS_IN_WATER = 0.3f;
+    g_laws.BUOYANCY = 0.5f;
+    const Phenotype t = compile_phenotype(tail), l = compile_phenotype(legs);
+    CHECK(t.swim_speed > t.walk_speed && t.max_speed == t.swim_speed);
+    CHECK(l.walk_speed > l.swim_speed && l.max_speed == l.walk_speed);
+    CHECK(std::abs(t.swim_speed - t0.swim_speed) < 1e-6f);   // in its own medium nothing changes
+    CHECK(std::abs(l.walk_speed - l0.walk_speed) < 1e-6f);
+    const float dry = movement_cost(t, 0.1f, 0.0f, false), wet = movement_cost(t, 0.1f, 0.0f, true);
+    CHECK(wet > 0.0f && std::abs(wet - 0.5f * dry) < 1e-5f * dry + 1e-7f);   // half carried by the water
+    const float climb_wet = movement_cost(t, 0.1f, 1.0f, true) - wet, climb_dry = movement_cost(t, 0.1f, 1.0f, false) - dry;
+    CHECK(climb_dry > 0.0f && std::abs(climb_wet - 0.5f * climb_dry) < 1e-4f * climb_dry);   // climbing too
+
+    // Holding up its weight (SUPPORT_COST): nothing while the law is off; per
+    // unit of mass dearer for a big body; buoyancy carries its share in water.
+    {
+        Genome big_g = make_luca();
+        big_g.core_radius *= 2.0f;
+        const Phenotype small = compile_phenotype(make_luca()), big = compile_phenotype(big_g);
+        CHECK(support_cost(small, false) == 0.0f);
+        g_laws.SUPPORT_COST = 0.015f;
+        const float s_land = support_cost(small, false), b_land = support_cost(big, false);
+        CHECK(s_land > 0.0f && b_land / big.mass > 1.5f * s_land / small.mass);
+        CHECK(std::abs(support_cost(big, true) - 0.5f * b_land) < 1e-6f * b_land + 1e-9f);
+        g_laws.SUPPORT_COST = 0.0f;
+    }
+
+    // The census counts swimmers under water and walkers on land; the chronicle says so.
+    SimConfig cfg = small_config();
+    Simulation sim(cfg);
+    int low = 0, high = 0;
+    for (int c = 0; c < sim.world().num_cells(); ++c) {
+        if (sim.world().height(c) < sim.world().height(low)) low = c;
+        if (sim.world().height(c) > sim.world().height(high)) high = c;
+    }
+    PowerCommand sea;
+    sea.kind = PowerKind::Sea;
+    sea.amount = 0.5f * (sim.world().height(low) + sim.world().height(high));
+    sim.cast(sea);
+    sim.step();
+    CHECK(sim.world().under_water(low) && !sim.world().under_water(high));
+    int shore = high;   // the lowest ground at least a unit above the sea: mild, unlike the peak
+    for (int c = 0; c < sim.world().num_cells(); ++c)
+        if (sim.world().height(c) > sea.amount + 1.0f && sim.world().height(c) < sim.world().height(shore)) shore = c;
+    high = shore;
+    const int n = cfg.world_size;
+    tail.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.0f);   // a brain that sits still
+    legs.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.0f);
+    const float cs = sim.world().cell_size();
+    for (int k = 0; k < 12; ++k) {
+        sim.add_creature((low % n + 0.5f) * cs, (low / n + 0.5f) * cs, 300.0f, tail);
+        sim.add_creature((high % n + 0.5f) * cs, (high / n + 0.5f) * cs, 300.0f, legs);
+    }
+    for (int t = 0; t < 60; ++t) sim.step();
+    CHECK(sim.census().swimmers >= 10 && sim.census().walkers >= 10);
+    bool swam = false, ashore = false;
+    for (const auto& e : sim.chronicle().entries()) {
+        swam = swam || e.text.find("first swimmers") != std::string::npos;
+        ashore = ashore || e.text.find("crawls ashore") != std::string::npos;
+    }
+    CHECK(swam && ashore);
+    g_laws = legacy_laws();
+}
+
+// 2.7 stage 2 (water as a solvent) and the depth sense. Under water loose
+// chemicals spread WET_SPREAD faster and skin takes up WET_UPTAKE more; a dry
+// world's mutation never draws the depth channel.
+void test_water_solvent() {
+    using namespace luca;
+    struct Out { float at_vent, spread, taken; };
+    auto run = [](float wet_spread, float wet_uptake, bool eater) {
+        g_laws = legacy_laws();
+        g_laws.WET_SPREAD = wet_spread;
+        g_laws.WET_UPTAKE = wet_uptake;
+        SimConfig cfg = small_config();
+        cfg.sun_strength = 0.0f;
+        cfg.windfall_rate = 0.0f;
+        Simulation sim(cfg);
+        int low = 0;
+        for (int c = 0; c < sim.world().num_cells(); ++c)
+            if (sim.world().height(c) < sim.world().height(low)) low = c;
+        const int n = cfg.world_size;
+        const float x = (low % n + 0.5f) * sim.world().cell_size(), y = (low / n + 0.5f) * sim.world().cell_size();
+        PowerCommand sea;
+        sea.kind = PowerKind::Sea;
+        sea.amount = sim.world().height(low) + 6.0f;
+        sim.cast(sea);
+        PowerCommand vent;
+        vent.kind = PowerKind::Vent;
+        vent.x = x; vent.y = y; vent.radius = 0.5f; vent.amount = 2.0f;
+        sim.cast(vent);
+        sim.flush_powers();
+        if (eater) {
+            Genome g = make_luca();
+            g.enzymes = {Enzyme{CHEM_A, CHEM_C, 0.015f}};   // burns C: lives on the vent
+            sim.add_creature(x, y, 50.0f, g);
+        }
+        double taken = 0.0;
+        for (int t = 0; t < 400; ++t) {
+            sim.step();
+            taken += sim.last_stats().eaten_waste;
+        }
+        const float here = sim.soil().dissolved[low].v[VENT_CHEM];
+        float all = 0.0f;
+        for (int c = 0; c < sim.world().num_cells(); ++c) all += sim.soil().dissolved[c].v[VENT_CHEM];
+        return Out{here, all - here, static_cast<float>(taken)};
+    };
+    const Out still = run(0.0f, 0.0f, false), mixed = run(2.0f, 0.0f, false);
+    CHECK(still.at_vent > 0.0f && mixed.at_vent < still.at_vent);   // the vent's C leaves faster
+    CHECK(mixed.spread / (mixed.spread + mixed.at_vent) > still.spread / (still.spread + still.at_vent));
+    const Out sip = run(0.0f, 0.0f, true), gulp = run(0.0f, 1.0f, true);
+    CHECK(sip.taken > 0.0f && gulp.taken > 1.2f * sip.taken);        // skin takes up more under water
+
+    // The depth sense: drawn only where there is a sea.
+    g_laws = legacy_laws();
+    g_laws.SENSOR_BRAIN = 1.0f;
+    int dry_depth = 0, wet_depth = 0;
+    for (uint64_t k = 0; k < 4000; ++k) {
+        Genome g = make_luca();
+        g.parts.push_back({PartType::Sensor, 0.3f, 0.0f, 0.0f});
+        Rng a(k), b(k);
+        for (const Part& p : mutate(g, a).parts) dry_depth += p.type == PartType::Sensor && p.channel == CH_DEPTH;
+        for (const Part& p : mutate(g, b, CH_COUNT).parts) wet_depth += p.type == PartType::Sensor && p.channel == CH_DEPTH;
+    }
+    CHECK(dry_depth == 0 && wet_depth > 0);
+    CHECK(std::string(channel_name(CH_DEPTH)) == "depth");
+    g_laws = legacy_laws();
 }
 
 // One tick-by-tick audit helper: returns the worst relative error seen.
@@ -2654,6 +2798,86 @@ void test_stoichiometry() {
     g_laws = legacy_laws();
 }
 
+// Food for the sea (2026-11-13): vents laid on the sea floor at the world's
+// making; the dead dissolving under water (WET_DISSOLVE); loose chemicals and
+// corpses carried downhill (RUNOFF on land, SINKING under water). Both books
+// stay exact.
+void test_sea_food() {
+    using namespace luca;
+    g_laws = legacy_laws();
+    {   // Vents from the start: only under water, only with a sea.
+        SimConfig cfg = small_config();
+        cfg.sea_vents = 3;
+        Simulation dry(cfg);
+        CHECK(!dry.world().any_vents());
+        Simulation probe(small_config());
+        float lo = 1e9f, hi = -1e9f;
+        for (int c = 0; c < probe.world().num_cells(); ++c) { lo = std::min(lo, probe.world().height(c)); hi = std::max(hi, probe.world().height(c)); }
+        cfg.sea_level = 0.5f * (lo + hi);
+        Simulation wet(cfg);
+        CHECK(wet.world().any_vents());
+        bool all_wet = true;
+        for (int c = 0; c < wet.world().num_cells(); ++c)
+            if (wet.world().vent(c) > 0.0f) all_wet = all_wet && wet.world().under_water(c);
+        CHECK(all_wet);
+        Simulation again(cfg);   // the same seed lays them in the same places
+        bool same = true;
+        for (int c = 0; c < wet.world().num_cells(); ++c) same = same && wet.world().vent(c) == again.world().vent(c);
+        CHECK(same);
+    }
+    // A dark world where LUCAs starve and leave corpses where they lie.
+    auto starve = [](int cell_pick, float sea, float dissolve, float runoff, float sinking, int& cell, double& worst) {
+        g_laws = legacy_laws();
+        g_laws.WET_DISSOLVE = dissolve;
+        g_laws.RUNOFF = runoff;
+        g_laws.SINKING = sinking;
+        SimConfig cfg = small_config();
+        cfg.sun_strength = 0.0f;
+        cfg.windfall_rate = 0.0f;
+        cfg.sea_level = sea;
+        auto sim = std::make_unique<Simulation>(cfg);
+        cell = cell_pick;
+        const int n = cfg.world_size;
+        const float x = (cell % n + 0.5f) * sim->world().cell_size(), y = (cell / n + 0.5f) * sim->world().cell_size();
+        for (int k = 0; k < 6; ++k) sim->add_creature(x, y, 1.0f, make_luca());
+        worst = run_audited(*sim, 2000);
+        return sim;
+    };
+    Simulation probe(small_config());
+    int low = 0, steep = 0;
+    for (int c = 0; c < probe.world().num_cells(); ++c) {
+        if (probe.world().height(c) < probe.world().height(low)) low = c;
+        if (probe.world().steepness(c) > probe.world().steepness(steep) && probe.world().downhill(c) >= 0) steep = c;
+    }
+    const float sea = probe.world().height(low) + 5.0f;
+    int cell = 0;
+    double worst = 0.0;
+    {   // Under water the dead dissolve: loose D where they lay, energy kept.
+        auto off = starve(low, sea, 0.0f, 0.0f, 0.0f, cell, worst);
+        const float plain = off->soil().dissolved[cell].v[CHEM_D];
+        auto on = starve(low, sea, 1.0f, 0.0f, 0.0f, cell, worst);
+        CHECK(worst < 1e-4);
+        float loose = 0.0f;
+        for (int c = 0; c < on->world().num_cells(); ++c) loose += on->soil().dissolved[c].v[CHEM_D];
+        CHECK(loose > plain + 1e-4f);
+        CHECK(on->creatures().size() == 0);
+    }
+    {   // On land rain carries the dead downhill.
+        auto elsewhere = [&](const Simulation& sim) {
+            float m = 0.0f;
+            for (int c = 0; c < sim.world().num_cells(); ++c)
+                if (c != steep) m += sim.soil().corpse[c].mass();
+            return m;
+        };
+        auto off = starve(steep, 0.0f, 0.0f, 0.0f, 0.0f, cell, worst);
+        auto on = starve(steep, 0.0f, 0.0f, 0.5f, 0.0f, cell, worst);
+        CHECK(worst < 1e-4);
+        CHECK(elsewhere(*on) > elsewhere(*off) + 1e-5f);
+        CHECK(on->soil().corpse[steep].mass() < off->soil().corpse[steep].mass());
+    }
+    g_laws = legacy_laws();
+}
+
 int main() {
     // Most of these tests wire the old brain (the lean, wander and throttle outputs), which
     // is what SENSOR_BRAIN 0 runs. The sensor brain, now the default, has tests of its own
@@ -2693,6 +2917,9 @@ int main() {
     test_two_input_reactions();
     test_sensor_brain();
     test_sea();
+    test_water_motors();
+    test_water_solvent();
+    test_sea_food();
     test_mouth_gate();
     test_sleep_drive();
     test_product_inhibition();

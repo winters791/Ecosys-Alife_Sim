@@ -28,7 +28,11 @@
 
 namespace luca {
 
-enum class EventKind : uint8_t { Storm, Eruption, Meteor, ClimateDrift, Count };
+// SeaVent (2026-11-13) is last, so the draws that pick the older kinds are
+// unchanged; it happens only in a world with a sea. Snapshots keep the older
+// kinds' counts in EVNT and the sea vents' in WATR.
+enum class EventKind : uint8_t { Storm, Eruption, Meteor, ClimateDrift, SeaVent, Count };
+constexpr int LEGACY_EVENT_KINDS = 4;
 
 class WorldEvents {
     friend struct SnapshotIO;   // snapshot.cpp: saves and restores the whole state

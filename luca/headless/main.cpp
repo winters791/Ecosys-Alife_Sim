@@ -38,6 +38,7 @@ void usage() {
         "                   climate drift; 1 = one every ~5,000 ticks (default 0)\n"
         "  --nutrients F    mean free matter per cell     (default 6)\n"
         "  --sea H          sea level in height units; ground below it is under water (default 0: dry)\n"
+        "  --sea-vents N    lay N hot vents on the sea floor when the world is made (default 0)\n"
         "  --interval N     ticks between metrics rows    (default 100)\n"
         "  --script FILE    god-power script (format: core/powers.hpp)\n"
         "  --follow NAME    follow a species by name (from when it appears); alerts.txt\n"
@@ -84,7 +85,7 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", a); std::exit(2); }
             return argv[++i];
         };
-        for (const char* w : {"--seed", "--size", "--pop", "--sun", "--day", "--day-swing", "--windfall", "--nutrients", "--light", "--sea"})
+        for (const char* w : {"--seed", "--size", "--pop", "--sun", "--day", "--day-swing", "--windfall", "--nutrients", "--light", "--sea", "--sea-vents"})
             if (arg_is(a, w)) world_flag = a;
         if (arg_is(a, "--events")) events_given = true;
         if (arg_is(a, "--interval")) interval_given = true;
@@ -103,6 +104,7 @@ int main(int argc, char** argv) {
         else if (arg_is(a, "--day"))         cfg.day_length = std::atoi(next());
         else if (arg_is(a, "--day-swing"))   cfg.temp_day_swing = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--sea"))         cfg.sea_level = static_cast<float>(std::atof(next()));
+        else if (arg_is(a, "--sea-vents"))   cfg.sea_vents = std::atoi(next());
         else if (arg_is(a, "--windfall"))    cfg.windfall_rate = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--events"))      cfg.event_rate = static_cast<float>(std::atof(next()));
         else if (arg_is(a, "--nutrients"))   cfg.nutrient_mean = static_cast<float>(std::atof(next()));

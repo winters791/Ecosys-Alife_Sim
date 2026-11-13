@@ -89,6 +89,25 @@ Simulation::Simulation(const SimConfig& cfg)
     for (float& v : soil_.nutrient)
         v = std::max(0.0f, cfg_.nutrient_mean) * ((1.0f - patchy) + patchy * v / mean_raw);
     lay_out_mineral();
+    lay_out_sea_vents();
+}
+
+// Hot vents on the sea floor from the start (2026-11-13; config sea_vents):
+// each at a random underwater cell, keyed by which one it is, and open for
+// good. With no sea, or none found in SEA_VENT_TRIES places, there are fewer.
+void Simulation::lay_out_sea_vents() {
+    if (cfg_.sea_vents <= 0 || world_.sea_level() <= 0.0f) return;
+    constexpr int SEA_VENT_TRIES = 64;
+    for (int k = 0; k < cfg_.sea_vents; ++k) {
+        Rng rng(draw_key(draw_seed_, Draw::SeaVents, 0, static_cast<uint64_t>(k)));
+        for (int t = 0; t < SEA_VENT_TRIES; ++t) {
+            const float x = rng.uniform(0.0f, world_.extent()), y = rng.uniform(0.0f, world_.extent());
+            if (!world_.under_water(world_.cell_index(x, y))) continue;
+            const float radius = rng.uniform(1.5f, 3.0f), strength = rng.uniform(1.5f, 3.0f);
+            world_.brush(BrushField::Vent, x, y, radius, strength);
+            break;
+        }
+    }
 }
 
 // The mineral P (docs/design/stoichiometry.md): patchier than A (rich spots,
@@ -247,6 +266,7 @@ float Simulation::sample_channel(int channel, float x, float y, const Phenotype&
             case CH_LOOSE_C:  return soil_.dissolved[c].v[CHEM_C];
             case CH_LOOSE_D:  return soil_.dissolved[c].v[CHEM_D];
             case CH_LIVING:   return biomass_[c];
+            case CH_DEPTH:    return world_.depth(c);
             default:          return 0.0f;
         }
     };
@@ -282,7 +302,7 @@ void Simulation::decide_sensor_brain(std::size_t i, int cell, const LocalEnv& en
 
     // The bus. k scales each field as a receptor would: level = m / (|m| + k),
     // contrast = (left - right) / (|left| + |right| + k).
-    static constexpr float K[CH_COUNT] = {0.5f, 0.5f, 100.0f, 6.0f, 0.01f, 0.01f, 0.01f, 1.0f};
+    static constexpr float K[CH_COUNT] = {0.5f, 0.5f, 100.0f, 6.0f, 0.01f, 0.01f, 0.01f, 1.0f, 2.0f};
     const float heading = std::atan2(c_.hy[i], c_.hx[i]);
     float size_sum[CH_COUNT] = {}, value_sum[CH_COUNT] = {};
     float left_w[CH_COUNT] = {}, right_w[CH_COUNT] = {}, left_v[CH_COUNT] = {}, right_v[CH_COUNT] = {};
@@ -542,7 +562,9 @@ void Simulation::step() {
         corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) / TOP_LEVEL * (1.0f - c_.sleep[i]) * (1.0f - c_.shut[i]) : 0.0f;   // mass a tick
         cell_corpse_demand_[cell] += corpse_want_[i];
         // Through its skin, every chemical it can burn (energy.hpp).
-        uptake_want_[i] = std::max(0.0f, uptake_rate(p)) * (1.0f - c_.sleep[i]);
+        // Water is a solvent (water stage 2): under water the skin takes up WET_UPTAKE more.
+        const float wet_uptake = world_.under_water(cell) ? 1.0f + std::max(0.0f, g_laws.WET_UPTAKE) : 1.0f;
+        uptake_want_[i] = std::max(0.0f, uptake_rate(p)) * wet_uptake * (1.0f - c_.sleep[i]);
         if (uptake_want_[i] > 0.0f)
             for (int ch = CHEM_B; ch < NCHEM; ++ch)
                 if (p.can_burn(ch)) cell_uptake_demand_[static_cast<std::size_t>(cell) * NCHEM + ch] += uptake_want_[i];
@@ -682,6 +704,7 @@ void Simulation::step() {
         // A dormant body burns less, whatever the weather.
         const float burning = cost_while_asleep(c_.sleep[i]);
         cost_upkeep_[i]  = std::max(0.0f, upkeep_cost(p, c_.age[i]) * burning);
+        if (g_laws.SUPPORT_COST > 0.0f) cost_upkeep_[i] += support_cost(p, world_.under_water(cell));   // its weight (water)
         cost_thermal_[i] = std::max(0.0f, thermal_cost(p, c_.body_temp[i]) * burning);
 
         new_x_[i] = c_.x[i];
@@ -1048,7 +1071,7 @@ void Simulation::step() {
         }
         if (tries) {
             Rng rng(draw_key(draw_seed_, Draw::Birth, tick_, c_.id[i]));
-            Genome g = mutate(c_.genome[i], rng);
+            Genome g = mutate(c_.genome[i], rng, world_.sea_level() > 0.0f ? static_cast<int>(CH_COUNT) : LAND_CHANNELS);
             const Phenotype cp = compile_phenotype(g, g.birth_size);
             // Dispersal is paid for: a child lands touching its parent, unless
             // the parent has the means to fling it further, which costs energy.
@@ -1228,7 +1251,31 @@ void Simulation::land_child(float x, float y, float ux, float uy, float dist, fl
 }
 
 // Corpses nobody eats still fall apart, slowly: their chemicals burn down to A in the soil, the energy to heat.
+float Simulation::downhill_share(int cell) const {
+    const float law = world_.under_water(cell) ? g_laws.SINKING : g_laws.RUNOFF;
+    if (law <= 0.0f) return 0.0f;
+    return std::min(law * world_.steepness(cell), 0.9f);
+}
+
 void Simulation::weather_corpses() {
+    // Corpses slide downhill (RUNOFF on land, SINKING under water,
+    // 2026-11-13): which cells give is found first, then they move, so a
+    // corpse moves one cell a pass however the cells are ordered.
+    if (g_laws.RUNOFF > 0.0f || g_laws.SINKING > 0.0f) {
+        corpse_slides_.clear();
+        Soil::each(soil_.corpse_bits, [&](std::size_t c) {
+            const int low = world_.downhill(static_cast<int>(c));
+            if (low >= 0 && soil_.corpse[c].mass() > 0.0f && downhill_share(static_cast<int>(c)) > 0.0f)
+                corpse_slides_.push_back({static_cast<int>(c), low});
+        });
+        for (const auto& [from, to] : corpse_slides_) {
+            const std::size_t f = static_cast<std::size_t>(from);
+            float p = 0.0f;
+            const Mix m = soil_.take_corpse(f, soil_.corpse[f].mass() * downhill_share(from), p);
+            soil_.add_corpse(static_cast<std::size_t>(to), m, p);
+            stats_.moved_downhill += m.energy();
+        }
+    }
     Soil::each(soil_.corpse_bits, [&](std::size_t c) {
         const float cm = soil_.corpse[c].mass();
         float& cp = soil_.corpse_p[c];
@@ -1253,8 +1300,20 @@ void Simulation::weather_corpses() {
             soil_.mineral[c] += freed;
             stats_.p_corpse_weathered += freed;
         }
-        const float de = gone.energy();
-        soil_.nutrient[c] += gone.mass();   // burned down to A
+        Mix rest = gone;
+        // Under water a share of what weathers dissolves instead (WET_DISSOLVE,
+        // 2026-11-13): it becomes loose chemicals with its energy kept, food
+        // for any skin that can burn it, rather than A and heat.
+        if (g_laws.WET_DISSOLVE > 0.0f && world_.under_water(static_cast<int>(c))) {
+            const Mix sol = gone.scaled(std::clamp(g_laws.WET_DISSOLVE, 0.0f, 1.0f));
+            rest.add(sol, -1.0f);
+            soil_.dissolved[c].add(sol);
+            soil_.mark_loose(c);
+            soil_.waste[c] = soil_.dissolved[c].energy();
+            stats_.dissolved_dead += sol.energy();
+        }
+        const float de = rest.energy();
+        soil_.nutrient[c] += rest.mass();   // burned down to A
         stats_.out_decay += de;
         stats_.energy_out += de;
     });
@@ -1419,10 +1478,13 @@ void Simulation::spread_dissolved() {
             left_[c] = 0.0f;
             return;
         }
-        const Mix part = m.scaled(WASTE_SPREAD * 0.25f);
-        const float tag_part = leaver_[c] != NO_LEAVER ? left_[c] * (WASTE_SPREAD * 0.25f) : 0.0f;
+        // Water is a solvent (water stage 2): under water a cell hands on
+        // WET_SPREAD more of its loose chemicals, at most 90% of them.
+        const float spread = world_.under_water(c) ? std::min(WASTE_SPREAD * (1.0f + std::max(0.0f, g_laws.WET_SPREAD)), 0.9f) : WASTE_SPREAD;
+        const Mix part = m.scaled(spread * 0.25f);
+        const float tag_part = leaver_[c] != NO_LEAVER ? left_[c] * (spread * 0.25f) : 0.0f;
         float& vented = soil_.vent_made[c];
-        const float vent_part = vented * (WASTE_SPREAD * 0.25f);
+        const float vent_part = vented * (spread * 0.25f);
         const int nb[4] = {x > 0 ? c - 1 : -1, x + 1 < n ? c + 1 : -1, y > 0 ? c - n : -1, y + 1 < n ? c + n : -1};
         for (int k : nb)
             if (k >= 0) {
@@ -1437,6 +1499,26 @@ void Simulation::spread_dissolved() {
                     else if (tag_part > tag_in_[k].amount) tag_in_[k] = {leaver_[c], tag_part};
                 }
             }
+        // Downhill as well (RUNOFF on land, SINKING under water, 2026-11-13):
+        // rain carries leavings down the slope, and in the sea they sink.
+        const int low = world_.downhill(c);
+        const float down = low >= 0 ? downhill_share(c) : 0.0f;
+        if (down > 0.0f) {
+            const Mix fall = m.scaled(down);
+            spread_[low].add(fall);
+            m.add(fall, -1.0f);
+            stats_.moved_downhill += fall.energy();
+            const float vent_fall = vented * down;
+            spread_vent_[low] += vent_fall;
+            vented -= vent_fall;
+            soil_.mark_loose(static_cast<std::size_t>(low));
+            if (leaver_[c] != NO_LEAVER) {
+                const float tag_fall = left_[c] * down;
+                left_[c] -= tag_fall;
+                if (tag_in_[low].species == leaver_[c]) tag_in_[low].amount += tag_fall;
+                else if (tag_fall > tag_in_[low].amount) tag_in_[low] = {leaver_[c], tag_fall};
+            }
+        }
     });
     Soil::each(soil_.loose_bits, [&](std::size_t c) {
         Mix& m = soil_.dissolved[c];
@@ -1496,9 +1578,17 @@ void Simulation::wash_soil() {
 
 void Simulation::take_census() {
     Census k;
+    const bool sea = world_.sea_level() > 0.0f;
     for (std::size_t i = 0; i < c_.size(); ++i) {
         const Phenotype& p = c_.pheno[i];
-        if (p.has_brain && p.max_speed > 0.0f) ++k.movers;
+        if (p.has_brain && p.max_speed > 0.0f) {
+            ++k.movers;
+            if (sea) {
+                const bool wet = world_.under_water(world_.cell_index(c_.x[i], c_.y[i]));
+                if (wet && p.swim_speed > p.walk_speed) ++k.swimmers;
+                if (!wet && p.walk_speed > p.swim_speed) ++k.walkers;
+            }
+        }
         if (p.sense_cells > 0) ++k.sighted;
         if (p.part_total[static_cast<int>(PartType::Armour)] > 0.0f) ++k.armoured;
         if (p.toxicity > 0.0f) ++k.poisonous;
@@ -1815,6 +1905,8 @@ void Simulation::detect_events() {
     first(scavengers_logged_, census_.scavengers, "The first scavengers: some creatures now live mostly on the dead.");
     first(cleaners_logged_, census_.cleaners, "The first cleaners: some creatures now live mostly on what others give off.");
     first(chemotrophs_logged_, census_.chemotrophs, "Life at the vents: some creatures now live mostly on what the vents make.");
+    first(swimmers_logged_, census_.swimmers, "The first swimmers: some creatures under the sea now swim better than they walk.");
+    first(ashore_logged_, census_.walkers, "Life crawls ashore: some creatures on land now walk better than they swim.");
 
     // First time the world holds 1,000 / 10,000 / 100,000 ... creatures.
     while (pop >= next_milestone_) {

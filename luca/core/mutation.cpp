@@ -79,7 +79,7 @@ void nudge_optional(float& v, float sigma, Rng& rng) {
 // The brain evolves the way the body does: mostly small nudges to what is
 // there, and now and then a change of structure. None of these knows what is
 // useful; each neuron and link costs upkeep, so what doesn't pay is lost.
-void mutate_brain(Brain& b, Rng& rng) {
+void mutate_brain(Brain& b, Rng& rng, int channels) {
     auto chance = [&](float p) { return rng.chance(std::min(1.0f, p)); };
     for (BrainLink& l : b.links)
         if (chance(P_WEIGHT)) l.weight += rng.normal() * 0.2f;
@@ -116,7 +116,7 @@ void mutate_brain(Brain& b, Rng& rng) {
         // The sensor brain (SENSOR_BRAIN) draws on every input and only the two
         // effectors; the old brain on the nine old inputs and eleven old outputs.
         const bool sensor_brain = g_laws.SENSOR_BRAIN != 0.0f;
-        const int n_in = sensor_brain ? NUM_INPUTS : LEGACY_INPUTS;
+        const int n_in = sensor_brain ? IN_BUS + 2 * channels : LEGACY_INPUTS;
         const int n_out = sensor_brain ? 4 : LEGACY_OUTPUTS;   // thrust, turn, mouth, sleep
         const int first_out = sensor_brain ? OUT_THRUST : 0;
         const uint32_t f = rng.below(static_cast<uint32_t>(n_in + b.hidden));
@@ -131,7 +131,8 @@ void mutate_brain(Brain& b, Rng& rng) {
 
 }  // namespace
 
-Genome mutate(const Genome& parent, Rng& rng) {
+Genome mutate(const Genome& parent, Rng& rng, int channels) {
+    channels = std::clamp(channels, 1, static_cast<int>(CH_COUNT));
     Genome g = parent;
     auto chance = [&](float p) { return rng.chance(std::min(1.0f, p)); };
 
@@ -175,7 +176,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
         p.type  = static_cast<PartType>(rng.below(NUM_TYPES));
         p.size  = rng.uniform(0.15f, 0.5f);
         p.theta = rng.uniform(0.0f, 6.2831853f);
-        if (g_laws.SENSOR_BRAIN != 0.0f && p.type == PartType::Sensor) p.channel = static_cast<uint8_t>(rng.below(CH_COUNT));
+        if (g_laws.SENSOR_BRAIN != 0.0f && p.type == PartType::Sensor) p.channel = static_cast<uint8_t>(rng.below(static_cast<uint32_t>(channels)));
         // A new mouth buds near the front (within P_MOUTH_FRONT radians), so a
         // mover's first mouth faces where it goes. Anywhere else, a small new
         // mouth rarely touched anything and hunting was slow to start (CLAUDE.md
@@ -191,7 +192,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
     // that became one reads whatever it read before, which is as good as random.
     if (g_laws.SENSOR_BRAIN != 0.0f)
         for (Part& p : g.parts)
-            if (p.type == PartType::Sensor && chance(P_CHANNEL)) p.channel = static_cast<uint8_t>(rng.below(CH_COUNT));
+            if (p.type == PartType::Sensor && chance(P_CHANNEL)) p.channel = static_cast<uint8_t>(rng.below(static_cast<uint32_t>(channels)));
 
     // --- Enzymes ----------------------------------------------------------------
     for (Enzyme& e : g.enzymes)
@@ -267,7 +268,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
         if (!can_act && chance(P_LOSE_BRAIN)) {
             g.brain.clear();
         } else {
-            mutate_brain(g.brain, rng);
+            mutate_brain(g.brain, rng, channels);
         }
     }
 

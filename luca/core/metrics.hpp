@@ -22,7 +22,7 @@ public:
     double out_upkeep = 0.0, out_thermal = 0.0, out_movement = 0.0;
     double out_transfer = 0.0, out_decay = 0.0, out_waste = 0.0, out_poison = 0.0;
     double eaten_living = 0.0, eaten_dead = 0.0;
-    double out_fouling = 0.0, out_waste_decay = 0.0, excreted = 0.0, eaten_waste = 0.0;
+    double out_fouling = 0.0, out_waste_decay = 0.0, excreted = 0.0, eaten_waste = 0.0, dissolved_dead = 0.0, moved_downhill = 0.0;
     double in_windfall = 0.0, in_vent = 0.0, in_meteor = 0.0, grown_mass = 0.0;
     double two_flow = 0.0, matter_in = 0.0;
     double p_in = 0.0, p_taken_up = 0.0, p_given_off = 0.0, p_corpse_eaten = 0.0, p_corpse_weathered = 0.0;

@@ -90,8 +90,15 @@ float thermal_cost(const Phenotype& p, float body_temp);
 // `height_gain` (negative = going downhill). Part of it is paid per world
 // unit, whatever the speed; the rest grows with speed squared.
 // wet: the body is under water (water stage 3): BUOYANCY takes that share off
-// the per-mass cost of moving, and climbing costs nothing.
+// the cost of moving and of climbing.
 float movement_cost(const Phenotype& p, float distance, float height_gain, bool wet = false);
+
+// Holding up its own weight (2026-11-13; law SUPPORT_COST, 0 = off): every
+// body pays SUPPORT_COST x mass^(4/3) a tick, booked with upkeep, so a big
+// body pays more for support per unit of mass than a small one. Under water
+// BUOYANCY of it is carried by the water. Asleep or awake, a body still has
+// its weight.
+float support_cost(const Phenotype& p, bool wet);
 
 // Cost to the parent of flinging a child of `child_mass` a `distance` (world
 // units) beyond where it would land by itself, touching the parent.

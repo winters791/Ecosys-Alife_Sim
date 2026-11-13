@@ -21,7 +21,7 @@ const char* part_name(PartType t) {
 }
 
 const char* channel_name(int c) {
-    static const char* const NAMES[CH_COUNT] = {"light", "warmth", "corpse", "soil", "loose_b", "loose_c", "loose_d", "living"};
+    static const char* const NAMES[CH_COUNT] = {"light", "warmth", "corpse", "soil", "loose_b", "loose_c", "loose_d", "living", "depth"};
     return c >= 0 && c < CH_COUNT ? NAMES[c] : "?";
 }
 

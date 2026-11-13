@@ -285,8 +285,42 @@ void test_world_events() {
         }
         CHECK(came && went && sim.events().count(EventKind::Storm) == 1);
     }
-    {   // A volcano: the hill stays, the heat and the vent fade.
+    // Raise the sea over every hill a volcano could make (vents open only under water).
+    auto flood = [](Simulation& sim) {
+        float top = 0.0f;
+        for (int c = 0; c < sim.world().num_cells(); ++c) top = std::max(top, sim.world().height(c));
+        PowerCommand sea;
+        sea.kind = PowerKind::Sea;
+        sea.amount = top + 30.0f;
+        sim.cast(sea);
+        sim.flush_powers();
+    };
+    {   // A volcano on land is hot rock and a hill, with no vent.
         Simulation sim(cfg);
+        sim.trigger_event(EventKind::Eruption);
+        for (int t = 0; t < 400; ++t) sim.step();
+        CHECK(!sim.world().any_vents());
+    }
+    {   // Sea vents need a sea: with none, nothing opens; with one, a vent opens under water and closes again.
+        Simulation dry(cfg);
+        dry.trigger_event(EventKind::SeaVent);
+        for (int t = 0; t < 400; ++t) dry.step();
+        CHECK(!dry.world().any_vents() && dry.events().count(EventKind::SeaVent) == 0);
+        Simulation sim(cfg);
+        flood(sim);
+        sim.trigger_event(EventKind::SeaVent);
+        for (int t = 0; t < 400; ++t) sim.step();
+        CHECK(sim.world().any_vents() && sim.events().count(EventKind::SeaVent) == 1);
+        bool wet = true;
+        for (int c = 0; c < sim.world().num_cells(); ++c)
+            if (sim.world().vent(c) > 0.0f) wet = wet && sim.world().under_water(c);
+        CHECK(wet);
+        for (int t = 0; t < 61000; ++t) sim.step();
+        CHECK(!sim.world().any_vents());
+    }
+    {   // A volcano under the sea: the hill stays, the heat and the vent fade.
+        Simulation sim(cfg);
+        flood(sim);
         snapshot(sim.world(), h0, t0);
         sim.trigger_event(EventKind::Eruption);
         for (int t = 0; t < 400; ++t) sim.step();

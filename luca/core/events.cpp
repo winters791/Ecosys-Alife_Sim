@@ -14,6 +14,7 @@ constexpr float PER_100K[static_cast<int>(EventKind::Count)] = {
     2.0f,   // eruptions: a new hill with a hot vent in it, cooling over weeks
     2.0f,   // meteors: a crater and a burst of heat; now and then a dark winter
     4.0f,   // climate drift: the whole world a degree or two warmer or cooler
+    4.0f,   // sea vents: a hot vent opens on the sea floor (only with a sea)
 };
 
 // Storms: a cold spot that rolls in, sits, and rolls out.
@@ -29,6 +30,13 @@ constexpr float ERUPT_HEAT       = 15.0f;   // °C, over 1.5 x the cone
 constexpr float ERUPT_VENT       = 2.0f;    // vent strength at the crater
 constexpr uint32_t ERUPT_RISE = 300;
 constexpr uint32_t ERUPT_COOL_MIN = 20000, ERUPT_COOL_MAX = 40000;
+
+// Sea vents: hot vents open only under water, and close again after months.
+constexpr float SEAVENT_RADIUS_MIN = 1.5f, SEAVENT_RADIUS_MAX = 3.0f;
+constexpr float SEAVENT_MIN = 1.5f, SEAVENT_MAX = 3.0f;   // strength at the centre
+constexpr uint32_t SEAVENT_OPEN = 300;
+constexpr uint32_t SEAVENT_LIFE_MIN = 30000, SEAVENT_LIFE_MAX = 60000;
+constexpr int SEAVENT_TRIES = 32;                          // places tried before giving up
 
 // Meteors: a crater with a rim, a flash of heat; sometimes dust that dims the sun.
 constexpr float METEOR_RADIUS_MIN = 2.5f, METEOR_RADIUS_MAX = 6.0f;
@@ -106,6 +114,7 @@ void WorldEvents::update(uint64_t tick, const World& world, PowerSystem& powers,
     for (int k = 0; k < static_cast<int>(EventKind::Count); ++k) {
         acc += PER_100K[k];
         if (u < acc) {
+            if (static_cast<EventKind>(k) == EventKind::SeaVent && world.sea_level() <= 0.0f) return;   // no sea, no sea vent
             start(static_cast<EventKind>(k), tick, rng, world, powers, chronicle);
             return;
         }
@@ -142,11 +151,15 @@ void WorldEvents::start(EventKind kind, uint64_t tick, Rng& rng, const World& wo
             const uint32_t cool = between(rng, ERUPT_COOL_MIN, ERUPT_COOL_MAX);
             powers.cast(brush(PowerKind::Terrain, tick, x, y, r, h, ERUPT_RISE));
             powers.cast(brush(PowerKind::Heat, tick, x, y, 1.5f * r, ERUPT_HEAT, ERUPT_RISE));
-            powers.cast(brush(PowerKind::Vent, tick, x, y, 0.6f * r, ERUPT_VENT, ERUPT_RISE));
+            // Hot vents open only under water (2026-11-13): a volcano whose
+            // crater stays below the sea gets one; one on land is hot rock only.
+            const bool under = world.height(world.cell_index(x, y)) + h < world.sea_level();
+            if (under) powers.cast(brush(PowerKind::Vent, tick, x, y, 0.6f * r, ERUPT_VENT, ERUPT_RISE));
             // The new hill stays; the heat and the vent fade together.
             powers.cast(brush(PowerKind::Heat, tick + ERUPT_RISE, x, y, 1.5f * r, -ERUPT_HEAT, cool));
-            powers.cast(brush(PowerKind::Vent, tick + ERUPT_RISE, x, y, 0.6f * r, -ERUPT_VENT, cool));
-            chronicle.add(tick, "A volcano erupts in " + where + ". A hot vent opens in its crater.");
+            if (under) powers.cast(brush(PowerKind::Vent, tick + ERUPT_RISE, x, y, 0.6f * r, -ERUPT_VENT, cool));
+            chronicle.add(tick, under ? "A volcano rises from the sea floor in " + where + ". A hot vent opens in its crater."
+                                      : "A volcano erupts in " + where + ".");
             later(tick + ERUPT_RISE + cool, "The volcano in " + where + " falls quiet.");
             break;
         }
@@ -176,6 +189,29 @@ void WorldEvents::start(EventKind kind, uint64_t tick, Rng& rng, const World& wo
             const std::string way = step >= 0.0f ? "warm" : "cool";
             chronicle.add(tick, "The climate begins to " + way + ".");
             later(tick + over, "The climate has " + way + "ed by " + degrees(step) + " °C.");
+            break;
+        }
+        case EventKind::SeaVent: {
+            // Somewhere under water: the first spot drawn, or another try.
+            float vx = x, vy = y;
+            bool found = world.under_water(world.cell_index(vx, vy));
+            for (int t = 0; t < SEAVENT_TRIES && !found; ++t) {
+                vx = rng.uniform(0.0f, world.extent());
+                vy = rng.uniform(0.0f, world.extent());
+                found = world.under_water(world.cell_index(vx, vy));
+            }
+            if (!found) {   // a sea too small to find: nothing happens
+                --counts_[static_cast<int>(kind)];
+                break;
+            }
+            const float r = rng.uniform(SEAVENT_RADIUS_MIN, SEAVENT_RADIUS_MAX);
+            const float strength = rng.uniform(SEAVENT_MIN, SEAVENT_MAX);
+            const uint32_t life = between(rng, SEAVENT_LIFE_MIN, SEAVENT_LIFE_MAX);
+            const std::string at = region_name(world, vx, vy);
+            powers.cast(brush(PowerKind::Vent, tick, vx, vy, r, strength, SEAVENT_OPEN));
+            powers.cast(brush(PowerKind::Vent, tick + SEAVENT_OPEN + life, vx, vy, r, -strength, SEAVENT_OPEN));
+            chronicle.add(tick, "A hot vent opens on the sea floor in " + at + ".");
+            later(tick + 2 * SEAVENT_OPEN + life, "The sea vent in " + at + " goes cold.");
             break;
         }
         case EventKind::Count:

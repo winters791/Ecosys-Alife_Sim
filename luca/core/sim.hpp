@@ -49,6 +49,8 @@ struct TickStats {
     double eaten_dead      = 0.0;  // arrived from corpses
     double excreted        = 0.0;  // given off into the cell: meals spilled, chemicals it can't burn
     double eaten_waste     = 0.0;  // taken up from the cell's loose chemicals
+    double dissolved_dead  = 0.0;  // energy of corpses that dissolved under water (WET_DISSOLVE)
+    double moved_downhill  = 0.0;  // energy of loose chemicals and corpses carried downhill (RUNOFF, SINKING)
     // Chemistry stage 4 (observation): units turned over by two-input enzymes.
     double two_flow        = 0.0;
     // Stoichiometry (docs/design/stoichiometry.md): flows of the mineral P (units).
@@ -120,6 +122,8 @@ struct Census {
     std::size_t sighted = 0;      // has a sensor
     std::size_t armoured = 0;
     std::size_t poisonous = 0;
+    std::size_t swimmers = 0;     // water stage 3: movers under water that swim faster than they walk
+    std::size_t walkers = 0;      // movers on land that walk faster than they swim (only counted with a sea)
 };
 
 class Simulation {
@@ -228,6 +232,8 @@ private:
     void detect_events();
 
     void take_census();
+    void lay_out_sea_vents();
+    float downhill_share(int cell) const;   // RUNOFF on land, SINKING under water, by steepness   // config sea_vents, at the world's making
     // Every SPLIT_INTERVAL ticks: split any big species that has become two
     // separate clusters of genomes (design doc 9.3 step 3). No randomness.
     void check_splits();
@@ -328,10 +334,12 @@ private:
     bool        extinct_logged_ = false;
     bool        movers_logged_ = false, hunters_logged_ = false, scavengers_logged_ = false, cleaners_logged_ = false, chemotrophs_logged_ = false;
     bool        sighted_logged_ = false, armoured_logged_ = false, poisonous_logged_ = false, transfer_logged_ = false;
+    bool        swimmers_logged_ = false, ashore_logged_ = false;   // water stage 3 (snapshot section WATR)
 
     // Scratch buffers, reused every tick to avoid allocation.
     std::vector<int>   cell_of_;
     std::vector<float> demand_;
+    std::vector<std::pair<int, int>> corpse_slides_;   // (from, to) cells whose corpses slide downhill this pass
     std::vector<float> cell_demand_;
     std::vector<float> gain_;
     std::vector<float> cost_upkeep_, cost_thermal_, cost_move_;

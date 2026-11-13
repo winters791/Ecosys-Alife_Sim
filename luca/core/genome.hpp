@@ -73,8 +73,13 @@ enum SenseChannel : int {
     CH_LOOSE_C,
     CH_LOOSE_D,
     CH_LIVING,     // living mass
+    CH_DEPTH,      // depth of water (0 on land; water, 2026-11-13): drawn by mutation only in a world with a sea
     CH_COUNT
 };
+// The channels a world without a sea can evolve: everything before CH_DEPTH.
+// Mutation draws new channels and brain inputs from these only, so a dry
+// world's runs are the same as before the depth sense existed.
+constexpr int LAND_CHANNELS = CH_DEPTH;
 const char* channel_name(int c);
 
 // --- The brain ---------------------------------------------------------------

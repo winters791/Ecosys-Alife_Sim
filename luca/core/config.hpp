@@ -36,6 +36,10 @@ struct SimConfig {
     // depth (laws.hpp LIGHT_DEPTH) and nothing else changes yet. 0 = no sea. A default that
     // drowns a third of the map waits for the judge (CLAUDE.md 14.7, step 6).
     float sea_level = 0.0f;
+    // Hot vents laid on the sea floor when the world is made (2026-11-13): that
+    // many, at random underwater cells, strength 1.5 to 3. They stay open.
+    // 0 = none; nothing happens without a sea.
+    int sea_vents = 0;
 
     // Day and night. Light follows the sun: full by day, zero at night, with a
     // short dawn and dusk. Noon is twice sun_strength, so the average over a

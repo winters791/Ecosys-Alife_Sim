@@ -27,6 +27,8 @@ void IntervalTotals::add(const TickStats& s) {
     out_waste_decay += s.out_waste_decay;
     excreted     += s.excreted;
     eaten_waste  += s.eaten_waste;
+    dissolved_dead += s.dissolved_dead;
+    moved_downhill += s.moved_downhill;
     in_windfall  += s.in_windfall;
     in_vent      += s.in_vent;
     in_meteor    += s.in_meteor;
@@ -89,7 +91,7 @@ bool MetricsWriter::open(const std::string& path) {
             "in_windfall,windfalls,in_vent,in_meteor,chemotrophs,vent_loose,growing,mean_birth_size,grown_mass,"
             "neurons,slow_neurons,mean_tau,"
             "pool_B,pool_C,pool_D,tissue_B,tissue_C,tissue_D,mean_enzymes,rx_AB,rx_AC,rx_AD,rx_BC,rx_BD,rx_CD,rx_two,two_flow,matter_in,"
-            "p_total,p_in,p_soil,p_corpse,p_bodies,p_taken_up,p_given_off,p_corpse_eaten,p_corpse_weathered,p_limited,energy_limited,eyed,steering,rooted_brains,gated,sleep_wired\n";
+            "p_total,p_in,p_soil,p_corpse,p_bodies,p_taken_up,p_given_off,p_corpse_eaten,p_corpse_weathered,p_limited,energy_limited,eyed,steering,rooted_brains,gated,sleep_wired,swimmers,walkers,wet_bodies,wet_radius,dry_radius,dissolved_dead,moved_downhill\n";
     return true;
 }
 
@@ -118,6 +120,14 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     double pool_m[NCHEM] = {}, tissue_m[NCHEM] = {}, sum_enzymes = 0;
     std::size_t rx[NCHEM][NCHEM] = {};   // one-to-one reactions
     std::size_t rx_two = 0;  // bodies carrying any two-input enzyme
+    // Water stage 3: how many bodies live under water, and how big bodies are there and on land.
+    std::size_t wet_bodies = 0;
+    double wet_r = 0.0, dry_r = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const bool wet = sim.world().under_water(sim.world().cell_index(c.x[i], c.y[i]));
+        (wet ? wet_r : dry_r) += c.genome[i].core_radius;
+        wet_bodies += wet;
+    }
     for (std::size_t i = 0; i < n; ++i) {
         for (int k = 0; k < NCHEM; ++k) { pool_m[k] += c.pool[i].v[k]; tissue_m[k] += c.tissue[i].v[k]; }
         const Phenotype& ph = c.pheno[i];
@@ -224,7 +234,10 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
         for (std::size_t i = 0; i < sim.creatures().size(); ++i) bodies_p += sim.creatures().tissue_p[i] + sim.creatures().pool_p[i];
         out_ << soil_p + corpse_p + bodies_p << ',' << t.p_in << ',' << soil_p << ',' << corpse_p << ',' << bodies_p << ','
              << t.p_taken_up << ',' << t.p_given_off << ',' << t.p_corpse_eaten << ',' << t.p_corpse_weathered << ','
-             << t.p_limited << ',' << t.energy_limited << ',' << eyed << ',' << steering << ',' << rooted_brains << ',' << gated << ',' << sleep_wired << '\n';
+             << t.p_limited << ',' << t.energy_limited << ',' << eyed << ',' << steering << ',' << rooted_brains << ',' << gated << ',' << sleep_wired << ','
+         << k.swimmers << ',' << k.walkers << ',' << wet_bodies << ','
+         << (wet_bodies ? wet_r / wet_bodies : 0.0) << ',' << (n > wet_bodies ? dry_r / (n - wet_bodies) : 0.0) << ','
+         << t.dissolved_dead << ',' << t.moved_downhill << '\n';
     }
     out_.flush();
     return audit;

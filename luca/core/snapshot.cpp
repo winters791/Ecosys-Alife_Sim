@@ -206,6 +206,7 @@ void config_fields(SimConfig& c, F&& f) {
     f("light_mode", c.light_mode);
     f("sun_strength", c.sun_strength);
     f("sea_level", c.sea_level);
+    f("sea_vents", c.sea_vents);
     f("gradient_min", c.gradient_min);
     f("slope_shade", c.slope_shade);
     f("day_length", c.day_length);
@@ -282,6 +283,20 @@ struct SnapshotIO {
     }
 
     template <class IO>
+    static void water_detectors(IO& io, Simulation& s) {
+        // Water stage 3's two firsts, in a section of their own so older files still load.
+        flag(io, s.swimmers_logged_);
+        flag(io, s.ashore_logged_);
+        io(s.events_.counts_[static_cast<int>(EventKind::SeaVent)]);
+        Census& k = s.census_;
+        for (std::size_t* v : {&k.swimmers, &k.walkers}) {
+            uint64_t x = *v;
+            io(x);
+            *v = static_cast<std::size_t>(x);
+        }
+    }
+
+    template <class IO>
     static void detectors(IO& io, Simulation& s) {
         uint64_t peak = s.peak_pop_, from = s.crash_from_, milestone = s.next_milestone_, day_peak = s.day_peak_;
         io(peak);
@@ -322,7 +337,7 @@ struct SnapshotIO {
     static void events(IO& io, WorldEvents& e) {
         io(e.seed_);
         io(e.rate_);
-        for (uint32_t& c : e.counts_) io(c);
+        for (int k = 0; k < LEGACY_EVENT_KINDS; ++k) io(e.counts_[k]);   // later kinds sit in WATR
         io.list(e.notes_, [](auto& r, WorldEvents::Note& n) {
             r(n.tick);
             r(n.text);
@@ -632,6 +647,7 @@ std::string SnapshotIO::to_bytes(const Simulation& sim_in) {
     section("ALRT", [&](auto& io) { chronicle(io, s.alerts_); });
     section("WTCH", [&](auto& io) { watches(io, s); });
     section("SCEN", [&](auto& io) { scenario(io, s.scenario_); });
+    section("WATR", [&](auto& io) { water_detectors(io, s); });
     return head.str() + out.buf;
 }
 
@@ -749,6 +765,7 @@ std::unique_ptr<Simulation> SnapshotIO::from_bytes(const std::string& bytes, std
     ok = ok && read("ALRT", [&](In& io) { chronicle(io, s.alerts_); });
     ok = ok && read("WTCH", [&](In& io) { watches(io, s); });
     ok = ok && read("SCEN", [&](In& io) { scenario(io, s.scenario_); });
+    ok = ok && read("WATR", [&](In& io) { water_detectors(io, s); });
     if (s.scenario_.id >= scenario_list().size()) s.scenario_ = ScenarioState{};   // one this build doesn't know
     if (!ok) {
         error = "snapshot is damaged";

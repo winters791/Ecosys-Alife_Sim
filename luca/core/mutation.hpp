@@ -8,7 +8,9 @@
 
 namespace luca {
 
-Genome mutate(const Genome& parent, Rng& rng);
+// channels: how many sense channels it may draw from (CH_COUNT with a sea,
+// LAND_CHANNELS without; see genome.hpp).
+Genome mutate(const Genome& parent, Rng& rng, int channels = LAND_CHANNELS);
 
 // Gene transfer: copy the blueprint of one of `from`'s parts, picked at
 // random, into `to` as a small bud. Returns false (and changes nothing) if

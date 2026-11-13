@@ -138,10 +138,17 @@ float thermal_cost(const Phenotype& p, float body_temp) {
 
 float movement_cost(const Phenotype& p, float distance, float height_gain, bool wet) {
     // A long body slips through more easily; a boxy one drags (body.hpp). Climbing is the same for all.
-    // Water carries a body's weight: a share off moving and no climbing (water stage 3).
+    // Water carries BUOYANCY of a body's weight, off moving and climbing alike (water stage 3),
+    // so with BUOYANCY 0 water costs the same as land.
     const float carried = wet ? 1.0f - std::clamp(g_laws.BUOYANCY, 0.0f, 1.0f) : 1.0f;
-    const float climb = wet ? 0.0f : CLIMB_COST * std::max(0.0f, height_gain);
-    return p.mass * (carried * p.drag * (TRANSPORT_COST * distance + MOVE_COST * distance * distance) + climb);
+    const float climb = CLIMB_COST * std::max(0.0f, height_gain);
+    return p.mass * carried * (p.drag * (TRANSPORT_COST * distance + MOVE_COST * distance * distance) + climb);
+}
+
+float support_cost(const Phenotype& p, bool wet) {
+    if (g_laws.SUPPORT_COST <= 0.0f || p.mass <= 0.0f) return 0.0f;
+    const float carried = wet ? 1.0f - std::clamp(g_laws.BUOYANCY, 0.0f, 1.0f) : 1.0f;
+    return g_laws.SUPPORT_COST * carried * p.mass * std::cbrt(p.mass);   // mass^(4/3)
 }
 
 float throw_cost(float child_mass, float distance) {
