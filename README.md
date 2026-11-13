@@ -6,29 +6,22 @@ You shape the world and its laws, never the creatures: raise land, open hot vent
 
 ![An evolved world at tick 30,000: 5,900 creatures in 120 species](docs/images/world.png)
 
-## What's inside
+## Hightlights
 
-- **Energy is the only currency.** Moving, sensing, thinking, growing and simply existing cost energy. A body that can't take in more than it spends dies. Energy and matter are both audited every interval, so nothing evolves to exploit a leak.
-- **Chemistry, not diet genes.** Matter comes in four chemicals, A to D, each at a fixed energy level. Enzymes are genes: photosynthesis is light running A → D uphill, and respiration, digestion and living off vents are all reactions running downhill. What one body gives off is another body's food, or its poison.
-- **Bodies built from parts.** Sun patches, mouths, tails, legs, eyes, armour, fat stores and poison, each placed at an angle on the outline (mouths and sun patches can grow on stalks). Every part costs mass and upkeep, and where it sits matters: a mouth only bites what lies in its arc, and armour only guards what it covers.
-- **Evolved brains.** Each brain is a small continuous-time recurrent network (CTRNN), with structure and time constants under mutation. Sensors read a field (light, warmth, the dead, loose chemicals, the living, water depth) at a point. The brain drives thrust, turning, the mouth and sleep.
-- **A world with places.** A heightmap with slopes, shade, cold nights, climate drift, storms, eruptions, meteors, hot vents and a sea that dims the light with depth.
-- **Species are detected, not declared.** Genome distance assigns species at birth, and periodic checks split a species that has drifted into two clusters. Every species gets a procedural name, an entry in the chronicle and a place in the tree of life.
+- **Energy as Currency.** Moving, sensing, thinking, growing and simply existing cost energy. A body that can't take in more than it spends dies. Energy and matter are both audited every interval, so nothing evolves to exploit a leak.
+- **Chemistry.** Matter comes in four chemicals, A to D, each at a fixed energy level. Enzymes are genes: photosynthesis is light running A → D uphill, and respiration, digestion and living off vents are all reactions running downhill. What one body gives off is another body's food, or its poison.
+- **Evolving Bodies.** Sun patches, mouths, tails, legs, eyes, armour, fat stores and poison, each placed at an angle on the outline (mouths and sun patches can grow on stalks). Every part costs mass and upkeep, and where it sits matters: a mouth only bites what lies in its arc, and armour only guards what it covers.
+- **Evolving brains.** Each brain is a small continuous-time recurrent network (CTRNN), with structure and time constants under mutation. Sensors read a field (light, warmth, the dead, loose chemicals, the living, water depth) at a point. The brain drives thrust, turning, the mouth and sleep.
+- **Specicies Detection from genome** Genome distance assigns species at birth, and periodic checks split a species that has drifted into two clusters. Every species gets a procedural name, an entry in the chronicle and a place in the tree of life.
 - **Deterministic and fast.** The core is plain C++20 with no engine dependency. Data is stored as one array per field, neighbour queries go through a spatial grid, and every random draw is keyed. The same seed always gives the same world.
 
 ## A tour
-
-### The world, up close
 
 Creatures are pixel sprites drawn straight from their genomes: leaves are green, mouths red, armour grey plates, tails wiggle and legs step. Pick any creature to open the inspector: its species, diet, enzymes, energy, body and brain, updated live as it moves.
 
 ![Close-up of an evolved forest of plants and mixotrophs](docs/images/closeup.png)
 
 ![The inspector following one creature](docs/images/inspector.png)
-
-### God powers and overlays
-
-Brushes raise and lower land, warm or chill a spot, and open vents. Global buttons dim the sun or raise the sea. Overlays show temperature, light, nutrients, the dead, loose chemicals, vents and mineral. The world also acts on its own (storms, eruptions, meteors, climate drift) at a rate you set.
 
 | A sea at height 12 | Temperature overlay |
 | --- | --- |
