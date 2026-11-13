@@ -89,7 +89,7 @@ bool MetricsWriter::open(const std::string& path) {
             "in_windfall,windfalls,in_vent,in_meteor,chemotrophs,vent_loose,growing,mean_birth_size,grown_mass,"
             "neurons,slow_neurons,mean_tau,"
             "pool_B,pool_C,pool_D,tissue_B,tissue_C,tissue_D,mean_enzymes,rx_AB,rx_AC,rx_AD,rx_BC,rx_BD,rx_CD,rx_two,two_flow,matter_in,"
-            "p_total,p_in,p_soil,p_corpse,p_bodies,p_taken_up,p_given_off,p_corpse_eaten,p_corpse_weathered,p_limited,energy_limited,eyed,steering\n";
+            "p_total,p_in,p_soil,p_corpse,p_bodies,p_taken_up,p_given_off,p_corpse_eaten,p_corpse_weathered,p_limited,energy_limited,eyed,steering,rooted_brains,gated\n";
     return true;
 }
 
@@ -105,7 +105,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
     // SLOW_TAU ticks or more), and their time constants' geometric mean.
     constexpr float SLOW_TAU = 30.0f;
     std::size_t neurons = 0, slow_neurons = 0;
-    std::size_t eyed = 0, steering = 0;   // running brains with a sensor point; with a direct link side contrast -> turn (SENSOR_BRAIN)
+    std::size_t eyed = 0, steering = 0, rooted_brains = 0, gated = 0;   // running brains with a sensor point; with a direct link side contrast -> turn (SENSOR_BRAIN)
     double sum_log_tau = 0.0;
     int max_neurons = 0;
     double sum_dormancy = 0, sum_birth = 0;
@@ -147,6 +147,9 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
         if (c.pheno[i].has_brain) {   // brains that are actually running
             ++brains;
             eyed += c.brain[i].sensors > 0;
+            rooted_brains += c.pheno[i].max_speed <= 0.0f;
+            for (int k = 0; k < c.brain[i].links; ++k)
+                if (c.brain[i].link[k].to == output_node(OUT_MOUTH) && std::abs(c.brain[i].link[k].weight) > 0.05f) { ++gated; break; }
             for (int k = 0; k < c.brain[i].links; ++k) {
                 const BrainLink& l = c.brain[i].link[k];
                 if (l.to == output_node(OUT_TURN) && l.from >= IN_BUS && ((l.from - IN_BUS) & 1) && std::abs(l.weight) > 0.05f) { ++steering; break; }
@@ -219,7 +222,7 @@ double MetricsWriter::write_row(const Simulation& sim, const IntervalTotals& t) 
         for (std::size_t i = 0; i < sim.creatures().size(); ++i) bodies_p += sim.creatures().tissue_p[i] + sim.creatures().pool_p[i];
         out_ << soil_p + corpse_p + bodies_p << ',' << t.p_in << ',' << soil_p << ',' << corpse_p << ',' << bodies_p << ','
              << t.p_taken_up << ',' << t.p_given_off << ',' << t.p_corpse_eaten << ',' << t.p_corpse_weathered << ','
-             << t.p_limited << ',' << t.energy_limited << ',' << eyed << ',' << steering << '\n';
+             << t.p_limited << ',' << t.energy_limited << ',' << eyed << ',' << steering << ',' << rooted_brains << ',' << gated << '\n';
     }
     out_.flush();
     return audit;

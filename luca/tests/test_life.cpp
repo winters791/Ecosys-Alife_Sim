@@ -320,6 +320,30 @@ void test_sensor_brain() {
     g_laws.SENSOR_BRAIN = 0.0f;
 }
 
+// 14.9 stage 2: a brain on a body that cannot move can shut its mouth.
+void test_mouth_gate() {
+    using namespace luca;
+    g_laws.SENSOR_BRAIN = 1.0f;
+    auto drained = [](bool shut_it) {
+        SimConfig cfg = small_config();
+        cfg.nutrient_mean = 0.0f;
+        Simulation sim(cfg);
+        Genome hunter = with_part(PartType::Absorber, 1.5f);
+        hunter.brain.connect(input_node(IN_BIAS), output_node(OUT_MOUTH), shut_it ? -3.0f : 0.5f);   // shut, or just open (the default)
+        const Phenotype p = compile_phenotype(hunter);
+        CHECK(p.has_brain && p.max_speed <= 0.0f);   // a brain with no motor, driving a mouth
+        sim.add_creature(24.2f, 6.5f, 100.0f, aim_east(sim, hunter));
+        sim.add_creature(24.6f, 6.0f, 300.0f, make_luca());
+        double eaten = 0.0;
+        for (int t = 0; t < 40; ++t) { sim.step(); eaten += sim.last_stats().eaten_living; }
+        return eaten;
+    };
+    const double open_mouth = drained(false), shut_mouth = drained(true);
+    CHECK(open_mouth > 0.0);
+    CHECK(shut_mouth < 0.1 * open_mouth);   // it shuts from the second tick: the brain's word is read one tick late
+    g_laws.SENSOR_BRAIN = 0.0f;
+}
+
 // One tick-by-tick audit helper: returns the worst relative error seen.
 double run_audited(luca::Simulation& sim, int ticks) {
     double start = sim.stored_energy(), in = 0, out = 0, worst = 0;
@@ -2579,6 +2603,7 @@ int main() {
     test_windfalls();
     test_two_input_reactions();
     test_sensor_brain();
+    test_mouth_gate();
     test_product_inhibition();
     test_creature_files_and_meteors();
     test_snapshot_round_trip();

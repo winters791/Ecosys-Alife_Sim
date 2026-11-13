@@ -14,7 +14,7 @@ const char* const INPUT_NAMES[NUM_INPUTS] = {"bias", "hunger", "light", "crowd",
     "light_level", "light_side", "warmth_level", "warmth_side", "corpse_level", "corpse_side", "soil_level", "soil_side",
     "loose_b_level", "loose_b_side", "loose_c_level", "loose_c_side", "loose_d_level", "loose_d_side", "living_level", "living_side"};
 const char* const OUTPUT_NAMES[NUM_OUTPUTS] = {"light", "biomass", "corpse", "comfort", "nutrient", "kin",
-                                               "bigger", "moving", "wander", "inertia", "throttle", "thrust", "turn"};
+                                               "bigger", "moving", "wander", "inertia", "throttle", "thrust", "turn", "mouth"};
 const char* const PART_WORDS[static_cast<int>(PartType::Count)] = {"photo", "absorber", "flagellum", "legs",
                                                                    "sensor", "armour", "storage", "poison"};
 

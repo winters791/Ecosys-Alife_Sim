@@ -17,7 +17,7 @@ const INPUT_LABELS := ["Always on", "Hunger", "Light here", "Crowded", "Too cold
 		"Eyes: light", "Eyes: light L-R", "Eyes: warmth", "Eyes: warmth L-R", "Eyes: the dead", "Eyes: dead L-R", "Eyes: soil", "Eyes: soil L-R",
 		"Eyes: loose B", "Eyes: B L-R", "Eyes: loose C", "Eyes: C L-R", "Eyes: loose D", "Eyes: D L-R", "Eyes: the living", "Eyes: living L-R"]
 const OUTPUT_LABELS := ["Seek light", "Seek the living", "Seek the dead", "Seek comfort", "Seek rich soil", "Seek kin",
-		"Seek bigger", "Seek movers", "Wander", "Keep going", "Speed", "Thrust", "Turn"]
+		"Seek bigger", "Seek movers", "Wander", "Keep going", "Speed", "Thrust", "Turn", "Mouth"]
 const OUTPUT_NEEDS_EYES := 8   # the first eight urges lean along what a sensor feels
 const BG := Color(0.06, 0.068, 0.09)
 const BOX := Color(0.13, 0.15, 0.19)

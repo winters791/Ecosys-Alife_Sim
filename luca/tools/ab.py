@@ -51,6 +51,8 @@ METRICS = [
     ("hunters", "hunters", "mean"),
     ("eyed", "movers with eyes", "mean"),
     ("steering", "steered by side contrast", "mean"),
+    ("rooted_brains", "brains on rooted bodies", "mean"),
+    ("gated", "brains wired to a mouth", "mean"),
     ("scavengers", "scavengers", "mean"),
     ("cleaners", "cleaners", "mean"),
     ("chemotrophs", "vent-fed", "mean"),

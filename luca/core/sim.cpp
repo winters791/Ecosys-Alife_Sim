@@ -309,6 +309,8 @@ void Simulation::decide_sensor_brain(std::size_t i, int cell, const LocalEnv& en
 
     float w[NUM_OUTPUTS];
     think(plan, c_.brain_state[i], in, w);
+    c_.shut[i] = 1.0f - std::clamp(1.0f + w[OUT_MOUTH], 0.0f, 1.0f);   // read by the next tick's contact
+    if (p.max_speed <= 0.0f) return;                                     // a brain on a body that cannot move only gates its mouth
     const float thrust = std::clamp(g_laws.THRUST_BASE + w[OUT_THRUST], 0.0f, 1.0f);   // THRUST_BASE 0.5 moves by default, as the old throttle did
     const float turn = std::clamp(w[OUT_TURN], -1.0f, 1.0f);
     const float dtheta = turn * g_laws.TURN_RATE;
@@ -533,7 +535,7 @@ void Simulation::step() {
         demand_[i] = dark ? 0.0f : std::max(0.0f, light_demand(p, world_.env(cell)) * light_while_moving(c_.moved[i]) * c_.unfold[i] * (1.0f - c_.sleep[i]));
         gain_[i] = demand_[i];
         cell_demand_[cell] += demand_[i];
-        corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) / TOP_LEVEL * (1.0f - c_.sleep[i]) : 0.0f;   // mass a tick
+        corpse_want_[i] = p.absorb > 0.0f ? std::max(0.0f, corpse_demand(p)) / TOP_LEVEL * (1.0f - c_.sleep[i]) * (1.0f - c_.shut[i]) : 0.0f;   // mass a tick
         cell_corpse_demand_[cell] += corpse_want_[i];
         // Through its skin, every chemical it can burn (energy.hpp).
         uptake_want_[i] = std::max(0.0f, uptake_rate(p)) * (1.0f - c_.sleep[i]);
@@ -577,7 +579,7 @@ void Simulation::step() {
                         if (d <= p.reach) pull = mine.mouth[dir];
                         else pull = d <= std::min(p.reach + mine.stalk[dir], MAX_REACH) ? mine.far_mouth[dir] : 0.0f;
                     }
-                    const float want = std::max(0.0f, corpse_demand_toward(pull)) / TOP_LEVEL * (1.0f - c_.sleep[i]);
+                    const float want = std::max(0.0f, corpse_demand_toward(pull)) / TOP_LEVEL * (1.0f - c_.sleep[i]) * (1.0f - c_.shut[i]);
                     if (want <= 0.0f) continue;
                     corpse_asks_.push_back({static_cast<uint32_t>(i), c, want, 0.0f});
                     cell_corpse_demand_[c] += want;
@@ -639,7 +641,7 @@ void Simulation::step() {
                         membrane += ARMOUR_RESIST * theirs.armour[body_dir(-ddx * gx - ddy * gy, -gx * ddy + gy * ddx)];
                     }
                     // As mass a tick from its store: a flow of energy as if the store were all D.
-                    const float flow = contact_flow(p, pull, c_.pheno[q.who], membrane) / TOP_LEVEL * (1.0f - c_.sleep[i]);
+                    const float flow = contact_flow(p, pull, c_.pheno[q.who], membrane) / TOP_LEVEL * (1.0f - c_.sleep[i]) * (1.0f - c_.shut[i]);
                     if (flow <= 0.0f) continue;
                     contacts_.push_back({static_cast<uint32_t>(i), q.who, flow});
                     drain_want_[q.who] += flow;
@@ -684,7 +686,7 @@ void Simulation::step() {
         new_hy_[i] = c_.hy[i];
         cost_move_[i] = 0.0f;
         arc_[i] = 0.0f;
-        if (p.has_brain && p.max_speed > 0.0f && c_.sleep[i] < AWAKE) decide_movement(i, cell, env);
+        if (p.has_brain && (p.max_speed > 0.0f || (g_laws.SENSOR_BRAIN != 0.0f && p.absorb > 0.0f)) && c_.sleep[i] < AWAKE) decide_movement(i, cell, env);
     }
 
     for (CorpseAsk& a : corpse_asks_) {

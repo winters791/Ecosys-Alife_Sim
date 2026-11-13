@@ -117,7 +117,7 @@ void mutate_brain(Brain& b, Rng& rng) {
         // effectors; the old brain on the nine old inputs and eleven old outputs.
         const bool sensor_brain = g_laws.SENSOR_BRAIN != 0.0f;
         const int n_in = sensor_brain ? NUM_INPUTS : LEGACY_INPUTS;
-        const int n_out = sensor_brain ? 2 : LEGACY_OUTPUTS;
+        const int n_out = sensor_brain ? 3 : LEGACY_OUTPUTS;
         const int first_out = sensor_brain ? OUT_THRUST : 0;
         const uint32_t f = rng.below(static_cast<uint32_t>(n_in + b.hidden));
         const uint32_t t = rng.below(static_cast<uint32_t>(n_out + b.hidden));
@@ -225,10 +225,17 @@ Genome mutate(const Genome& parent, Rng& rng) {
     }
 
     // --- Brain ------------------------------------------------------------------
-    bool can_move = false;
-    for (const Part& p : g.parts) can_move = can_move || is_motor(p.type);
+    bool can_move = false, has_mouth = false;
+    for (const Part& p : g.parts) { can_move = can_move || is_motor(p.type); has_mouth = has_mouth || p.type == PartType::Absorber; }
+    // With the sensor brain a mouth is something to drive too (stage 2).
+    const bool sensor_brain = g_laws.SENSOR_BRAIN != 0.0f;
+    const bool can_act = can_move || (sensor_brain && has_mouth);
 
-    if (can_move && g.brain.empty()) {
+    if (!can_move && can_act && g.brain.empty()) {
+        // A mouth with no motor: a few random reflexes, left to selection.
+        for (int k = 0; k < 2; ++k)
+            g.brain.connect(static_cast<int>(rng.below(NUM_INPUTS)), output_node(OUT_MOUTH), rng.normal() * 0.3f);
+    } else if (can_move && g.brain.empty()) {
         // The first nervous system: random twitches. Mostly it just wanders.
         // No hidden neurons yet: an urge to wander and a few random reflexes.
         if (g_laws.SENSOR_BRAIN != 0.0f) {
@@ -245,7 +252,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
                                 rng.normal() * 0.3f);
         }
     } else if (!g.brain.empty()) {
-        if (!can_move && chance(P_LOSE_BRAIN)) {
+        if (!can_act && chance(P_LOSE_BRAIN)) {
             g.brain.clear();
         } else {
             mutate_brain(g.brain, rng);
