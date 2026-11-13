@@ -106,6 +106,12 @@ float next_sleep(const Phenotype& p, const LocalEnv& env, float body_temp, float
     return shut_down ? std::min(sleep + FALL_ASLEEP, p.dormancy) : std::max(sleep - WAKE_UP, 0.0f);
 }
 
+float next_sleep_driven(const Phenotype& p, float drive, float sleep) {
+    if (p.dormancy <= 0.0f) return 0.0f;
+    const float want = std::clamp(drive, 0.0f, p.dormancy);
+    return sleep < want ? std::min(sleep + FALL_ASLEEP, want) : std::max(sleep - WAKE_UP, want);
+}
+
 float cost_while_asleep(float sleep) {
     return 1.0f - DORMANT_SAVING * sleep;
 }

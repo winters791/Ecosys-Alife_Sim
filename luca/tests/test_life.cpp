@@ -344,6 +344,37 @@ void test_mouth_gate() {
     g_laws.SENSOR_BRAIN = 0.0f;
 }
 
+// 14.9 stage 3: with the sensor brain, sleep is the brain's word, not the dark-or-cold trigger.
+void test_sleep_drive() {
+    using namespace luca;
+    g_laws.SENSOR_BRAIN = 1.0f;
+    SimConfig cfg = small_config();
+    cfg.nutrient_mean = 0.0f;
+    Simulation sim(cfg);
+    Genome base = make_luca();
+    base.dormancy = 1.0f;
+    Genome reflex = base;                       // brainless: the old trigger, asleep at night
+    Genome drowsy = base;                       // a brain that always wants sleep
+    drowsy.brain.connect(input_node(IN_BIAS), output_node(OUT_SLEEP), 2.0f);
+    Genome insomniac = base;                    // a brain that never does
+    insomniac.brain.connect(input_node(IN_BIAS), output_node(OUT_SLEEP), -2.0f);
+    CHECK(compile_phenotype(drowsy).has_brain);   // a sleeper has something to drive
+    const uint64_t a = sim.add_creature(10.0f, 10.0f, 300.0f, reflex);
+    const uint64_t b = sim.add_creature(20.0f, 10.0f, 300.0f, drowsy);
+    const uint64_t c = sim.add_creature(30.0f, 10.0f, 300.0f, insomniac);
+    float most_a = 0.0f, most_b = 0.0f, most_c = 0.0f;
+    for (int t = 0; t < 700; ++t) {   // a whole day, night included
+        sim.step();
+        most_a = std::max(most_a, sim.creatures().sleep[find(sim, a)]);
+        most_b = std::max(most_b, sim.creatures().sleep[find(sim, b)]);
+        most_c = std::max(most_c, sim.creatures().sleep[find(sim, c)]);
+    }
+    CHECK(most_a > 0.5f);    // the reflex sleeps through the night
+    CHECK(most_b > 0.9f);    // the drowsy brain sleeps in daylight too
+    CHECK(most_c == 0.0f);   // the insomniac never does, night or not
+    g_laws.SENSOR_BRAIN = 0.0f;
+}
+
 // One tick-by-tick audit helper: returns the worst relative error seen.
 double run_audited(luca::Simulation& sim, int ticks) {
     double start = sim.stored_energy(), in = 0, out = 0, worst = 0;
@@ -2604,6 +2635,7 @@ int main() {
     test_two_input_reactions();
     test_sensor_brain();
     test_mouth_gate();
+    test_sleep_drive();
     test_product_inhibition();
     test_creature_files_and_meteors();
     test_snapshot_round_trip();

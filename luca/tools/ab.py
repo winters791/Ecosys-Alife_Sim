@@ -53,6 +53,8 @@ METRICS = [
     ("steering", "steered by side contrast", "mean"),
     ("rooted_brains", "brains on rooted bodies", "mean"),
     ("gated", "brains wired to a mouth", "mean"),
+    ("sleep_wired", "brains wired to sleep", "mean"),
+    ("asleep", "asleep (deep)", "mean"),
     ("scavengers", "scavengers", "mean"),
     ("cleaners", "cleaners", "mean"),
     ("chemotrophs", "vent-fed", "mean"),

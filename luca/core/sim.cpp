@@ -309,6 +309,8 @@ void Simulation::decide_sensor_brain(std::size_t i, int cell, const LocalEnv& en
 
     float w[NUM_OUTPUTS];
     think(plan, c_.brain_state[i], in, w);
+    c_.rest[i] = std::clamp(w[OUT_SLEEP], 0.0f, 1.0f);
+    if (c_.sleep[i] >= AWAKE) return;                                    // asleep it cannot move or gate its mouth
     c_.shut[i] = 1.0f - std::clamp(1.0f + w[OUT_MOUTH], 0.0f, 1.0f);   // read by the next tick's contact
     if (p.max_speed <= 0.0f) return;                                     // a brain on a body that cannot move only gates its mouth
     const float thrust = std::clamp(g_laws.THRUST_BASE + w[OUT_THRUST], 0.0f, 1.0f);   // THRUST_BASE 0.5 moves by default, as the old throttle did
@@ -686,7 +688,12 @@ void Simulation::step() {
         new_hy_[i] = c_.hy[i];
         cost_move_[i] = 0.0f;
         arc_[i] = 0.0f;
-        if (p.has_brain && (p.max_speed > 0.0f || (g_laws.SENSOR_BRAIN != 0.0f && p.absorb > 0.0f)) && c_.sleep[i] < AWAKE) decide_movement(i, cell, env);
+        if (g_laws.SENSOR_BRAIN != 0.0f) {
+            // A sleeper still thinks: its brain is what wakes it.
+            if (p.has_brain && (p.max_speed > 0.0f || p.absorb > 0.0f || p.dormancy > 0.0f)) decide_movement(i, cell, env);
+        } else if (p.has_brain && p.max_speed > 0.0f && c_.sleep[i] < AWAKE) {
+            decide_movement(i, cell, env);
+        }
     }
 
     for (CorpseAsk& a : corpse_asks_) {
@@ -960,7 +967,8 @@ void Simulation::step() {
         if (c_.sleep[i] < DEEP_SLEEP || (tick_ & 7u) == 0) c_.age[i] += 1;
         // Its body warms or cools towards the air where it now stands.
         c_.body_temp[i] = next_body_temp(p, env_here, c_.body_temp[i]);
-        c_.sleep[i] = next_sleep(p, env_here, c_.body_temp[i], c_.sleep[i]);
+        c_.sleep[i] = (g_laws.SENSOR_BRAIN != 0.0f && p.has_brain) ? next_sleep_driven(p, c_.rest[i], c_.sleep[i])
+                                                                     : next_sleep(p, env_here, c_.body_temp[i], c_.sleep[i]);
 
         if (starved) {
             probe.deaths += 1.0;

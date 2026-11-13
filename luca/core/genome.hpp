@@ -146,6 +146,7 @@ enum BrainOutput : int {
     OUT_THRUST,    // 0 .. 1 of the body's top speed along its heading (negative = 0)
     OUT_TURN,      // -1 .. 1 of the most it can turn a tick (positive = to its left)
     OUT_MOUTH,     // stage 2: how open its mouths are, 1 + this clamped to 0..1 (so a brain that says nothing leaves them open)
+    OUT_SLEEP,     // stage 3: the sleep level it aims for, 0..1, held to its dormancy gene
     NUM_OUTPUTS
 };
 constexpr int LEGACY_OUTPUTS = OUT_THRUST;

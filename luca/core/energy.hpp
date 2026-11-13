@@ -61,6 +61,9 @@ inline float next_unfold(float unfold, float moved) {
 // How asleep the body is after this tick, given how asleep it was and how
 // warm its body is (see body temperature below).
 float next_sleep(const Phenotype& p, const LocalEnv& env, float body_temp, float sleep);
+// The sensor brain's version (SENSOR_BRAIN, stage 3): the level the brain aims for, held to
+// the dormancy gene, reached at the same rates; no dark-or-cold trigger.
+float next_sleep_driven(const Phenotype& p, float drive, float sleep);
 // Fraction of its upkeep and thermal cost a body still pays at this depth.
 float cost_while_asleep(float sleep);
 // Below this a body counts as awake: it may move and breed.

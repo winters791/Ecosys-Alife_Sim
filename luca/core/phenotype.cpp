@@ -193,7 +193,7 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     // Its price grows with its size: neurons, links and the strength of the links.
     // With the sensor brain (stage 2) a mouth is an effector too: a brain can shut it.
     p.has_brain = (thrust_possible(flagellum_total, legs_total) ||
-                   (g_laws.SENSOR_BRAIN != 0.0f && p.part_total[static_cast<int>(PartType::Absorber)] > 0.0f)) && !g.brain.empty();
+                   (g_laws.SENSOR_BRAIN != 0.0f && (p.part_total[static_cast<int>(PartType::Absorber)] > 0.0f || dormancy > 0.0f))) && !g.brain.empty();
     float brain_upkeep = 0.0f;
     if (p.has_brain) {
         const int hidden = std::min<int>(g.brain.hidden, MAX_HIDDEN);

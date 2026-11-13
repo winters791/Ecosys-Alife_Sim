@@ -459,7 +459,7 @@ struct SnapshotIO {
 
     // One creature: state only. Its stats and plans are compiled again on loading.
     struct Body {
-        float x = 0, y = 0, hx = 1, hy = 0, moved = 0, ate = 0, hurt = 0, unfold = 1, wander = 0, sleep = 0, body_temp = 20, shut = 0;
+        float x = 0, y = 0, hx = 1, hy = 0, moved = 0, ate = 0, hurt = 0, unfold = 1, wander = 0, sleep = 0, body_temp = 20, shut = 0, rest = 0;
         Mix pool, tissue;
         uint32_t age = 0;
         float grown = 1.0f;
@@ -475,7 +475,7 @@ struct SnapshotIO {
 
     template <class IO>
     static void body(IO& r, Body& b) {
-        for (float* v : {&b.x, &b.y, &b.hx, &b.hy, &b.moved, &b.ate, &b.hurt, &b.unfold, &b.wander, &b.sleep, &b.body_temp, &b.shut}) r(*v);
+        for (float* v : {&b.x, &b.y, &b.hx, &b.hy, &b.moved, &b.ate, &b.hurt, &b.unfold, &b.wander, &b.sleep, &b.body_temp, &b.shut, &b.rest}) r(*v);
         r(b.pool);
         r(b.tissue);
         r(b.age);
@@ -502,7 +502,7 @@ struct SnapshotIO {
         for (std::size_t i = 0; i < c.size(); ++i) {
             Body& b = out[i];
             b.x = c.x[i]; b.y = c.y[i]; b.hx = c.hx[i]; b.hy = c.hy[i]; b.moved = c.moved[i]; b.ate = c.ate[i]; b.hurt = c.hurt[i];
-            b.unfold = c.unfold[i]; b.wander = c.wander[i]; b.sleep = c.sleep[i]; b.body_temp = c.body_temp[i]; b.shut = c.shut[i];
+            b.unfold = c.unfold[i]; b.wander = c.wander[i]; b.sleep = c.sleep[i]; b.body_temp = c.body_temp[i]; b.shut = c.shut[i]; b.rest = c.rest[i];
             b.pool = c.pool[i]; b.tissue = c.tissue[i]; b.age = c.age[i]; b.grown = c.pheno[i].grown;
             b.fed_light = c.fed_light[i]; b.fed_living = c.fed_living[i]; b.fed_dead = c.fed_dead[i];
             b.fed_waste = c.fed_waste[i]; b.fed_vent = c.fed_vent[i];
@@ -543,7 +543,7 @@ struct SnapshotIO {
                 s.borrowed_.emplace(b.id, Simulation::Borrowed{b.birth, b.built});
             }
             c.hx[i] = b.hx; c.hy[i] = b.hy; c.moved[i] = b.moved; c.ate[i] = b.ate; c.hurt[i] = b.hurt;
-            c.unfold[i] = b.unfold; c.wander[i] = b.wander; c.sleep[i] = b.sleep; c.shut[i] = b.shut;
+            c.unfold[i] = b.unfold; c.wander[i] = b.wander; c.sleep[i] = b.sleep; c.shut[i] = b.shut; c.rest[i] = b.rest;
             c.age[i] = b.age;
             c.fed_light[i] = b.fed_light; c.fed_living[i] = b.fed_living; c.fed_dead[i] = b.fed_dead;
             c.fed_waste[i] = b.fed_waste; c.fed_vent[i] = b.fed_vent;

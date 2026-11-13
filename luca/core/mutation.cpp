@@ -117,7 +117,7 @@ void mutate_brain(Brain& b, Rng& rng) {
         // effectors; the old brain on the nine old inputs and eleven old outputs.
         const bool sensor_brain = g_laws.SENSOR_BRAIN != 0.0f;
         const int n_in = sensor_brain ? NUM_INPUTS : LEGACY_INPUTS;
-        const int n_out = sensor_brain ? 3 : LEGACY_OUTPUTS;
+        const int n_out = sensor_brain ? 4 : LEGACY_OUTPUTS;   // thrust, turn, mouth, sleep
         const int first_out = sensor_brain ? OUT_THRUST : 0;
         const uint32_t f = rng.below(static_cast<uint32_t>(n_in + b.hidden));
         const uint32_t t = rng.below(static_cast<uint32_t>(n_out + b.hidden));
@@ -229,12 +229,19 @@ Genome mutate(const Genome& parent, Rng& rng) {
     for (const Part& p : g.parts) { can_move = can_move || is_motor(p.type); has_mouth = has_mouth || p.type == PartType::Absorber; }
     // With the sensor brain a mouth is something to drive too (stage 2).
     const bool sensor_brain = g_laws.SENSOR_BRAIN != 0.0f;
-    const bool can_act = can_move || (sensor_brain && has_mouth);
+    const bool can_act = can_move || (sensor_brain && (has_mouth || g.dormancy > 0.0f));
 
     if (!can_move && can_act && g.brain.empty()) {
         // A mouth with no motor: a few random reflexes, left to selection.
-        for (int k = 0; k < 2; ++k)
-            g.brain.connect(static_cast<int>(rng.below(NUM_INPUTS)), output_node(OUT_MOUTH), rng.normal() * 0.3f);
+        if (has_mouth)
+            for (int k = 0; k < 2; ++k)
+                g.brain.connect(static_cast<int>(rng.below(NUM_INPUTS)), output_node(OUT_MOUTH), rng.normal() * 0.3f);
+        // A sleeper's first brain is the old reflex as wiring: asleep when it is dark or cold.
+        if (g.dormancy > 0.0f) {
+            g.brain.connect(input_node(IN_BIAS), output_node(OUT_SLEEP), 0.5f);
+            g.brain.connect(input_node(IN_LIGHT), output_node(OUT_SLEEP), -1.5f);
+            g.brain.connect(input_node(IN_COLD), output_node(OUT_SLEEP), 2.0f);
+        }
     } else if (can_move && g.brain.empty()) {
         // The first nervous system: random twitches. Mostly it just wanders.
         // No hidden neurons yet: an urge to wander and a few random reflexes.
@@ -245,6 +252,11 @@ Genome mutate(const Genome& parent, Rng& rng) {
             for (int k = 0; k < 3; ++k)
                 g.brain.connect(static_cast<int>(rng.below(NUM_INPUTS)), FIRST_OUTPUT + OUT_THRUST + static_cast<int>(rng.below(2)),
                                 rng.normal() * 0.3f);
+            if (g.dormancy > 0.0f) {   // and a sleeper sleeps as the old reflex did
+                g.brain.connect(input_node(IN_BIAS), output_node(OUT_SLEEP), 0.5f);
+                g.brain.connect(input_node(IN_LIGHT), output_node(OUT_SLEEP), -1.5f);
+                g.brain.connect(input_node(IN_COLD), output_node(OUT_SLEEP), 2.0f);
+            }
         } else {
             g.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
             for (int k = 0; k < 4; ++k)
