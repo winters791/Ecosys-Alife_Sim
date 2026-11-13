@@ -317,7 +317,8 @@ void Simulation::decide_sensor_brain(std::size_t i, int cell, const LocalEnv& en
     const float turn = std::clamp(w[OUT_TURN], -1.0f, 1.0f);
     const float dtheta = turn * g_laws.TURN_RATE;
     const float arc = p.radius * std::abs(dtheta) * g_laws.TURN_COST;   // the rim's distance, as dear as TURN_COST says
-    const float dist = thrust * p.max_speed;
+    const bool wet = world_.under_water(cell);
+    const float dist = thrust * (wet ? p.swim_speed : p.walk_speed);   // motors by medium (water stage 3)
     if (dist <= 0.0f && arc <= 0.0f) return;
 
     const float a = heading + dtheta;
@@ -325,7 +326,7 @@ void Simulation::decide_sensor_brain(std::size_t i, int cell, const LocalEnv& en
     const float nx = dist > 0.0f ? world_.clamp_coord(c_.x[i] + ux * dist) : c_.x[i];
     const float ny = dist > 0.0f ? world_.clamp_coord(c_.y[i] + uy * dist) : c_.y[i];
     const float dh = dist > 0.0f ? world_.height(world_.cell_index(nx, ny)) - env.height : 0.0f;
-    const float step_cost = std::max(0.0f, movement_cost(p, dist + arc, dh));
+    const float step_cost = std::max(0.0f, movement_cost(p, dist + arc, dh, wet));
     if (step_cost + cost_upkeep_[i] + cost_thermal_[i] > power(p, c_.pool[i], soil_.nutrient[cell])) return;
     new_x_[i] = nx;
     new_y_[i] = ny;
@@ -423,7 +424,8 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     // facing a new way every frame and going nowhere. The angle is the
     // creature's own state, so writing it here is like its brain's memory.
     const float throttle = std::clamp(0.5f + w[OUT_THROTTLE], 0.0f, 1.0f);
-    const float dist = throttle * p.max_speed;
+    const bool wet = world_.under_water(cell);
+    const float dist = throttle * (wet ? p.swim_speed : p.walk_speed);   // motors by medium (water stage 3)
     float& angle = c_.wander[i];
     Rng rng(draw_key(draw_seed_, Draw::Wander, tick_, c_.id[i]));
     angle += std::sqrt(2.0f * dist / WANDER_PATH) * rng.normal();
@@ -441,7 +443,7 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
     // A body can only spend as fast as its enzymes release (burn): a step it
     // can't pay for this tick, on top of upkeep and heat, it doesn't take.
     // So a fast or climbing body needs enzymes with the rate to power it.
-    const float step_cost = std::max(0.0f, movement_cost(p, dist, dh));
+    const float step_cost = std::max(0.0f, movement_cost(p, dist, dh, wet));
     if (step_cost + cost_upkeep_[i] + cost_thermal_[i] > power(p, c_.pool[i], soil_.nutrient[cell])) return;
     new_x_[i] = nx;
     new_y_[i] = ny;

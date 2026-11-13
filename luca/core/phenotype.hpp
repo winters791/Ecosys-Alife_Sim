@@ -16,7 +16,9 @@ struct Phenotype {
     float surface_area  = 0.0f;
     float upkeep        = 0.0f;  // energy per tick just to stay alive
     float light_capture = 0.0f;  // how strongly it absorbs light (see energy.hpp)
-    float max_speed     = 0.0f;  // world units per tick; 0 = cannot move
+    float max_speed     = 0.0f;  // world units per tick; 0 = cannot move (the faster of walk and swim)
+    float walk_speed    = 0.0f;  // on land (water stage 3)
+    float swim_speed    = 0.0f;  // under water
     float drag          = 1.0f;  // moving cost and speed, against a round body's (body.hpp)
     float canopy        = 0.0f;  // how high its sun patches stand: core radius, plus their stalks
     float repro_threshold   = 0.0f;

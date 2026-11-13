@@ -89,7 +89,9 @@ float thermal_cost(const Phenotype& p, float body_temp);
 // Cost of moving `distance` world units in one tick while climbing
 // `height_gain` (negative = going downhill). Part of it is paid per world
 // unit, whatever the speed; the rest grows with speed squared.
-float movement_cost(const Phenotype& p, float distance, float height_gain);
+// wet: the body is under water (water stage 3): BUOYANCY takes that share off
+// the per-mass cost of moving, and climbing costs nothing.
+float movement_cost(const Phenotype& p, float distance, float height_gain, bool wet = false);
 
 // Cost to the parent of flinging a child of `child_mass` a `distance` (world
 // units) beyond where it would land by itself, touching the parent.

@@ -61,6 +61,9 @@ namespace luca {
     X(PHOTO_PER_AREA,       1.0f,          "phenotype") \
     X(FLAGELLUM_THRUST,     0.125f,        "phenotype") \
     X(LEGS_THRUST,          0.10f,         "phenotype") \
+    X(FLAGELLUM_ON_LAND,    1.0f,          "phenotype") \
+    X(LEGS_IN_WATER,        1.0f,          "phenotype") \
+    X(BUOYANCY,             0.0f,          "energy") \
     X(MAX_SPEED,            0.5f,          "phenotype") \
     X(ARMOUR_SHADES,        0.5f,          "phenotype") \
     X(REACH_PER_RADIUS,     0.5f,          "phenotype") \

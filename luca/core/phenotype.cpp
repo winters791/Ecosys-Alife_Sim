@@ -149,7 +149,8 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     float photo_total     = 0.0f;
     float flagellum_total = 0.0f;
     float legs_total      = 0.0f;
-    float thrust          = 0.0f;  // motor parts, by how well placed and how bare they are
+    float thrust          = 0.0f;  // motor parts, by how well placed and how bare they are (on land)
+    float thrust_water    = 0.0f;  // the same under water (water stage 3)
     float pull            = 0.0f;  // mouths, by how bare they are
     float armour_cover    = 0.0f;  // armour averaged over every direction
     float photo_lift      = 0.0f;  // photo size x stalk, summed
@@ -175,9 +176,12 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
         if (part.type == PartType::Photo)     photo_total     += size;
         if (part.type == PartType::Flagellum) flagellum_total += size;
         if (part.type == PartType::Legs)      legs_total      += size;
-        if (part.type == PartType::Flagellum || part.type == PartType::Legs)
-            thrust += size * (part.type == PartType::Flagellum ? FLAGELLUM_THRUST : LEGS_THRUST)
-                    * thrust_facing(part.type, part.theta) * clogged(g, part);
+        if (part.type == PartType::Flagellum || part.type == PartType::Legs) {
+            const bool tail = part.type == PartType::Flagellum;
+            const float push = size * (tail ? FLAGELLUM_THRUST : LEGS_THRUST) * thrust_facing(part.type, part.theta) * clogged(g, part);
+            thrust       += push * (tail ? g_laws.FLAGELLUM_ON_LAND : 1.0f);   // a tail flops on land,
+            thrust_water += push * (tail ? 1.0f : g_laws.LEGS_IN_WATER);       // legs paddle in water
+        }
         if (part.type == PartType::Absorber) pull += size * clogged(g, part);
         if (part.type == PartType::Armour)   armour_cover += size * cover_halfwidth(size) / 3.14159265f;
     }
@@ -264,7 +268,9 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
 
     // --- 5. Movement: thrust / mass, with a physical ceiling ----------------
     // A tail pushes best from the back and legs from the sides (body.hpp).
-    p.max_speed = std::min(thrust / (p.mass * p.drag), MAX_SPEED);
+    p.walk_speed = std::min(thrust / (p.mass * p.drag), MAX_SPEED);
+    p.swim_speed = std::min(thrust_water / (p.mass * p.drag), MAX_SPEED);
+    p.max_speed = std::max(p.walk_speed, p.swim_speed);
     // LUCA + one size-1 flagellum straight behind: mass 1.25, speed 0.1.
 
     // --- 6. Heat: absorbed over skin, spread over body mass ------------------
