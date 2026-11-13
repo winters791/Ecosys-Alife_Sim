@@ -15,7 +15,8 @@ signal selection_changed(kind: String, index: int)   # "link", "neuron" or ""
 
 const INPUT_LABELS := ["Always on", "Hunger", "Light here", "Crowded", "Too cold", "Dead here", "Own speed", "Eating", "Being eaten", "Noise",
 		"Eyes: light", "Eyes: light L-R", "Eyes: warmth", "Eyes: warmth L-R", "Eyes: the dead", "Eyes: dead L-R", "Eyes: soil", "Eyes: soil L-R",
-		"Eyes: loose B", "Eyes: B L-R", "Eyes: loose C", "Eyes: C L-R", "Eyes: loose D", "Eyes: D L-R", "Eyes: the living", "Eyes: living L-R"]
+		"Eyes: loose B", "Eyes: B L-R", "Eyes: loose C", "Eyes: C L-R", "Eyes: loose D", "Eyes: D L-R", "Eyes: the living", "Eyes: living L-R",
+		"Eyes: depth", "Eyes: depth L-R"]
 const OUTPUT_LABELS := ["Seek light", "Seek the living", "Seek the dead", "Seek comfort", "Seek rich soil", "Seek kin",
 		"Seek bigger", "Seek movers", "Wander", "Keep going", "Speed", "Thrust", "Turn", "Mouth", "Sleep"]
 const OUTPUT_NEEDS_EYES := 8   # the first eight urges lean along what a sensor feels
