@@ -86,6 +86,7 @@ int     LucaWorld::get_world_size() const { return sim_ ? sim_->world().size() :
 double  LucaWorld::get_extent() const { return sim_ ? sim_->world().extent() : 0.0; }
 double  LucaWorld::get_height_limit() const { return sim_ ? sim_->config().height_limit : 0.0; }
 double  LucaWorld::get_sun_scale() const { return sim_ ? sim_->world().sun_scale() : 1.0; }
+double  LucaWorld::get_sea_level() const { return sim_ ? sim_->world().sea_level() : 0.0; }
 double  LucaWorld::get_climate_offset() const { return sim_ ? sim_->world().climate_offset() : 0.0; }
 double  LucaWorld::get_daylight() const {
     if (!sim_) return 1.0;
@@ -350,7 +351,7 @@ Vector3 LucaWorld::raycast(Vector3 origin, Vector3 direction) const {
 }
 
 void LucaWorld::cast_power(int power, double x, double z, double radius, double amount, int duration, bool quiet) {
-    if (!sim_ || power < POWER_TERRAIN || power > POWER_VENT) return;
+    if (!sim_ || power < POWER_TERRAIN || (power > POWER_VENT && power != POWER_SEA)) return;   // not the meteor (5): it needs a creature file
     if (!std::isfinite(x) || !std::isfinite(z) || !std::isfinite(radius) || !std::isfinite(amount)) return;
     luca::PowerCommand cmd;
     cmd.tick = sim_->tick();
@@ -852,6 +853,7 @@ void LucaWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_extent"), &LucaWorld::get_extent);
     ClassDB::bind_method(D_METHOD("get_height_limit"), &LucaWorld::get_height_limit);
     ClassDB::bind_method(D_METHOD("get_sun_scale"), &LucaWorld::get_sun_scale);
+    ClassDB::bind_method(D_METHOD("get_sea_level"), &LucaWorld::get_sea_level);
     ClassDB::bind_method(D_METHOD("get_climate_offset"), &LucaWorld::get_climate_offset);
     ClassDB::bind_method(D_METHOD("get_heights"), &LucaWorld::get_heights);
     ClassDB::bind_method(D_METHOD("get_temperatures"), &LucaWorld::get_temperatures);
@@ -921,5 +923,6 @@ void LucaWorld::_bind_methods() {
     BIND_ENUM_CONSTANT(POWER_HEAT);
     BIND_ENUM_CONSTANT(POWER_SUN);
     BIND_ENUM_CONSTANT(POWER_CLIMATE);
+    BIND_ENUM_CONSTANT(POWER_SEA);
     BIND_ENUM_CONSTANT(POWER_VENT);
 }

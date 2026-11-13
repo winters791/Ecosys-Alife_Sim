@@ -37,6 +37,7 @@ enum class PowerKind : uint8_t {
     // (x, y). The one power that brings creatures: it never touches any that
     // are already there. Instant; the Simulation lands them (take_arrivals).
     Seed,
+    Sea,      // global: raise (+) or lower (-) the sea, in height units (2.7)
 };
 
 struct PowerCommand {
@@ -91,6 +92,7 @@ private:
 //   <tick> heat    <x> <y> <radius> <amount> [duration]
 //   <tick> vent    <x> <y> <radius> <amount> [duration]
 //   <tick> sun     <amount> [duration]
+//   <tick> sea     <amount> [duration]   (height units; 2.7)
 //   <tick> climate <amount> [duration]
 //   <tick> seed    <x> <y> <radius> <count> <creature file on one line>
 //

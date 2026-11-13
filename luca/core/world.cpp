@@ -70,6 +70,7 @@ void World::generate(const SimConfig& cfg) {
     cell_size_ = cfg.cell_size;
     sun_scale_ = 1.0f;
     climate_ = 0.0f;
+    sea_ = std::max(0.0f, cfg.sea_level);
     set_time(0);
     const int cells = n_ * n_;
     height_.assign(cells, 0.0f);
@@ -136,7 +137,9 @@ void World::refresh_light() {
     for (int y = 0; y < n_; ++y)
         for (int x = 0; x < n_; ++x) {
             const float frac = gradient ? 1.0f - (1.0f - cfg_.gradient_min) * latitude(across ? x : y) : 1.0f;
-            light_[y * n_ + x] = sun * frac * shade_[y * n_ + x];
+            const int i = y * n_ + x;
+            const float depth = sea_ > height_[i] ? sea_ - height_[i] : 0.0f;
+            light_[i] = sun * frac * shade_[i] * (depth > 0.0f ? std::exp(-depth / g_laws.LIGHT_DEPTH) : 1.0f);
         }
 }
 
@@ -223,6 +226,12 @@ void World::brush(BrushField field, float x, float y, float radius, float amount
 
 void World::add_sun(float delta) {
     sun_scale_ += delta;
+    refresh_light();
+}
+
+void World::add_sea(float delta) {
+    sea_ = std::max(0.0f, sea_ + delta);
+    ++height_rev_;   // the picture of the ground changes with the water on it
     refresh_light();
 }
 

@@ -27,7 +27,7 @@ class LucaWorld : public godot::RefCounted {
 
 public:
     // Power ids for cast_power(); must match luca::PowerKind.
-    enum Power { POWER_TERRAIN = 0, POWER_HEAT = 1, POWER_SUN = 2, POWER_CLIMATE = 3, POWER_VENT = 4 };
+    enum Power { POWER_TERRAIN = 0, POWER_HEAT = 1, POWER_SUN = 2, POWER_CLIMATE = 3, POWER_VENT = 4, POWER_SEA = 6 };
 
     // (Re)create the world and scatter the first LUCAs.
     void setup(int size, int64_t seed, int population, bool light_gradient);
@@ -44,6 +44,7 @@ public:
     double  get_extent() const;        // world units per side
     double  get_height_limit() const;
     double  get_sun_scale() const;
+    double  get_sea_level() const;
     double  get_climate_offset() const;
     double  get_daylight() const;      // 0 night .. 1 full day
     double  get_day_phase() const;     // 0 sunrise, 0.25 noon, 0.5 sunset, 0.75 midnight

@@ -382,6 +382,50 @@ void test_sleep_drive() {
     g_laws.SENSOR_BRAIN = 0.0f;
 }
 
+// 2.7 stage 1: the sea. Light under water falls off with depth; a sea power raises it,
+// instant or as a ramp, and ends in the same world.
+void test_sea() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    Simulation dry(cfg);
+    Simulation wet(cfg);
+    int low = 0;
+    for (int c = 0; c < dry.world().num_cells(); ++c)
+        if (dry.world().height(c) < dry.world().height(low)) low = c;
+    const float h = dry.world().height(low);
+    const float before = wet.world().noon_light(low);
+    CHECK(before > 0.0f && wet.world().sea_level() == 0.0f && wet.world().depth(low) == 0.0f);
+
+    PowerCommand cmd;
+    cmd.kind = PowerKind::Sea;
+    cmd.amount = h + 8.0f;     // eight units over the lowest ground
+    wet.cast(cmd);
+    wet.step();
+    CHECK(std::abs(wet.world().sea_level() - (h + 8.0f)) < 1e-4f);
+    CHECK(std::abs(wet.world().depth(low) - 8.0f) < 1e-4f && wet.world().under_water(low));
+    const float expect = before * std::exp(-8.0f / g_laws.LIGHT_DEPTH);
+    CHECK(std::abs(wet.world().noon_light(low) - expect) < 1e-5f);
+    // Ground above the water is untouched.
+    int high = 0;
+    for (int c = 0; c < dry.world().num_cells(); ++c)
+        if (dry.world().height(c) > dry.world().height(high)) high = c;
+    CHECK(wet.world().noon_light(high) == dry.world().noon_light(high));
+
+    // A ramp ends where the instant power does; the sea never goes below 0.
+    Simulation ramp(cfg);
+    PowerCommand slow = cmd;
+    slow.duration = 80;
+    ramp.cast(slow);
+    for (int t = 0; t < 100; ++t) ramp.step();
+    CHECK(std::abs(ramp.world().sea_level() - wet.world().sea_level()) < 1e-3f);
+    PowerCommand drain;
+    drain.kind = PowerKind::Sea;
+    drain.amount = -1000.0f;
+    ramp.cast(drain);
+    ramp.step();
+    CHECK(ramp.world().sea_level() == 0.0f);
+}
+
 // One tick-by-tick audit helper: returns the worst relative error seen.
 double run_audited(luca::Simulation& sim, int ticks) {
     double start = sim.stored_energy(), in = 0, out = 0, worst = 0;
@@ -2648,6 +2692,7 @@ int main() {
     test_windfalls();
     test_two_input_reactions();
     test_sensor_brain();
+    test_sea();
     test_mouth_gate();
     test_sleep_drive();
     test_product_inhibition();

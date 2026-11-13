@@ -13,6 +13,7 @@ uniform float extent = 128.0;    // world units per side
 uniform float cells = 128.0;     // cells per side
 uniform float px_size = 0.125;   // world units per pixel (shared with the creatures)
 uniform float max_height = 40.0;
+uniform float sea_level = 0.0;   // ground below this is under water (2.7 stage 1)
 uniform sampler2D mineral_tex : filter_nearest, repeat_disable; // r = soil P as a share of 3x its mean (stoichiometry)
 uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead, 5 waste, 6 vents, 7 mineral P
 uniform vec3 brush = vec3(0.0, 0.0, -1.0);  // x, z, radius; radius <= 0 hides it
@@ -100,6 +101,15 @@ void fragment() {
 		// away to the south, and a shadow under one that rises to the north.
 		if (h - h_s > 2.5 && in_cell.y > 0.72) col *= 0.55;
 		if (h_n - h > 2.5 && in_cell.y < 0.28) col *= 0.75;
+
+		// Water: depth bands of blue, dithered at their edges, with a slow glint. It hides the
+		// ground's colour but not its shape, so a shore still reads as a coast.
+		if (h < sea_level) {
+			const vec3 WATER[4] = vec3[](vec3(0.30, 0.52, 0.66), vec3(0.22, 0.42, 0.60), vec3(0.15, 0.32, 0.52), vec3(0.09, 0.22, 0.42));
+			int wb = int(clamp(floor((sea_level - h) / 3.0 + (grain - 0.5) * 0.5), 0.0, 3.0));
+			col = WATER[wb];
+			if (hash(pix + floor(TIME * 0.6) * 13.0) < 0.018) col += vec3(0.10);
+		}
 
 		// Frost and snow creep in as it gets colder.
 		if (grain < clamp(-temp / 8.0, 0.0, 1.0)) col = vec3(0.88, 0.92, 0.97);

@@ -32,6 +32,11 @@ struct SimConfig {
     // 1 = the full effect, 0 = terrain casts no shade.
     float slope_shade = 1.0f;
 
+    // Water (2.7 stage 1). Ground below the sea level is under water: light falls off with
+    // depth (laws.hpp LIGHT_DEPTH) and nothing else changes yet. 0 = no sea. A default that
+    // drowns a third of the map waits for the judge (CLAUDE.md 14.7, step 6).
+    float sea_level = 0.0f;
+
     // Day and night. Light follows the sun: full by day, zero at night, with a
     // short dawn and dusk. Noon is twice sun_strength, so the average over a
     // whole day is still sun_strength. 0 = no cycle (a constant, average sun).

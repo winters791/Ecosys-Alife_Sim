@@ -205,6 +205,7 @@ void config_fields(SimConfig& c, F&& f) {
     f("height_limit", c.height_limit);
     f("light_mode", c.light_mode);
     f("sun_strength", c.sun_strength);
+    f("sea_level", c.sea_level);
     f("gradient_min", c.gradient_min);
     f("slope_shade", c.slope_shade);
     f("day_length", c.day_length);
@@ -338,6 +339,7 @@ struct SnapshotIO {
         io(w.height_rev_);
         io(w.climate_rev_);
         io(w.vent_rev_);
+        io(w.sea_);   // 2026-11-13
     }
 
     template <class IO>

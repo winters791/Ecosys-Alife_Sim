@@ -2,6 +2,7 @@
 // The environment: heightmap terrain plus light and temperature fields,
 // all on the same square grid of cells.
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -34,6 +35,13 @@ public:
     // zero by stacked edits; the light field treats that as darkness.
     void  add_sun(float delta);
     float sun_scale() const { return sun_scale_ > 0.0f ? sun_scale_ : 0.0f; }
+
+    // Water (2.7 stage 1): the sea's level in height units, and how far under it a cell lies.
+    // Light under water falls off as exp(-depth / LIGHT_DEPTH) on top of slope shade.
+    void  add_sea(float delta);                 // raise (+) or lower (-) the sea; never below 0
+    float sea_level() const { return sea_; }
+    float depth(int cell) const { return std::max(0.0f, sea_ - height_[cell]); }
+    bool  under_water(int cell) const { return height_[cell] < sea_; }
 
     // Global temperature offset in °C (ice ages, greenhouse eras).
     void  add_climate(float delta);
@@ -108,6 +116,7 @@ private:
     SimConfig cfg_;
     float sun_scale_ = 1.0f;
     float climate_   = 0.0f;
+    float sea_       = 0.0f;
     float daylight_  = 1.0f;
     float day_phase_ = 0.25f;
     float air_swing_ = 0.0f;

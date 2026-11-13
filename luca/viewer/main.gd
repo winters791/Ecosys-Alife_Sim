@@ -156,6 +156,7 @@ var inspected_species := -1             # species of the inspected creature
 var follow_button: Button
 var alerts_seen := 0
 const ALERT_COLOR := "ffc857"
+var start_sea := 0.0                   # --sea=H: raise the sea to H before the warmup (testing)
 var start_vents: Array[Vector3] = []   # --vent=x,z,strength: open a vent before the warmup (testing)
 
 # The creature designer (designer.gd) and dropping what it makes.
@@ -200,6 +201,7 @@ func _ready() -> void:
 		elif arg.begins_with("--inspect="):
 			var at := arg.get_slice("=", 1).split(",")
 			if at.size() == 2: start_inspect = Vector2(float(at[0]), float(at[1]))
+		elif arg.begins_with("--sea="): start_sea = float(arg.get_slice("=", 1))
 		elif arg.begins_with("--vent="):
 			var v := arg.get_slice("=", 1).split(",")
 			if v.size() >= 2: start_vents.append(Vector3(float(v[0]), float(v[1]), float(v[2]) if v.size() > 2 else 2.0))
@@ -242,6 +244,8 @@ func _ready() -> void:
 			start_at = Vector2(world.get_extent() * 0.5 - 12.5 + 1.6 * (placed - 1), 20.0)   # a little left of centre, clear of the panel
 		if start_zoom <= 0.0:
 			start_zoom = 6.0
+	if start_sea > 0.0:
+		world.cast_power(LucaWorld.POWER_SEA, 0.0, 0.0, 0.0, start_sea, 0, false)
 	for v in start_vents:
 		world.cast_power(LucaWorld.POWER_VENT, v.x, v.y, 4.0, v.z, 0, false)
 	if warmup > 0:
@@ -368,6 +372,7 @@ func _upload_fields() -> void:
 			height_tex.update(img)
 	if world.get_climate_revision() != climate_rev:
 		climate_rev = world.get_climate_revision()
+		terrain_mat.set_shader_parameter("sea_level", world.get_sea_level())
 		var t_img := _field_image(world.get_temperatures())
 		var l_img := _field_image(world.get_lights())
 		if temp_tex == null:
@@ -593,6 +598,10 @@ func _build_ui() -> void:
 	tools.add_child(sun_row)
 	_button(sun_row, "Dim sun", _cast_global.bind(LucaWorld.POWER_SUN, -0.1))
 	_button(sun_row, "Brighten", _cast_global.bind(LucaWorld.POWER_SUN, 0.1))
+	var sea_row := HBoxContainer.new()
+	tools.add_child(sea_row)
+	_button(sea_row, "Sea -4", _cast_global.bind(LucaWorld.POWER_SEA, -4.0))
+	_button(sea_row, "Sea +4", _cast_global.bind(LucaWorld.POWER_SEA, 4.0))
 	var climate_row := HBoxContainer.new()
 	tools.add_child(climate_row)
 	_button(climate_row, "Cool -3°", _cast_global.bind(LucaWorld.POWER_CLIMATE, -3.0))

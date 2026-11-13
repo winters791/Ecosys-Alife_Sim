@@ -42,6 +42,7 @@ namespace luca {
     X(MOVE_COST,            3.0f,          "energy") \
     X(CLIMB_COST,           1.0f,          "energy") \
     X(THROW_COST,           2.0f,          "energy") \
+    X(LIGHT_DEPTH,          4.0f,          "world") \
     X(FOUL_HARM,            0.5f,          "energy") \
     X(INHIBIT_K,            0.0f,          "energy") \
     X(INHIBIT_SCALE,        74.0f,         "energy") \

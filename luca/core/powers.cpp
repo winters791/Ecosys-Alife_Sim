@@ -26,6 +26,7 @@ const char* kind_name(PowerKind k) {
         case PowerKind::Terrain: return "terrain";
         case PowerKind::Heat:    return "heat";
         case PowerKind::Sun:     return "sun";
+        case PowerKind::Sea:     return "sea";
         case PowerKind::Climate: return "climate";
         case PowerKind::Vent:    return "vent";
         case PowerKind::Seed:    return "seed";
@@ -91,6 +92,10 @@ std::string describe_start(const PowerCommand& c, const World& w) {
                 return std::string(up ? "The world warms" : "The world cools") + " by " + num(c.amount) + " °C.";
             return std::string(up ? "The world begins to warm" : "The world begins to cool") +
                    " by " + num(c.amount) + " °C" + over + ".";
+        case PowerKind::Sea:
+            if (c.duration == 0)
+                return std::string(up ? "The sea rises" : "The sea falls") + " by " + num(std::abs(c.amount)) + ".";
+            return std::string(up ? "The sea begins to rise" : "The sea begins to fall") + " by " + num(std::abs(c.amount)) + over + ".";
         case PowerKind::Seed:
             return {};   // the Simulation says where it lands and what came with it
     }
@@ -116,6 +121,8 @@ std::string describe_end(const PowerCommand& c, const World& w) {
             return "The climate settles " + num(o) + " °C " + (o >= 0.0f ? "above" : "below") +
                    " where it began.";
         }
+        case PowerKind::Sea:
+            return "The sea settles at " + num(w.sea_level()) + ".";
         case PowerKind::Seed:
             return {};
     }
@@ -140,6 +147,7 @@ void PowerSystem::apply(const PowerCommand& cmd, float amount, World& world) {
         case PowerKind::Vent:    world.brush(BrushField::Vent, cmd.x, cmd.y, cmd.radius, amount); break;
         case PowerKind::Sun:     world.add_sun(amount); break;
         case PowerKind::Climate: world.add_climate(amount); break;
+        case PowerKind::Sea:     world.add_sea(amount); break;
         case PowerKind::Seed:    break;   // landed by the Simulation (take_arrivals)
     }
 }
@@ -213,7 +221,8 @@ bool parse_power_script(std::istream& in, std::vector<PowerCommand>& out, std::s
         else if (kind == "climate") cmd.kind = PowerKind::Climate;
         else if (kind == "vent")    cmd.kind = PowerKind::Vent;
         else if (kind == "seed")    cmd.kind = PowerKind::Seed;
-        else return fail("unknown power '" + kind + "' (terrain, heat, vent, sun, climate, seed)");
+        else if (kind == "sea")     cmd.kind = PowerKind::Sea;
+        else return fail("unknown power '" + kind + "' (terrain, heat, vent, sun, climate, sea, seed)");
 
         if (cmd.kind == PowerKind::Seed) {
             // The cargo runs to the end of the line, so read it from the raw
