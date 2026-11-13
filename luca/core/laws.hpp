@@ -82,7 +82,7 @@ namespace luca {
     X(HEAT_LAG,             120.0f,        "phenotype") \
     X(ENZYME_UPKEEP,        1.0f,          "phenotype") \
     X(GEAR_STANDING,        1.0f,          "phenotype") \
-    X(SENSOR_BRAIN,         0.0f,          "sim") \
+    X(SENSOR_BRAIN,         1.0f,          "sim") \
     X(TURN_RATE,            0.3f,          "sim") \
     X(TURN_COST,            0.1f,          "sim") \
     X(THRUST_BASE,          0.0f,          "sim") \

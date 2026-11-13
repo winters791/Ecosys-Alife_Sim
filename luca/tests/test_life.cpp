@@ -34,6 +34,13 @@ int failures = 0;
         }                                                                    \
     } while (0)
 
+// The default laws, but running the old brain (see main).
+luca::Laws legacy_laws() {
+    luca::Laws l;
+    l.SENSOR_BRAIN = 0.0f;
+    return l;
+}
+
 luca::SimConfig small_config() {
     luca::SimConfig cfg;
     cfg.world_size = 48;
@@ -493,7 +500,7 @@ void test_canopy() {
     using namespace luca;
     SimConfig cfg = small_config();
     cfg.day_length = 0;  // a steady sun
-    g_laws = Laws{};
+    g_laws = legacy_laws();
     g_laws.LIGHT_FOOTPRINT = 0.0f;
     Simulation sim(cfg);
 
@@ -527,7 +534,7 @@ void test_canopy() {
     CHECK(std::abs(fed(big3) - 0.3f * light_at(30.5f)) < 1e-5f);
     CHECK(std::abs(fed(low3) - compile_phenotype(small).light_capture * light_at(30.5f)) < 1e-5f);
     CHECK(fed(big3) + fed(low3) <= light_at(30.5f) + 1e-5f);
-    g_laws = Laws{};
+    g_laws = legacy_laws();
 }
 
 // Dispersal is paid for: children land touching the parent unless it can
@@ -1323,6 +1330,9 @@ void test_keyed_draws() {
 void test_laws() {
     using namespace luca;
     const Laws defaults{};
+    // The tests below run the old brain (main); here the laws are the defaults.
+    struct Restore { float v = g_laws.SENSOR_BRAIN; ~Restore() { g_laws.SENSOR_BRAIN = v; } } restore;
+    g_laws.SENSOR_BRAIN = defaults.SENSOR_BRAIN;
     CHECK(law_table().size() > 100);
     CHECK(changed_laws(g_laws).empty());
 
@@ -1708,14 +1718,14 @@ void test_stalks() {
 
     // In the canopy: a frond overtops a plain LUCA of the same size in the same
     // cell (one-cell rule; under the footprint both also catch light next door).
-    g_laws = Laws{};
+    g_laws = legacy_laws();
     g_laws.LIGHT_FOOTPRINT = 0.0f;
     Simulation sim(cfg);
     const uint64_t plain = sim.add_creature(20.3f, 20.5f, 300.0f, make_luca());
     const uint64_t tall = sim.add_creature(20.7f, 20.5f, 300.0f, frond);
     for (int k = 0; k < 30; ++k) sim.step();
     CHECK(sim.creatures().fed_light[find(sim, tall)] > 2.0f * sim.creatures().fed_light[find(sim, plain)]);
-    g_laws = Laws{};
+    g_laws = legacy_laws();
 }
 
 // Windfalls: food falls on random cells at the configured mean rate, as
@@ -2362,7 +2372,7 @@ void test_geometry_laws() {
 
     // DEAD_IN_REACH: a mouth pulls on a corpse in the next cell.
     auto dead_eaten = [&](float law, double& worst) {
-        g_laws = Laws{};
+        g_laws = legacy_laws();
         g_laws.DEAD_IN_REACH = law;
         Simulation sim(cfg);
         sim.add_creature(10.5f, 10.5f, 0.0f, with_part(PartType::Storage, 1.0f));   // dies at once: a corpse
@@ -2383,7 +2393,7 @@ void test_geometry_laws() {
 
     // SPILL_LOST 0: the lost share of a meal is burned at the mouth, not spilled.
     auto hunt = [&](float law, double& transfer, double& given) {
-        g_laws = Laws{};
+        g_laws = legacy_laws();
         g_laws.SPILL_LOST = law;
         Simulation sim(cfg);
         sim.add_creature(20.5f, 20.5f, 400.0f, make_luca());
@@ -2406,7 +2416,7 @@ void test_geometry_laws() {
     grad.light_mode = LightMode::Gradient;
     grad.slope_shade = 0.0f;
     for (float law : {0.0f, 1.0f}) {
-        g_laws = Laws{};
+        g_laws = legacy_laws();
         g_laws.LIGHT_ACROSS = law;
         Simulation sim(grad);
         const World& w = sim.world();
@@ -2424,7 +2434,7 @@ void test_geometry_laws() {
         if (part.type == PartType::Photo) part.size = 12.0f;
     big.enzymes = {Enzyme{CHEM_A, CHEM_D, 0.2f}};
     auto light_in = [&](float law, float& small_gain) {
-        g_laws = Laws{};
+        g_laws = legacy_laws();
         g_laws.LIGHT_FOOTPRINT = law;
         Simulation sim(cfg);
         const uint64_t b = sim.add_creature(24.5f, 24.5f, 100.0f, big);
@@ -2438,7 +2448,7 @@ void test_geometry_laws() {
     };
     float small_off = 0.0f, small_on = 0.0f;
     const double big_off = light_in(0.0f, small_off), big_on = light_in(1.0f, small_on);
-    g_laws = Laws{};
+    g_laws = legacy_laws();
     const Simulation plain(cfg);
     const float cell_light = plain.world().light(plain.world().cell_index(24.5f, 24.5f));
     CHECK(big_off <= cell_light * 1.0001);   // one cell's light at most
@@ -2448,7 +2458,7 @@ void test_geometry_laws() {
     CHECK(std::abs(Footprints::of(1.0f).w[0][0] + 4 * Footprints::of(1.0f).w[1][0] + 4 * Footprints::of(1.0f).w[1][1] - 1.0f) < 1e-5f);
 
     CHECK(worst < 1e-5);
-    g_laws = Laws{};
+    g_laws = legacy_laws();
 }
 
 void test_food_web() {
@@ -2539,7 +2549,7 @@ void test_stoichiometry() {
     cfg.light_mode = LightMode::Uniform;
     cfg.windfall_rate = 0.0f;
 
-    g_laws = Laws{};
+    g_laws = legacy_laws();
     CHECK(compile_phenotype(make_luca()).p_need == 0.0f);   // off by default
     g_laws.P_BASE = 0.05f;
     const Phenotype luca_p = compile_phenotype(make_luca());
@@ -2549,7 +2559,7 @@ void test_stoichiometry() {
 
     // Energy enough to breed; soil with no P, or plenty.
     auto breed = [&](float p_mean, std::size_t& births, std::size_t& held) {
-        g_laws = Laws{};
+        g_laws = legacy_laws();
         g_laws.P_BASE = 0.05f;
         g_laws.P_MEAN = p_mean;
         Simulation sim(cfg);
@@ -2570,7 +2580,7 @@ void test_stoichiometry() {
     CHECK(b1 > 0);
 
     // An eater in rich soil (its store full of P) gives off the P in its meals.
-    g_laws = Laws{};
+    g_laws = legacy_laws();
     g_laws.P_BASE = 0.05f;
     g_laws.P_MEAN = 5.0f;
     {
@@ -2597,10 +2607,14 @@ void test_stoichiometry() {
             CHECK(snapshot_bytes(*b) == snapshot_bytes(sim));
         }
     }
-    g_laws = Laws{};
+    g_laws = legacy_laws();
 }
 
 int main() {
+    // Most of these tests wire the old brain (the lean, wander and throttle outputs), which
+    // is what SENSOR_BRAIN 0 runs. The sensor brain, now the default, has tests of its own
+    // (test_sensor_brain, test_mouth_gate, test_sleep_drive), which set the law themselves.
+    luca::g_laws.SENSOR_BRAIN = 0.0f;
     test_day_and_night();
     test_cold_nights();
     test_mutation();

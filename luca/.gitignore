@@ -8,4 +8,5 @@ thirdparty/
 viewer/bin/
 viewer/.godot/
 worlds/
+worlds_legacy/
 ab_out/
