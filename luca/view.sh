@@ -2,7 +2,7 @@
 # Build the Godot extension (only what changed) and open the viewer.
 #
 #   ./view.sh                      -> 128x128 world, seed 42
-#   ./view.sh --size=256 --seed=7 --pop=500
+#   ./view.sh --size=256 --seed=42 --pop=500
 #
 # Needs Godot 4.7+ and godot-cpp:
 #   git clone --depth 1 https://github.com/godotengine/godot-cpp thirdparty/godot-cpp
