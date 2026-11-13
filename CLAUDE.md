@@ -919,6 +919,12 @@ What a fork can tell you: what a rule does to a mature ecosystem, not what evolv
 
 ### 14.7 Roadmap
 
+**Next session: start here (written 2026-11-13).** Done this session: step 3 (predation probes; `GEAR_STANDING` not adopted), step 4 measurements (leavings 83% own; P a brake; 2.9 B `INHIBIT_K` no effect), step 5 (sensor brain stages 1 to 3, on by default), and step 6 water stages 1 (sea, light under water; `--sea`, `sea` power, viewer) and 3 (motors by medium, buoyancy; laws neutral by default). Open, in order:
+1. **The shelf rebuild** under the sensor brain (`tools/shelf.py --ticks 100000`, started 11:42, about 12:25 to finish; log `/private/tmp/claude-501/shelf_rebuild.txt`). If it was cut short, rerun the same command: it skips worlds already in `worlds/`. Then take the new baseline from it (10.7). The vents and events shelf kinds are not rebuilt.
+2. **Judge water stage 3:** a quick `ab.py` (3 seeds, 40,000 ticks) with `--sea 12` in both arms, the variant adding `--set FLAGELLUM_ON_LAND=0.3 --set LEGS_IN_WATER=0.3 --set BUOYANCY=0.5`. Look for swimmers and walkers splitting by medium and bigger bodies in water. Needs a test (`test_life`) and the chronicle's "crawls ashore" detectors.
+3. Then the default sea level (Uday's call; 12 drowns a third of seed 42's map) and the rest of water (2.7).
+Uday's preference: quick checks (short runs, minutes), not long sweeps.
+
 Order matters more than dates. Each step ends with the usual checks (13) and Uday's go-ahead; steps 2 to 5 are each judged first on forks, then on six fresh seeds.
 
 **Step 0. Make testing cheap and exact** (no rule changes; every run before and after must match, except at item 3, which changes the random stream once and so starts a new baseline).
