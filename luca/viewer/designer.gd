@@ -91,6 +91,8 @@ var part_blurb: Label
 var part_size: HSlider
 var part_angle: HSlider
 var part_stalk: HSlider
+var part_channel: OptionButton   # a sensor's channel (the sensor brain)
+var part_channel_label: Label
 var part_stalk_label: Label
 var part_size_label: Label
 var part_angle_label: Label
@@ -360,6 +362,13 @@ func _build_body_tools(parent: VBoxContainer) -> VBoxContainer:
 	part_stalk_label = _label("", 12, INK)
 	part_box.add_child(part_stalk_label)
 	part_stalk = _bare_slider(part_box, 0.0, layout["max_stalk"], 0.02, func(v: float) -> void: _set_part("stalk", v))
+	part_channel_label = _label("Reads", 12, INK)
+	part_box.add_child(part_channel_label)
+	part_channel = OptionButton.new()
+	for ch: String in layout.get("channels", PackedStringArray()):
+		part_channel.add_item(ch.replace("_", " "))
+	part_channel.item_selected.connect(func(idx: int) -> void: _set_part("channel", float(idx)))
+	part_box.add_child(part_channel)
 	_button(part_box, "Remove it (Delete)", func() -> void: canvas.remove_part(canvas.selected))
 
 	_heading(box, "BODY")
@@ -392,6 +401,17 @@ func _build_brain_tools(parent: VBoxContainer) -> VBoxContainer:
 		["Keep comfy", "Lean towards its comfort", [["bias", "comfort", 1.0]]],
 		["Roam when hungry", "Hunger drives it on", [["hunger", "throttle", 1.0], ["hunger", "wander", 1.0]]],
 	]
+	if layout.get("sensor_brain", false):
+		cards = [
+			["Creep", "Go ahead, turning at random", [["bias", "thrust", 0.5], ["noise", "turn", 1.0]]],
+			["Steer to light", "Turn towards the brighter side (needs eyes on light)", [["light_side", "turn", 2.0], ["bias", "thrust", 0.5]]],
+			["Hunt by sight", "Turn towards the living and press on (eyes on the living)", [["living_side", "turn", 2.0], ["living_level", "thrust", 1.0]]],
+			["Scavenge by sight", "Turn towards the dead (eyes on the dead)", [["corpse_side", "turn", 2.0], ["bias", "thrust", 0.3]]],
+			["Stop to eat", "Slow down while eating", [["eating", "thrust", -1.5]]],
+			["Run when bitten", "Speed up when drained", [["hurt", "thrust", 1.5]]],
+			["Roam when hungry", "Hunger drives it on", [["hunger", "thrust", 1.0]]],
+			["Keep comfy", "Turn to the warmer or cooler side (eyes on warmth)", [["warmth_side", "turn", 1.0]]],
+		]
 	for c: Array in cards:
 		var b := _button(grid, c[0], _add_reflex.bind(c[2]))
 		b.tooltip_text = c[1]
@@ -904,6 +924,12 @@ func _sync_part_panel() -> void:
 	var stalky: bool = t == canvas.PHOTO or t == canvas.ABSORBER
 	part_stalk.visible = stalky
 	part_stalk_label.visible = stalky
+	var eyes: bool = t == canvas.SENSOR and layout.get("sensor_brain", false)
+	part_channel.visible = eyes
+	part_channel_label.visible = eyes
+	if eyes:
+		part_channel.select(clampi(int(p.get("channel", 0)), 0, part_channel.item_count - 1))
+		part_channel_label.text = "Reads   (off the midline it is a pair: it can tell left from right)"
 	part_stalk.set_value_no_signal(p["stalk"])
 	part_stalk_label.text = "Stalk   %.2f  %s" % [p["stalk"], "(on the skin)" if p["stalk"] <= 0.0 else ("a tentacle" if t == canvas.ABSORBER else "a frond")]
 
@@ -969,7 +995,10 @@ func _add_reflex(wires: Array) -> void:
 	var links: Array = genome["links"]
 	for w: Array in wires:
 		var from := inputs.find(w[0])
-		var to := fo + outputs.find(w[1])
+		var to_index := outputs.find(w[1])
+		if from < 0 or to_index < 0:
+			continue   # a card for the other brain
+		var to := fo + to_index
 		var found := false
 		for l: Dictionary in links:
 			if int(l["from"]) == from and int(l["to"]) == to:

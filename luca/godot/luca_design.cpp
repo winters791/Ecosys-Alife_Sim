@@ -11,6 +11,7 @@
 
 #include "creature_file.hpp"
 #include "energy.hpp"
+#include "laws.hpp"
 #include "powers.hpp"
 #include "sprite_data.hpp"
 
@@ -50,6 +51,7 @@ Dictionary to_dict(const luca::Genome& g) {
         q["size"] = p.size;
         q["theta"] = p.theta;
         q["stalk"] = p.stalk;
+        q["channel"] = static_cast<int>(p.channel);
         parts.push_back(q);
     }
     d["parts"] = parts;
@@ -114,6 +116,7 @@ luca::Genome from_dict(const Dictionary& d) {
             p.size = num(q, "size", 1.0f);
             p.theta = num(q, "theta", 0.0f);
             p.stalk = num(q, "stalk", 0.0f);
+            p.channel = static_cast<uint8_t>(std::clamp(static_cast<int>(num(q, "channel", 0.0f)), 0, static_cast<int>(luca::CH_COUNT) - 1));
             g.parts.push_back(p);
         }
     }
@@ -165,10 +168,20 @@ PackedFloat32Array floats(const float* v, int n) {
 Dictionary LucaWorld::get_brain_layout() const {
     Dictionary d;
     PackedStringArray inputs, outputs;
-    for (int i = 0; i < luca::NUM_INPUTS; ++i) inputs.push_back(luca::brain_input_name(i));
-    for (int o = 0; o < luca::NUM_OUTPUTS; ++o) outputs.push_back(luca::brain_output_name(o));
+    // With SENSOR_BRAIN off the brain has the nine old senses and eleven old urges; on, every sense
+    // and only thrust and turn (the lean outputs are not read).
+    const bool sensor_brain = luca::g_laws.SENSOR_BRAIN != 0.0f;
+    const int n_in = sensor_brain ? luca::NUM_INPUTS : luca::LEGACY_INPUTS;
+    const int n_out = sensor_brain ? luca::NUM_OUTPUTS : luca::LEGACY_OUTPUTS;
+    for (int i = 0; i < n_in; ++i) inputs.push_back(luca::brain_input_name(i));
+    for (int o = 0; o < n_out; ++o) outputs.push_back(luca::brain_output_name(o));
     d["inputs"] = inputs;
     d["outputs"] = outputs;
+    d["out_start"] = sensor_brain ? static_cast<int>(luca::OUT_THRUST) : 0;   // outputs before this are not shown
+    d["sensor_brain"] = sensor_brain;
+    PackedStringArray channels;
+    for (int ch = 0; ch < luca::CH_COUNT; ++ch) channels.push_back(luca::channel_name(ch));
+    d["channels"] = channels;
     d["first_output"] = luca::FIRST_OUTPUT;
     d["first_hidden"] = luca::FIRST_HIDDEN;
     d["max_hidden"] = luca::MAX_HIDDEN;

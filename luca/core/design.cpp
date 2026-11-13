@@ -122,6 +122,11 @@ DesignReport assess_design(const Genome& genome, float sun, float air) {
 std::vector<std::pair<std::string, Genome>> design_templates() {
     auto part = [](PartType t, float size, float theta, float stalk = 0.0f) { return Part{t, size, theta, 0.0f, stalk}; };
     auto wander = [](Genome& g, float throttle) {
+        if (g_laws.SENSOR_BRAIN != 0.0f) {   // the sensor brain: creep ahead (0.5 + throttle, as the old speed was) and turn at random
+            g.brain.connect(input_node(IN_BIAS), output_node(OUT_THRUST), std::max(0.0f, 0.5f + throttle));
+            g.brain.connect(input_node(IN_NOISE), output_node(OUT_TURN), 1.0f);
+            return;
+        }
         g.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
         g.brain.connect(input_node(IN_BIAS), output_node(OUT_INERTIA), 2.0f);
         g.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), throttle);
@@ -186,16 +191,27 @@ std::vector<std::pair<std::string, Genome>> design_templates() {
         g.elongation = 0.6f;
         g.parts.push_back(part(PartType::Absorber, 0.8f, 0.0f));
         g.parts.push_back(part(PartType::Flagellum, 1.0f, PI));
-        g.parts.push_back(part(PartType::Sensor, 0.8f, 0.0f));
+        const bool eyes = g_laws.SENSOR_BRAIN != 0.0f;
+        Part eye = part(PartType::Sensor, 0.8f, eyes ? 0.6f : 0.0f);   // a pair, so it can tell left from right
+        eye.channel = CH_LIVING;
+        g.parts.push_back(eye);
         g.bite = 0.8f;
         g.pigment = 0.55f;
         g.hue = 0.02f;                                                   // rust
-        g.brain.connect(input_node(IN_BIAS), output_node(OUT_BIOMASS), 1.5f);
-        g.brain.connect(input_node(IN_BIAS), output_node(OUT_INERTIA), 1.0f);
-        g.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.2f);
-        g.brain.connect(input_node(IN_EATING), output_node(OUT_THROTTLE), -1.5f);
-        g.brain.connect(input_node(IN_HURT), output_node(OUT_THROTTLE), 1.0f);
-        g.brain.connect(input_node(IN_BIAS), output_node(OUT_BIGGER), -1.0f);
+        if (eyes) {
+            g.brain.connect(bus_contrast(CH_LIVING), output_node(OUT_TURN), 2.0f);
+            g.brain.connect(bus_level(CH_LIVING), output_node(OUT_THRUST), 1.2f);
+            g.brain.connect(input_node(IN_BIAS), output_node(OUT_THRUST), 0.2f);
+            g.brain.connect(input_node(IN_EATING), output_node(OUT_THRUST), -1.5f);
+            g.brain.connect(input_node(IN_HURT), output_node(OUT_THRUST), 1.0f);
+        } else {
+            g.brain.connect(input_node(IN_BIAS), output_node(OUT_BIOMASS), 1.5f);
+            g.brain.connect(input_node(IN_BIAS), output_node(OUT_INERTIA), 1.0f);
+            g.brain.connect(input_node(IN_BIAS), output_node(OUT_THROTTLE), 0.2f);
+            g.brain.connect(input_node(IN_EATING), output_node(OUT_THROTTLE), -1.5f);
+            g.brain.connect(input_node(IN_HURT), output_node(OUT_THROTTLE), 1.0f);
+            g.brain.connect(input_node(IN_BIAS), output_node(OUT_BIGGER), -1.0f);
+        }
         cast.emplace_back("Hunter", g); }
     return cast;
 }
