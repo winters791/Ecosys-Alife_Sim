@@ -84,9 +84,9 @@ namespace luca {
     X(GEAR_STANDING,        1.0f,          "phenotype") \
     X(SENSOR_BRAIN,         0.0f,          "sim") \
     X(TURN_RATE,            0.3f,          "sim") \
-    X(TURN_COST,            1.0f,          "sim") \
+    X(TURN_COST,            0.1f,          "sim") \
     X(THRUST_BASE,          0.0f,          "sim") \
-    X(ARC_FOLDS,            1.0f,          "sim") \
+    X(ARC_FOLDS,            0.0f,          "sim") \
     X(P_CHANNEL,            0.05f,         "mutation") \
     X(MOUTH_ARC_BASE,       0.5f,          "body") \
     X(MOUTH_ARC_PER_SIZE,   0.8f,          "body") \
