@@ -66,6 +66,11 @@ public:
     // this array of the nearest listed ancestor, -1 for a root), born,
     // extinct (tick, or -1 while alive), population, peak, hue.
     godot::Array get_species_tree(int min_peak) const;
+    // The food web (core/foodweb.hpp): {nodes: [{id, name, hue, alive, level,
+    // intake}], edges: [{kind, from, to, energy}]}. kind is "living",
+    // "leavings", "sun", "vent", "dead" or "loose"; from is a species id, or
+    // -1 for the four sources. Energy is a tick, faded over recent ticks.
+    godot::Dictionary get_food_web(int min_alive) const;
     // One species' profile for the species card (observation only): who it
     // is and where it came from; its record book (eldest, deadliest, most
     // young, each with a name, living members included); what its members
@@ -88,6 +93,7 @@ public:
     godot::PackedFloat32Array get_lights() const;       // at noon
     godot::PackedFloat32Array get_nutrients() const;    // free matter in the soil
     godot::PackedFloat32Array get_corpses() const;      // energy left in dead bodies
+    godot::PackedFloat32Array get_mineral() const;      // soil P (stoichiometry), as a share of 3x P_MEAN, clamped to 1
     godot::PackedFloat32Array get_soil() const;         // nutrient, corpse energy, waste, vent strength, interleaved: one four-channel texture
     int get_height_revision() const;
     int get_climate_revision() const;
@@ -156,11 +162,26 @@ public:
     // Save every power cast so far; replay it with luca_headless --script.
     bool save_powers(const godot::String& path) const;
 
+    // Save and load the whole world (core/snapshot.hpp), the same files as
+    // luca_headless --save / --load. Paths are plain file paths (globalize
+    // user:// first). Each returns "" on success, or what went wrong. A load
+    // replaces the world, so the viewer rebuilds everything that shows it.
+    godot::String save_world(const godot::String& path) const;
+    godot::String load_world(const godot::String& path);
+
+    // Scenarios (core/scenario.hpp). The list: [{key, title, brief, limit, meteors}]
+    // (index 0 is Sandbox). start_scenario sets one going from now ("none" ends it).
+    godot::Array get_scenarios() const;
+    bool start_scenario(const godot::String& key);
+    // The running one: {active, key, title, brief, limit, meteors, start,
+    // elapsed, left, outcome ("running", "won", "lost"), verdict, progress}.
+    godot::Dictionary get_scenario() const;
+
     // --- The creature designer (viewer/designer.gd; core/design.hpp) ----------
     // Implemented in luca_design.cpp. A genome travels as a Dictionary:
     //   radius, pigment, thermal_optimum, thermal_tolerance, repro_threshold,
     //   offspring_share, birth_size, elongation, squareness, bite, dormancy,
-    //   seed_throw, mutability, repair (floats); shape (8 floats);
+    //   seed_throw (floats); shape (8 floats);
     //   parts: [{type, size, theta, stalk}]; enzymes: [{x, y, x2, y2, rate}]
     //   (x2 = y2 = -1 for one-to-one); hidden (int), tau, bias (one float per
     //   hidden neuron); links: [{from, to, weight}] in node numbers (inputs,
@@ -190,7 +211,8 @@ public:
     // A living creature's genome, by id (empty once it has died).
     godot::Dictionary genome_of(int64_t id) const;
     // Drop `count` bodies of a creature file as a meteor (the seed power,
-    // logged like any other). Returns false if the file doesn't read.
+    // logged like any other). Returns false if the file doesn't read, or if
+    // the running scenario does not allow dropping creatures.
     bool release(const godot::String& text, double x, double z, double radius, int count);
 
     // The test tank: a small world of its own (luca::Trial), stepped by the

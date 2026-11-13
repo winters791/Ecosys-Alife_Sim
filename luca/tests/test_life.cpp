@@ -15,6 +15,8 @@
 #include "design.hpp"
 #include "powers.hpp"
 #include "energy.hpp"
+#include "footprint.hpp"
+#include "foodweb.hpp"
 #include "laws.hpp"
 #include "mutation.hpp"
 #include "sim.hpp"
@@ -386,11 +388,14 @@ void test_whole_world() {
 }
 
 // The canopy: where bodies ask for more light than a cell gets, the biggest
-// is served first.
+// is served first. Checked under the one-cell rule (LIGHT_FOOTPRINT 0), where
+// each body asks in its own cell only; test_geometry_laws checks the footprint.
 void test_canopy() {
     using namespace luca;
     SimConfig cfg = small_config();
     cfg.day_length = 0;  // a steady sun
+    g_laws = Laws{};
+    g_laws.LIGHT_FOOTPRINT = 0.0f;
     Simulation sim(cfg);
 
     Genome tall = make_luca();
@@ -423,6 +428,7 @@ void test_canopy() {
     CHECK(std::abs(fed(big3) - 0.3f * light_at(30.5f)) < 1e-5f);
     CHECK(std::abs(fed(low3) - compile_phenotype(small).light_capture * light_at(30.5f)) < 1e-5f);
     CHECK(fed(big3) + fed(low3) <= light_at(30.5f) + 1e-5f);
+    g_laws = Laws{};
 }
 
 // Dispersal is paid for: children land touching the parent unless it can
@@ -504,7 +510,11 @@ void test_dispersal() {
     for (std::size_t i = 0; i < c.size(); ++i) {
         if (c.generation[i] != 1 || c.lineage[i] < line || c.lineage[i] > line + 3) continue;
         ++children;
-        on_spike = on_spike || w.height(w.cell_index(c.x[i], c.y[i])) > ground + 3.0f * cfg.birth_max_step;
+        // On the spike itself: within its brush and high up. (Natural ground
+        // elsewhere on the small map can stand as high.)
+        const float sx = c.x[i] - 28.0f, sy = c.y[i] - 6.5f;
+        on_spike = on_spike || (sx * sx + sy * sy < 9.0f &&
+                                w.height(w.cell_index(c.x[i], c.y[i])) > ground + 3.0f * cfg.birth_max_step);
     }
     CHECK(children >= 3);
     CHECK(!on_spike);
@@ -1026,7 +1036,7 @@ void test_creature_files_and_meteors() {
     g.brain.connect(hidden_node(0), hidden_node(1), -0.5f);
     g.brain.connect(hidden_node(1), output_node(OUT_LIGHT), 0.75f);
     g.enzymes.push_back(canonical_enzyme(Enzyme{CHEM_A, CHEM_D, 0.01f, CHEM_A, CHEM_D}));
-    g.shape[0] = 0.3f; g.mutability = -1.5f; g.repair = 0.2f; g.seed_throw = 1.0f;
+    g.shape[0] = 0.3f; g.seed_throw = 1.0f;
     clamp_genome(g);
     CreatureFile f;
     f.name = "Spiky;#\nthing";   // separators and comments are cleaned out
@@ -1046,7 +1056,7 @@ void test_creature_files_and_meteors() {
             CHECK(b.brain.links[k].from == g.brain.links[k].from && b.brain.links[k].to == g.brain.links[k].to &&
                   b.brain.links[k].weight == g.brain.links[k].weight);
         CHECK(enzyme_words(b.enzymes.back()) == "A+A-D+D");
-        CHECK(b.shape[0] == 0.3f && b.mutability == -1.5f && b.seed_throw == 1.0f);
+        CHECK(b.shape[0] == 0.3f && b.seed_throw == 1.0f);
         CHECK(compile_phenotype(b).upkeep == compile_phenotype(g).upkeep);
     }
     {   // Bad files are refused with a reason, not half read.
@@ -1386,6 +1396,7 @@ void test_loose_chemicals() {
         }
         r.drift = std::abs(sim.total_matter() - matter0) / matter0;
         r.loose_b = sim.soil().dissolved[sim.world().cell_index(20.5f, 20.5f)].v[CHEM_B];
+        if (with_eater) CHECK(!sim.leavings_eaten().empty());   // the leavings tag saw it (observation only)
         const std::size_t il = find(sim, lid);
         if (il < sim.creatures().size()) r.plain_fed = sim.creatures().fed_waste[il];
         if (with_eater) {
@@ -1596,54 +1607,16 @@ void test_stalks() {
     };
     CHECK(drained(0.0f) == 0.0 && drained(0.5f) > 0.0);
 
-    // In the canopy: a frond overtops a plain LUCA of the same size in the same cell.
+    // In the canopy: a frond overtops a plain LUCA of the same size in the same
+    // cell (one-cell rule; under the footprint both also catch light next door).
+    g_laws = Laws{};
+    g_laws.LIGHT_FOOTPRINT = 0.0f;
     Simulation sim(cfg);
     const uint64_t plain = sim.add_creature(20.3f, 20.5f, 300.0f, make_luca());
     const uint64_t tall = sim.add_creature(20.7f, 20.5f, 300.0f, frond);
     for (int k = 0; k < 30; ++k) sim.step();
     CHECK(sim.creatures().fed_light[find(sim, tall)] > 2.0f * sim.creatures().fed_light[find(sim, plain)]);
-}
-
-// Copying fidelity and repair: two genes about the body's own upkeep. Faithful
-// copying costs upkeep, sloppy copying is free but changes more; repair slows
-// wear for a share of upkeep.
-void test_mutability_and_repair() {
-    using namespace luca;
-    const Phenotype base = compile_phenotype(make_luca());
-    Genome careful = make_luca(), sloppy = make_luca();
-    careful.mutability = -2.0f;
-    sloppy.mutability = 1.0f;
-    CHECK(std::abs(compile_phenotype(careful).upkeep - base.upkeep - 0.04f) < 1e-4f);   // two halvings of proofreading
-    CHECK(compile_phenotype(sloppy).upkeep == base.upkeep);                              // sloppiness is free
-
-    // How often a gene changes follows 2^mutability.
-    auto changed = [](const Genome& parent) {
-        Rng rng(3);
-        int n = 0;
-        for (int k = 0; k < 4000; ++k) n += mutate(parent, rng).pigment != parent.pigment;
-        return n / 4000.0;
-    };
-    const double usual = changed(make_luca()), less = changed(careful), more = changed(sloppy);
-    CHECK(std::abs(usual - 0.2) < 0.03 && std::abs(less - 0.05) < 0.02 && std::abs(more - 0.4) < 0.04);
-    // And the gene itself is inherited and drifts.
-    Rng rng(9);
-    Genome g = make_luca();
-    for (int k = 0; k < 300; ++k) g = mutate(g, rng);
-    CHECK(g.mutability != 0.0f);
-
-    // Repair: dearer when young, much cheaper when old.
-    Genome mended = make_luca();
-    mended.repair = 1.0f;
-    const Phenotype m = compile_phenotype(mended);
-    CHECK(std::abs(m.upkeep - 1.15f * base.upkeep) < 1e-4f);
-    CHECK(upkeep_cost(m, 0) > upkeep_cost(base, 0));
-    CHECK(upkeep_cost(m, 20000) < 0.5f * upkeep_cost(base, 20000));
-    CHECK(std::abs(upkeep_cost(m, 30000) / upkeep_cost(m, 0) - (1.0f + 1.0f)) < 1e-3f);   // its clock runs three times slower
-    Genome bad = make_luca();
-    bad.repair = 5.0f;
-    bad.mutability = -10.0f;
-    clamp_genome(bad);
-    CHECK(bad.repair == 1.0f && bad.mutability == limits::MIN_MUTABILITY);
+    g_laws = Laws{};
 }
 
 // Windfalls: food falls on random cells at the configured mean rate, as
@@ -1689,7 +1662,7 @@ void test_windfalls() {
 // flow of energy, day and night, that only bodies with the chemo gene take up.
 // Folding: a body that moves folds its sun patches and they take
 // UNFOLD_TICKS to reopen; a body that sits still keeps them open. Being able
-// to move costs no light of itself (MOVER_SUN is 1).
+// to move costs no light of itself.
 void test_folding() {
     using namespace luca;
     Genome mover = make_luca();
@@ -2098,8 +2071,8 @@ void test_vents() {
 }
 
 // Chemistry stage 4: two-input reactions, X + Y <-> Z + W, one unit of each.
-// They run as far as the scarcer input allows; a neutral one (equal levels on
-// both sides) turns what the body can't burn into what it can, at no cost.
+// They run as far as the scarcer input allows; one with equal levels on both
+// sides never runs (neutral exchanges were deleted, 14.10.8).
 void test_two_input_reactions() {
     using namespace luca;
     auto two = [](uint8_t x, uint8_t x2, uint8_t y, uint8_t y2, float rate) {
@@ -2129,7 +2102,7 @@ void test_two_input_reactions() {
         Genome g = make_luca();
         g.enzymes = {two(CHEM_D, CHEM_A, CHEM_B, CHEM_B, 0.01f)};
         const Phenotype p = compile_phenotype(g);
-        CHECK(p.can_burn(CHEM_D) && !p.can_burn(CHEM_B) && p.any_two && p.neutral == 0);
+        CHECK(p.can_burn(CHEM_D) && !p.can_burn(CHEM_B) && p.any_two);
         Mix pool = pure(CHEM_D, 1.0f);
         float soil = 0.004f, flow = 0.0f;
         const float got = burn(p, pool, soil, 100.0f, &flow);
@@ -2151,28 +2124,14 @@ void test_two_input_reactions() {
         CHECK(std::abs(stored - 0.74f) < 1e-5f && std::abs(pool.v[CHEM_B] - 0.01f) < 1e-6f && std::abs(soil - 0.99f) < 1e-6f);
     }
 
-    // A neutral exchange B + C -> A + D on a body that burns D: B and C now
-    // count as food (kept, taken up), and turn into D at no cost.
-    Genome user_g = make_luca();
-    user_g.enzymes.push_back(two(CHEM_B, CHEM_C, CHEM_A, CHEM_D, 0.01f));
-    const Phenotype user = compile_phenotype(user_g);
-    CHECK(user.neutral != 0 && user.can_burn(CHEM_B) && user.can_burn(CHEM_C) && user.can_burn(CHEM_D));
-    {
-        Mix pool = pure(CHEM_B, 0.003f);
-        pool.v[CHEM_C] = 0.5f;
-        float soil = 0.0f;
-        const float moved = convert(user, pool, soil);
-        CHECK(std::abs(moved - 0.003f) < 1e-6f);                                       // the scarcer input
-        CHECK(pool.v[CHEM_B] == 0.0f && std::abs(pool.v[CHEM_D] - 0.003f) < 1e-6f && std::abs(soil - 0.003f) < 1e-6f);
-    }
-    // One that would only turn food into food never runs: this body burns B
-    // and D already, so B + C <-> A + D has one burnable on each side.
+    // One with equal levels (B + C <-> A + D) never runs: B and C are not
+    // food for it, and it still costs upkeep.
     {
         Genome g = make_luca();
-        g.enzymes = {Enzyme{CHEM_A, CHEM_B, 0.01f}, Enzyme{CHEM_A, CHEM_D, 0.01f}, two(CHEM_B, CHEM_C, CHEM_A, CHEM_D, 0.01f)};
+        g.enzymes.push_back(two(CHEM_B, CHEM_C, CHEM_A, CHEM_D, 0.01f));
         const Phenotype p = compile_phenotype(g);
-        CHECK(p.neutral == 0 && !p.can_burn(CHEM_C));
-        CHECK(p.upkeep > compile_phenotype(make_luca()).upkeep);   // and still costs upkeep
+        CHECK(!p.can_burn(CHEM_B) && !p.can_burn(CHEM_C) && p.can_burn(CHEM_D));
+        CHECK(p.upkeep > compile_phenotype(make_luca()).upkeep);
     }
 
     // Mutation: one-to-one enzymes gain a second pair, and every genome stays canonical.
@@ -2196,8 +2155,8 @@ void test_two_input_reactions() {
         CHECK(genome_distance(a, b) > 0.5f);   // a new kind of reaction
     }
 
-    // In a world: a body living on loose B and C beside a body that gives
-    // them off. Both books balance.
+    // In a world: a body burning loose B and C together (B + C -> A + A)
+    // beside a body that gives them off. Both books balance.
     SimConfig cfg = small_config();
     cfg.nutrient_mean = 0.0f;   // nobody breeds
     cfg.light_mode = LightMode::Uniform;
@@ -2205,19 +2164,319 @@ void test_two_input_reactions() {
     Genome giver_g = make_luca();
     giver_g.enzymes = {Enzyme{CHEM_B, CHEM_D, 0.01f}, Enzyme{CHEM_C, CHEM_D, 0.01f}};   // burns D to B and to C, gives both off
     sim.add_creature(20.3f, 20.5f, 400.0f, giver_g);
+    Genome user_g = make_luca();
+    // First in the genome, so it burns B + C before D (enzymes burn in order).
+    user_g.enzymes.insert(user_g.enzymes.begin(), two(CHEM_A, CHEM_A, CHEM_B, CHEM_C, 0.01f));
     const uint64_t uid = sim.add_creature(20.7f, 20.5f, 100.0f, user_g);
     const double matter0 = sim.total_matter();
-    double neutral = 0.0;
+    double flow = 0.0;
     for (int t = 0; t < 400; ++t) {
         sim.step();
-        neutral += sim.last_stats().neutral_flow;
+        flow += sim.last_stats().two_flow;
     }
     const std::size_t iu = find(sim, uid);
     CHECK(iu < sim.creatures().size());
     if (failures) return;
-    CHECK(neutral > 0.0 && sim.creatures().fed_waste[iu] > 0.0f);
+    CHECK(flow > 0.0 && sim.creatures().fed_waste[iu] > 0.0f);
     CHECK(std::abs(sim.total_matter() - matter0) / matter0 < 1e-5);
     CHECK(run_audited(sim, 500) < 1e-4);
+}
+
+// Forks and knockouts (design doc 14.6.3): the same fork seed gives the same
+// future, another gives another; a knockout removes a species and both books close.
+void test_fork_and_knockout() {
+    using namespace luca;
+    SimConfig cfg;
+    cfg.world_size = 48;
+    cfg.initial_population = 150;
+    Simulation base(cfg);
+    base.seed_population();
+    for (int t = 0; t < 2000; ++t) base.step();
+
+    Simulation a = base, b = base, c = base, same = base;
+    a.fork(1);
+    b.fork(1);
+    c.fork(2);
+    for (int t = 0; t < 600; ++t) { a.step(); b.step(); c.step(); same.step(); }
+    CHECK(snapshot_bytes(a) == snapshot_bytes(b));
+    CHECK(snapshot_bytes(a) != snapshot_bytes(c));
+    CHECK(snapshot_bytes(a) != snapshot_bytes(same));
+
+    // Knock out the most numerous species.
+    std::map<uint32_t, std::size_t> count;
+    for (std::size_t i = 0; i < a.creatures().size(); ++i) ++count[a.creatures().species[i]];
+    uint32_t top = 0;
+    std::size_t most = 0;
+    for (const auto& [sp, n] : count) if (n > most) { most = n; top = sp; }
+    const double energy = a.stored_energy(), matter = a.total_matter();
+    const std::size_t before = a.creatures().size();
+    CHECK(a.knockout(top) == most);
+    CHECK(a.creatures().size() == before - most);
+    for (std::size_t i = 0; i < a.creatures().size(); ++i) CHECK(a.creatures().species[i] != top);
+    CHECK(std::abs(a.stored_energy() - energy) < 1e-6 * energy);
+    CHECK(std::abs(a.total_matter() - matter) < 1e-6 * matter);
+    CHECK(a.species().get(top).population == 0);
+    CHECK(a.knockout(top) == 0);
+    for (int t = 0; t < 200; ++t) a.step();   // and the world goes on
+}
+
+// Scenarios (scenario.hpp): a goal is met from the census, time running out
+// loses it, and a saved world keeps its scenario.
+// Step 2's laws (CLAUDE.md 14.2), each off by default.
+void test_geometry_laws() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.day_length = 0;                  // steady light
+    cfg.light_mode = LightMode::Uniform;
+    cfg.windfall_rate = 0.0f;
+    auto audit = [](Simulation& sim, int ticks, double& worst) {
+        for (int t = 0; t < ticks; ++t) {
+            const double before = sim.stored_energy();
+            sim.step();
+            const TickStats& st = sim.last_stats();
+            const double after = sim.stored_energy();
+            worst = std::max(worst, std::abs(after - (before + st.energy_in - st.energy_out)) / std::max(1.0, after));
+        }
+    };
+
+    // DEAD_IN_REACH: a mouth pulls on a corpse in the next cell.
+    auto dead_eaten = [&](float law, double& worst) {
+        g_laws = Laws{};
+        g_laws.DEAD_IN_REACH = law;
+        Simulation sim(cfg);
+        sim.add_creature(10.5f, 10.5f, 0.0f, with_part(PartType::Storage, 1.0f));   // dies at once: a corpse
+        sim.step();
+        sim.add_creature(11.3f, 10.5f, 300.0f, with_part(PartType::Absorber, 3.5f));   // the next cell east; a mouth all round
+        const double m0 = sim.total_matter();
+        double eaten = 0.0;
+        for (int t = 0; t < 100; ++t) {
+            audit(sim, 1, worst);
+            eaten += sim.last_stats().eaten_dead;
+        }
+        CHECK(std::abs(sim.total_matter() - m0) / m0 < 1e-5);
+        return eaten;
+    };
+    double worst = 0.0;
+    CHECK(dead_eaten(0.0f, worst) == 0.0);
+    CHECK(dead_eaten(1.0f, worst) > 0.0);
+
+    // SPILL_LOST 0: the lost share of a meal is burned at the mouth, not spilled.
+    auto hunt = [&](float law, double& transfer, double& given) {
+        g_laws = Laws{};
+        g_laws.SPILL_LOST = law;
+        Simulation sim(cfg);
+        sim.add_creature(20.5f, 20.5f, 400.0f, make_luca());
+        sim.add_creature(20.9f, 20.5f, 100.0f, with_part(PartType::Absorber, 3.5f));
+        transfer = given = 0.0;
+        for (int t = 0; t < 60; ++t) {
+            audit(sim, 1, worst);
+            transfer += sim.last_stats().out_transfer;
+            given += sim.last_stats().excreted;
+        }
+    };
+    double tr1, gv1, tr0, gv0;
+    hunt(1.0f, tr1, gv1);
+    hunt(0.0f, tr0, gv0);
+    CHECK(tr1 == 0.0 && gv1 > 0.0);
+    CHECK(tr0 > 0.0 && gv0 < gv1);
+
+    // LIGHT_ACROSS: the light gradient runs east to west instead of with warmth.
+    SimConfig grad = cfg;
+    grad.light_mode = LightMode::Gradient;
+    grad.slope_shade = 0.0f;
+    for (float law : {0.0f, 1.0f}) {
+        g_laws = Laws{};
+        g_laws.LIGHT_ACROSS = law;
+        Simulation sim(grad);
+        const World& w = sim.world();
+        const float north = w.light(w.cell_index(24.5f, 1.5f)), south = w.light(w.cell_index(24.5f, 46.5f));
+        const float west = w.light(w.cell_index(1.5f, 24.5f)), east = w.light(w.cell_index(46.5f, 24.5f));
+        if (law == 0.0f) CHECK(north > 1.5f * south && std::abs(west - east) < 1e-5f);
+        else CHECK(west > 1.5f * east && std::abs(north - south) < 1e-5f);
+    }
+
+    // LIGHT_FOOTPRINT: a big body catches light over the cells it covers, and
+    // shades the small body beside it.
+    Genome big = make_luca();
+    big.core_radius = 2.0f;
+    for (Part& part : big.parts)
+        if (part.type == PartType::Photo) part.size = 12.0f;
+    big.enzymes = {Enzyme{CHEM_A, CHEM_D, 0.2f}};
+    auto light_in = [&](float law, float& small_gain) {
+        g_laws = Laws{};
+        g_laws.LIGHT_FOOTPRINT = law;
+        Simulation sim(cfg);
+        const uint64_t b = sim.add_creature(24.5f, 24.5f, 100.0f, big);
+        const uint64_t s = sim.add_creature(25.5f, 24.5f, 100.0f, make_luca());
+        double in = 0.0;
+        for (int t = 0; t < 5; ++t) audit(sim, 1, worst);
+        const std::size_t ib = find(sim, b), is = find(sim, s);
+        small_gain = is < sim.creatures().size() ? sim.creatures().fed_light[is] : -1.0f;
+        in = ib < sim.creatures().size() ? sim.creatures().fed_light[ib] : -1.0;
+        return in / 5.0;
+    };
+    float small_off = 0.0f, small_on = 0.0f;
+    const double big_off = light_in(0.0f, small_off), big_on = light_in(1.0f, small_on);
+    g_laws = Laws{};
+    const Simulation plain(cfg);
+    const float cell_light = plain.world().light(plain.world().cell_index(24.5f, 24.5f));
+    CHECK(big_off <= cell_light * 1.0001);   // one cell's light at most
+    CHECK(big_on > 3.0 * cell_light);        // the cells it covers
+    CHECK(small_on < small_off);             // in the big body's shade
+    CHECK(Footprints::of(0.4f).ring == 0 && Footprints::of(1.0f).ring == 1);
+    CHECK(std::abs(Footprints::of(1.0f).w[0][0] + 4 * Footprints::of(1.0f).w[1][0] + 4 * Footprints::of(1.0f).w[1][1] - 1.0f) < 1e-5f);
+
+    CHECK(worst < 1e-5);
+    g_laws = Laws{};
+}
+
+void test_food_web() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.day_length = 0;
+    cfg.windfall_rate = 0.0f;
+    Simulation sim(cfg);
+    // Plants, and a mouth on legs among them (far enough from LUCA to be a species of its own).
+    for (int k = 0; k < 6; ++k) sim.add_creature(20.5f + k, 20.5f, 400.0f, make_luca());
+    Genome hunter = with_part(PartType::Absorber, 3.5f);
+    hunter.core_radius = 1.6f;
+    hunter.bite = 1.0f;
+    hunter.parts.push_back({PartType::Armour, 1.0f, 3.14159265f, 0.0f});
+    hunter.parts.push_back({PartType::Poison, 1.0f, 1.0f, 0.0f});
+    for (int k = 0; k < 3; ++k) sim.add_creature(20.9f + 2 * k, 21.0f, 600.0f, hunter);
+    for (int t = 0; t < 120; ++t) sim.step();
+    const FoodWeb web = food_web(sim, 1);
+    CHECK(!web.nodes.empty() && !web.edges.empty());
+    const std::size_t i = find(sim, sim.creatures().id[0]);
+    const uint32_t plant = sim.creatures().species[i];
+    uint32_t eater = plant;
+    for (std::size_t k = 0; k < sim.creatures().size(); ++k)
+        if (sim.creatures().pheno[k].absorb > 0.0f) eater = sim.creatures().species[k];
+    bool sun_to_plant = false, plant_to_eater = false;
+    for (const FoodWebEdge& e : web.edges) {
+        sun_to_plant = sun_to_plant || (e.kind == FoodKind::Source && e.from == static_cast<uint32_t>(FoodSource::Sun) && e.to == plant);
+        plant_to_eater = plant_to_eater || (e.kind == FoodKind::Living && e.from == plant && e.to == eater);
+        CHECK(e.energy > 0.0);
+    }
+    CHECK(sun_to_plant && plant_to_eater);
+    double plant_level = 0.0, eater_level = 0.0;
+    for (const FoodWebNode& n : web.nodes) {
+        if (n.species == plant) plant_level = n.level;
+        if (n.species == eater) eater_level = n.level;
+    }
+    CHECK(eater != plant && plant_level >= 1.0 && plant_level < 1.2 && eater_level > 1.5);
+}
+
+void test_scenario() {
+    using namespace luca;
+    const int first = find_scenario("first-steps");
+    CHECK(first > 0 && find_scenario("no-such") == -1);
+    SimConfig cfg;
+    cfg.world_size = 32;
+    cfg.initial_population = 60;
+
+    // No movers can appear in 10,000 ticks from 60 LUCAs here (tested
+    // below): time runs out, and the chronicle says so.
+    Simulation lose(cfg);
+    lose.seed_population();
+    lose.start_scenario(static_cast<uint32_t>(first));
+    CHECK(lose.scenario().active() && lose.scenario().outcome == Outcome::Running);
+    for (int t = 0; t < 5000; ++t) lose.step();
+    CHECK(lose.scenario().outcome == Outcome::Running);
+    std::string err;
+    auto saved = snapshot_from_bytes(snapshot_bytes(lose), err);   // the scenario survives a save
+    CHECK(saved && saved->scenario().id == static_cast<uint32_t>(first) && saved->scenario().start_tick == 0);
+    for (int t = 0; t < 5050; ++t) lose.step();
+    if (lose.creatures().size() > 0 && lose.census().movers < 10) {
+        CHECK(lose.scenario().outcome == Outcome::Lost);
+        CHECK(lose.scenario().verdict.find("Time is up") == 0);
+        CHECK(std::any_of(lose.chronicle().entries().begin(), lose.chronicle().entries().end(),
+                          [&](const ChronicleEntry& e) { return e.text == lose.scenario().verdict; }));
+    }
+
+    // Ten swimmers with brains: the goal is met at the next census.
+    Simulation win(cfg);
+    win.seed_population();
+    win.start_scenario(static_cast<uint32_t>(first));
+    Genome swimmer = make_luca();
+    swimmer.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
+    swimmer.brain.connect(input_node(IN_BIAS), output_node(OUT_WANDER), 1.0f);
+    for (int k = 0; k < 12; ++k) win.add_creature(4.0f + k * 2.0f, 16.0f, 400.0f, swimmer);
+    for (int t = 0; t < 60; ++t) win.step();
+    CHECK(win.scenario().outcome == Outcome::Won);
+    CHECK(win.scenario().end_tick == 50);
+    CHECK(win.scenario().verdict.find("Goal met") == 0);
+}
+
+// Stoichiometry (docs/design/stoichiometry.md): off changes nothing a body
+// needs; on, a body with energy but no P cannot breed; eaters give P off;
+// the P book is exact; a world with P saves and loads exactly.
+void test_stoichiometry() {
+    using namespace luca;
+    SimConfig cfg = small_config();
+    cfg.day_length = 0;
+    cfg.light_mode = LightMode::Uniform;
+    cfg.windfall_rate = 0.0f;
+
+    g_laws = Laws{};
+    CHECK(compile_phenotype(make_luca()).p_need == 0.0f);   // off by default
+    g_laws.P_BASE = 0.05f;
+    const Phenotype luca_p = compile_phenotype(make_luca());
+    CHECK(luca_p.p_need > 0.0f && luca_p.p_store_cap > luca_p.p_need);
+    CHECK(compile_phenotype(with_part(PartType::Armour, 1.0f)).p_need > compile_phenotype(with_part(PartType::Storage, 1.0f)).p_need);
+    CHECK(std::abs(compile_phenotype(make_luca(), 0.5f).p_need - 0.5f * luca_p.p_need) < 1e-6f);
+
+    // Energy enough to breed; soil with no P, or plenty.
+    auto breed = [&](float p_mean, std::size_t& births, std::size_t& held) {
+        g_laws = Laws{};
+        g_laws.P_BASE = 0.05f;
+        g_laws.P_MEAN = p_mean;
+        Simulation sim(cfg);
+        sim.add_creature(20.5f, 20.5f, 640.0f, make_luca());
+        const double p0 = sim.total_p();
+        births = held = 0;
+        for (int t = 0; t < 64; ++t) {
+            sim.step();
+            births += sim.last_stats().births;
+            held += sim.last_stats().p_limited;
+        }
+        CHECK(std::abs(sim.total_p() - p0) < 1e-5 * std::max(1.0, p0));
+    };
+    std::size_t b0, h0, b1, h1;
+    breed(0.0f, b0, h0);
+    breed(5.0f, b1, h1);
+    CHECK(b0 == 0 && h0 > 0);
+    CHECK(b1 > 0);
+
+    // An eater in rich soil (its store full of P) gives off the P in its meals.
+    g_laws = Laws{};
+    g_laws.P_BASE = 0.05f;
+    g_laws.P_MEAN = 5.0f;
+    {
+        Simulation sim(cfg);
+        sim.add_creature(20.5f, 20.5f, 400.0f, make_luca());
+        sim.add_creature(20.9f, 20.5f, 100.0f, with_part(PartType::Absorber, 3.5f));
+        const double p0 = sim.total_p();
+        double given = 0.0, taken = 0.0;
+        for (int t = 0; t < 120; ++t) {
+            sim.step();
+            given += sim.last_stats().p_given_off;
+            taken += sim.last_stats().p_taken_up;
+        }
+        CHECK(taken > 0.0 && given > 0.0);
+        CHECK(std::abs(sim.total_p() - p0) < 1e-5 * p0);
+
+        // Saved and loaded with P, it goes on exactly as before.
+        std::string err;
+        auto b = snapshot_from_bytes(snapshot_bytes(sim), err);
+        CHECK(b != nullptr);
+        if (b) {
+            for (int t = 0; t < 50; ++t) { sim.step(); b->step(); }
+            CHECK(b->total_p() == sim.total_p());
+            CHECK(snapshot_bytes(*b) == snapshot_bytes(sim));
+        }
+    }
+    g_laws = Laws{};
 }
 
 int main() {
@@ -2244,7 +2503,6 @@ int main() {
     test_part_placement();
     test_body_shape();
     test_stalks();
-    test_mutability_and_repair();
     test_folding();
     test_species_split();
     test_follow_species();
@@ -2257,7 +2515,12 @@ int main() {
     test_creature_files_and_meteors();
     test_snapshot_round_trip();
     test_laws();
+    test_fork_and_knockout();
+    test_scenario();
     test_keyed_draws();
+    test_geometry_laws();
+    test_food_web();
+    test_stoichiometry();
     if (failures == 0) std::puts("all life tests passed");
     return failures == 0 ? 0 : 1;
 }

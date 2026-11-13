@@ -1,5 +1,9 @@
 #include "luca_world.h"
 #include "sprite_data.hpp"
+#include "scenario.hpp"
+#include "foodweb.hpp"
+#include "snapshot.hpp"
+#include "laws.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -186,6 +190,37 @@ Array LucaWorld::get_species_tree(int min_peak) const {
     return out;
 }
 
+Dictionary LucaWorld::get_food_web(int min_alive) const {
+    Dictionary out;
+    Array nodes, edges;
+    if (sim_) {
+        const luca::FoodWeb web = luca::food_web(*sim_, static_cast<uint32_t>(std::max(min_alive, 1)));
+        for (const luca::FoodWebNode& n : web.nodes) {
+            Dictionary d;
+            d["id"] = static_cast<int64_t>(n.species);
+            d["name"] = String::utf8(sim_->species().get(n.species).name.c_str());
+            d["hue"] = sprite::species_hue(n.species);
+            d["alive"] = static_cast<int64_t>(n.alive);
+            d["level"] = n.level;
+            d["intake"] = n.intake;
+            nodes.push_back(d);
+        }
+        static const char* SOURCES[] = {"sun", "dead", "vent", "loose"};
+        for (const luca::FoodWebEdge& e : web.edges) {
+            Dictionary d;
+            const bool source = e.kind == luca::FoodKind::Source;
+            d["kind"] = source ? String(SOURCES[std::min<uint32_t>(e.from, 3)]) : String(e.kind == luca::FoodKind::Living ? "living" : "leavings");
+            d["from"] = source ? static_cast<int64_t>(-1) : static_cast<int64_t>(e.from);
+            d["to"] = static_cast<int64_t>(e.to);
+            d["energy"] = e.energy;
+            edges.push_back(d);
+        }
+    }
+    out["nodes"] = nodes;
+    out["edges"] = edges;
+    return out;
+}
+
 PackedFloat32Array LucaWorld::get_heights() const {
     return sim_ ? to_packed(sim_->world().heights()) : PackedFloat32Array();
 }
@@ -200,6 +235,16 @@ PackedFloat32Array LucaWorld::get_nutrients() const {
 }
 PackedFloat32Array LucaWorld::get_corpses() const {
     return sim_ ? to_packed(sim_->soil().corpse_energy) : PackedFloat32Array();
+}
+PackedFloat32Array LucaWorld::get_mineral() const {
+    PackedFloat32Array out;
+    if (!sim_) return out;
+    const auto& m = sim_->soil().mineral;
+    const float scale = 1.0f / std::max(3.0f * luca::g_laws.P_MEAN, 1e-6f);
+    out.resize(static_cast<int64_t>(m.size()));
+    float* f = out.ptrw();
+    for (std::size_t i = 0; i < m.size(); ++i) f[i] = std::min(m[i] * scale, 1.0f);
+    return out;
 }
 PackedFloat32Array LucaWorld::get_soil() const {
     PackedFloat32Array out;
@@ -421,7 +466,6 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["birth_size"] = p.birth_size;
     d["pigment"] = g.pigment;
     d["hue"] = g.hue;
-    d["shows"] = sim_->shows(who);
     d["mass"] = p.mass;
     d["upkeep"] = p.upkeep;
     d["light_capture"] = p.light_capture;
@@ -456,8 +500,6 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["fed_vent"] = c.fed_vent[who];
     d["burns_vent"] = p.can_burn(luca::VENT_CHEM);   // can live on what a vent makes
     d["burns"] = burns_words(p);
-    d["mutability"] = g.mutability;
-    d["repair"] = g.repair;
     // Chemistry: its enzymes ("A<->D", "A+D<->B+C" for two-input ones), and
     // what its store and body hold.
     PackedStringArray enzymes;
@@ -483,6 +525,11 @@ Dictionary LucaWorld::describe(std::size_t who) const {
     d["cell_light"] = w.light(cell);
     d["cell_temperature"] = w.temperature(cell);
     d["cell_nutrient"] = sim_->soil().nutrient[cell];
+    d["cell_mineral"] = sim_->soil().mineral[cell];
+    d["p_on"] = p.p_adult > 0.0f;   // stoichiometry: P_BASE is on
+    d["p_body"] = c.tissue_p[who];
+    d["p_store"] = c.pool_p[who];
+    d["p_child"] = p.p_adult * p.birth_size;
     d["cell_vent"] = w.vent_energy(cell);
     // Where each part sits, in words: eight directions from the front.
     static const char* const SIDES[8] = { "front", "front-left", "left", "back-left", "back", "back-right", "right", "front-right" };
@@ -631,8 +678,6 @@ Dictionary LucaWorld::get_species_profile(int64_t species_id) const {
     b["burns_vent"] = p.can_burn(luca::VENT_CHEM);
     b["dormancy"] = g.dormancy;
     b["throw_range"] = p.throw_range;
-    b["mutability"] = g.mutability;
-    b["repair"] = g.repair;
     b["toxicity"] = p.toxicity;
     b["mass"] = p.mass;
     b["upkeep"] = p.upkeep;
@@ -731,6 +776,64 @@ Dictionary LucaWorld::get_sprites(const PackedInt64Array& ids, int64_t species_i
     return d;
 }
 
+String LucaWorld::save_world(const String& path) const {
+    if (!sim_) return "There is no world to save.";
+    std::string error;
+    if (!luca::save_snapshot(*sim_, path.utf8().get_data(), error)) return String(error.c_str());
+    return "";
+}
+
+String LucaWorld::load_world(const String& path) {
+    std::string error;
+    auto loaded = luca::load_snapshot(path.utf8().get_data(), error);
+    if (!loaded) return String(error.c_str());
+    sim_ = std::move(loaded);
+    return "";
+}
+
+Array LucaWorld::get_scenarios() const {
+    Array out;
+    for (const luca::ScenarioInfo& s : luca::scenario_list()) {
+        Dictionary d;
+        d["key"] = String(s.key);
+        d["title"] = String(s.title);
+        d["brief"] = String(s.brief);
+        d["limit"] = static_cast<int64_t>(s.limit);
+        d["meteors"] = s.meteors;
+        out.push_back(d);
+    }
+    return out;
+}
+
+bool LucaWorld::start_scenario(const String& key) {
+    const int id = luca::find_scenario(key.utf8().get_data());
+    if (!sim_ || id < 0) return false;
+    sim_->start_scenario(static_cast<uint32_t>(id));
+    return true;
+}
+
+Dictionary LucaWorld::get_scenario() const {
+    Dictionary d;
+    if (!sim_) return d;
+    const luca::ScenarioState& s = sim_->scenario();
+    const luca::ScenarioInfo& info = s.info();
+    const uint64_t now = s.outcome == luca::Outcome::Running ? sim_->tick() : s.end_tick;
+    const uint64_t elapsed = now - s.start_tick;
+    d["active"] = s.active();
+    d["key"] = String(info.key);
+    d["title"] = String(info.title);
+    d["brief"] = String(info.brief);
+    d["limit"] = static_cast<int64_t>(info.limit);
+    d["meteors"] = info.meteors;
+    d["start"] = static_cast<int64_t>(s.start_tick);
+    d["elapsed"] = static_cast<int64_t>(elapsed);
+    d["left"] = info.limit > 0 ? static_cast<int64_t>(info.limit > elapsed ? info.limit - elapsed : 0) : int64_t(-1);
+    d["outcome"] = s.outcome == luca::Outcome::Won ? "won" : s.outcome == luca::Outcome::Lost ? "lost" : "running";
+    d["verdict"] = String(s.verdict.c_str());
+    d["progress"] = String(luca::scenario_progress(s, sim_->census()).c_str());
+    return d;
+}
+
 bool LucaWorld::save_powers(const String& path) const {
     if (!sim_) return false;
     std::ofstream f(path.utf8().get_data());
@@ -767,9 +870,11 @@ void LucaWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_species_count", "min_population"), &LucaWorld::get_species_count);
     ClassDB::bind_method(D_METHOD("get_top_species", "max_count"), &LucaWorld::get_top_species);
     ClassDB::bind_method(D_METHOD("get_species_tree", "min_peak"), &LucaWorld::get_species_tree);
+    ClassDB::bind_method(D_METHOD("get_food_web", "min_alive"), &LucaWorld::get_food_web);
     ClassDB::bind_method(D_METHOD("get_species_profile", "species_id"), &LucaWorld::get_species_profile);
     ClassDB::bind_method(D_METHOD("get_sprites", "ids", "species_id"), &LucaWorld::get_sprites);
     ClassDB::bind_method(D_METHOD("get_nutrients"), &LucaWorld::get_nutrients);
+    ClassDB::bind_method(D_METHOD("get_mineral"), &LucaWorld::get_mineral);
     ClassDB::bind_method(D_METHOD("get_corpses"), &LucaWorld::get_corpses);
     ClassDB::bind_method(D_METHOD("get_soil"), &LucaWorld::get_soil);
     ClassDB::bind_method(D_METHOD("inspect_id", "id"), &LucaWorld::inspect_id);
@@ -788,6 +893,11 @@ void LucaWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chronicle", "from"), &LucaWorld::get_chronicle);
     ClassDB::bind_method(D_METHOD("inspect", "x", "z", "max_distance"), &LucaWorld::inspect);
     ClassDB::bind_method(D_METHOD("save_powers", "path"), &LucaWorld::save_powers);
+    ClassDB::bind_method(D_METHOD("save_world", "path"), &LucaWorld::save_world);
+    ClassDB::bind_method(D_METHOD("load_world", "path"), &LucaWorld::load_world);
+    ClassDB::bind_method(D_METHOD("get_scenarios"), &LucaWorld::get_scenarios);
+    ClassDB::bind_method(D_METHOD("start_scenario", "key"), &LucaWorld::start_scenario);
+    ClassDB::bind_method(D_METHOD("get_scenario"), &LucaWorld::get_scenario);
     // The creature designer (luca_design.cpp).
     ClassDB::bind_method(D_METHOD("get_brain_layout"), &LucaWorld::get_brain_layout);
     ClassDB::bind_method(D_METHOD("get_design_templates"), &LucaWorld::get_design_templates);

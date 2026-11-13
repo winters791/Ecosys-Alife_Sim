@@ -59,7 +59,6 @@ namespace luca {
     X(FLAGELLUM_THRUST,     0.125f,        "phenotype") \
     X(LEGS_THRUST,          0.10f,         "phenotype") \
     X(MAX_SPEED,            0.5f,          "phenotype") \
-    X(MOVER_SUN,            1.0f,          "phenotype") \
     X(ARMOUR_SHADES,        0.5f,          "phenotype") \
     X(REACH_PER_RADIUS,     0.5f,          "phenotype") \
     X(TOXICITY_PER_SIZE,    1.0f,          "phenotype") \
@@ -75,9 +74,6 @@ namespace luca {
     X(THROW_UPKEEP,         0.015f,        "phenotype") \
     X(SKIN_UPKEEP,          0.1f,          "phenotype") \
     X(STALK_MASS,           0.1f,          "phenotype") \
-    X(FIDELITY_UPKEEP,      0.02f,         "phenotype") \
-    X(REPAIR_GAIN,          2.0f,          "phenotype") \
-    X(REPAIR_SHARE,         0.15f,         "phenotype") \
     X(STALK_UPKEEP,         0.06f,         "phenotype") \
     X(BITE_UPKEEP,          0.06f,         "phenotype") \
     X(DORMANCY_UPKEEP,      0.02f,         "phenotype") \
@@ -131,8 +127,6 @@ namespace luca {
     X(W_DORMANCY,           1.5f,          "species") \
     X(W_ELONGATE,           1.5f,          "species") \
     X(W_SQUARE,             1.0f,          "species") \
-    X(W_MUTABILITY,         0.3f,          "species") \
-    X(W_REPAIR,             1.5f,          "species") \
     X(W_BIRTH,              1.5f,          "species") \
     X(W_STALK,              0.8f,          "species") \
     X(W_ENZ_KIND,           0.6f,          "species") \
@@ -142,7 +136,21 @@ namespace luca {
     X(W_BRAIN,              0.4f,          "species") \
     X(W_WEIGHTS,            0.06f,         "species") \
     X(W_NEURON,             0.3f,          "species") \
-    X(W_TAU,                0.05f,         "species")
+    X(W_TAU,                0.05f,         "species") \
+    /* Switches for the ablation pass (14.10.8): 1 = the rule as built, 0 = off. */ \
+    X(USE_BITE,             1.0f,          "genome") \
+    X(GENE_TRANSFER,        1.0f,          "sim") \
+    X(SPILL_LOST,           1.0f,          "sim") \
+    X(DEAD_IN_REACH,        1.0f,          "sim") \
+    X(LIGHT_ACROSS,         0.0f,          "world") \
+    X(LIGHT_FOOTPRINT,      1.0f,          "sim") \
+    X(P_BASE,               0.0f,          "phenotype") \
+    X(P_PART_SCALE,         1.0f,          "phenotype") \
+    X(P_STORE,              2.0f,          "phenotype") \
+    X(P_UPTAKE,             0.01f,         "sim") \
+    X(P_WEATHER_SHARE,      0.25f,         "sim") \
+    X(P_MEAN,               0.3f,          "sim") \
+    X(VENT_P,               0.02f,         "sim")
 
 struct Laws {
 #define LUCA_LAW_FIELD(name, value, where) float name = value;

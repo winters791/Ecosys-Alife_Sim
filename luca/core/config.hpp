@@ -65,17 +65,19 @@ struct SimConfig {
     float gene_transfer_chance = 0.0001f;
 
     // Vents (2026-11-12): hot springs on the sea floor, placed only by the
-    // player's vent brush (none at the start). A vent of strength 1 gives
-    // vent_power energy per tick into its cell, day and night, to bodies with
-    // the chemosynthesis gene; what nobody takes is lost, like unused light.
-    // It also warms the cell by vent_heat °C per unit of strength.
+    // player's vent brush (none at the start). A vent of strength 1 brings up
+    // vent_power energy's worth of loose C a tick from below (new energy and
+    // new matter), day and night; bodies that can burn C take it up through
+    // their skin, and what nobody takes drifts and breaks down to A
+    // (Simulation::run_vents). It also warms the cell by vent_heat °C per
+    // unit of strength.
     float vent_power = 1.0f;   // a strength-1 vent gives what a cell of sun gives, averaged over a day
     float vent_heat  = 12.0f;  // °C per unit of strength
     float vent_max   = 3.0f;   // strongest a vent can be painted
 
     // Windfalls: now and then a lump of food falls on a random cell and lies
-    // there like a corpse with no matter in it (energy only, so the matter
-    // books don't change). Anything with a mouth in that cell can eat it, and
+    // there like a corpse: D made out of the cell's own A (new energy, no new
+    // matter; a bare cell gets nothing). Anything with a mouth in that cell can eat it, and
     // it weathers away like a corpse; movers can smell it with the same sense
     // and lean they use for the dead. A second, patchy energy source besides
     // the sun, so finding food can pay. Rate is energy per cell per tick,

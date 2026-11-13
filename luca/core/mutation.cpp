@@ -20,11 +20,8 @@ namespace luca {
 // No operator knows what is useful. A mouth on a creature that can't reach
 // anything is pure cost and selection removes it.
 //
-// The rates below are for a parent with mutability 0. The mutability gene
-// (2026-11-12) scales every chance by 2^mutability: a lineage can evolve to
-// copy itself more faithfully (paying upkeep for it, phenotype.cpp) or more
-// sloppily (free, but more of its children are broken). Step sizes are not
-// scaled. Ranges are enforced once, in clamp_genome().
+// Ranges are enforced once, in clamp_genome(). (A mutability gene that
+// scaled every chance was deleted after the ablation pass, 14.10.8.)
 // =============================================================================
 
 namespace {
@@ -81,8 +78,8 @@ void nudge_optional(float& v, float sigma, Rng& rng) {
 // The brain evolves the way the body does: mostly small nudges to what is
 // there, and now and then a change of structure. None of these knows what is
 // useful; each neuron and link costs upkeep, so what doesn't pay is lost.
-void mutate_brain(Brain& b, Rng& rng, float rate) {
-    auto chance = [&](float p) { return rng.chance(std::min(1.0f, p * rate)); };
+void mutate_brain(Brain& b, Rng& rng) {
+    auto chance = [&](float p) { return rng.chance(std::min(1.0f, p)); };
     for (BrainLink& l : b.links)
         if (chance(P_WEIGHT)) l.weight += rng.normal() * 0.2f;
     for (int k = 0; k < b.hidden; ++k) {
@@ -129,9 +126,7 @@ void mutate_brain(Brain& b, Rng& rng, float rate) {
 
 Genome mutate(const Genome& parent, Rng& rng) {
     Genome g = parent;
-    // How sloppily this parent is copied scales every chance below.
-    const float rate = std::exp2(std::clamp(parent.mutability, limits::MIN_MUTABILITY, limits::MAX_MUTABILITY));
-    auto chance = [&](float p) { return rng.chance(std::min(1.0f, p * rate)); };
+    auto chance = [&](float p) { return rng.chance(std::min(1.0f, p)); };
 
     // --- Tweaks ---------------------------------------------------------------
     if (chance(P_GENE)) scale(g.core_radius, 0.06f, rng);
@@ -146,8 +141,6 @@ Genome mutate(const Genome& parent, Rng& rng) {
     if (chance(P_GENE)) nudge_optional(g.dormancy, 0.08f, rng);
     if (chance(P_GENE)) g.elongation += rng.normal() * 0.06f;
     if (chance(P_GENE)) g.squareness += rng.normal() * 0.06f;
-    if (chance(P_GENE)) g.mutability += rng.normal() * 0.15f;
-    if (chance(P_GENE)) nudge_optional(g.repair, 0.08f, rng);
     if (chance(P_GENE)) g.birth_size += rng.normal() * 0.05f;
     for (float& s : g.shape)
         if (chance(P_GENE * 0.5f)) s += rng.normal() * 0.15f;
@@ -232,7 +225,7 @@ Genome mutate(const Genome& parent, Rng& rng) {
         if (!can_move && chance(P_LOSE_BRAIN)) {
             g.brain.clear();
         } else {
-            mutate_brain(g.brain, rng, rate);
+            mutate_brain(g.brain, rng);
         }
     }
 

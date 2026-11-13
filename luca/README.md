@@ -34,7 +34,7 @@ Run `--help` for defaults.
 | `headless/main.cpp` | CLI runner | Scaffolding |
 | `tools/plot.py` | Plots for a run | Scaffolding |
 
-The creature rules are now filled in. `../CLAUDE.md` (sections 10 and 11) is the up-to-date reference, including which constants to tune; parts of this README and `DESIGN.md` describe the earlier placeholder stage.
+The creature rules are now filled in. `../CLAUDE.md` (sections 10 and 11) is the up-to-date reference, including which constants to tune; parts of this README describe the earlier placeholder stage. (`DESIGN.md`, an old copy of the design, was deleted on 2026-11-12.)
 
 ## Units (proposed: change now, not later)
 

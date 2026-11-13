@@ -1,4 +1,5 @@
 #include "genome.hpp"
+#include "laws.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -117,9 +118,9 @@ void clamp_genome(Genome& g) {
     g.dormancy          = std::clamp(g.dormancy, 0.0f, 1.0f);
     g.elongation        = std::clamp(g.elongation, 0.0f, 1.0f);
     g.squareness        = std::clamp(g.squareness, 0.0f, 1.0f);
-    g.mutability        = std::clamp(g.mutability, MIN_MUTABILITY, MAX_MUTABILITY);
-    g.repair            = std::clamp(g.repair, 0.0f, 1.0f);
     g.birth_size        = std::clamp(g.birth_size, MIN_BIRTH, MAX_BIRTH);
+    // Ablation switches (laws.hpp): a gene switched off can never be carried.
+    if (g_laws.USE_BITE == 0.0f) g.bite = 0.0f;
     if (g.parts.size() > static_cast<std::size_t>(MAX_PARTS)) g.parts.resize(MAX_PARTS);
     for (Part& p : g.parts) {
         if (static_cast<int>(p.type) >= static_cast<int>(PartType::Count)) p.type = PartType::Photo;

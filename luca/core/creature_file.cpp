@@ -94,8 +94,6 @@ void write_genome(std::ostringstream& o, const Genome& g, const char* sep) {
     o << "bite " << num(g.bite) << sep;
     o << "dormancy " << num(g.dormancy) << sep;
     o << "throw " << num(g.seed_throw) << sep;
-    o << "mutability " << num(g.mutability) << sep;
-    o << "repair " << num(g.repair) << sep;
     for (const Part& p : g.parts)
         o << "part " << PART_WORDS[static_cast<int>(p.type)] << ' ' << num(p.size) << ' ' << num(p.theta) << ' '
           << num(p.stalk) << sep;
@@ -195,8 +193,10 @@ bool read_creature_file(const std::string& text, CreatureFile& out, std::string&
         else if (key == "bite")       ok = floats({&g->bite});
         else if (key == "dormancy")   ok = floats({&g->dormancy});
         else if (key == "throw")      ok = floats({&g->seed_throw});
-        else if (key == "mutability") ok = floats({&g->mutability});
-        else if (key == "repair")     ok = floats({&g->repair});
+        else if (key == "mutability" || key == "repair") {   // genes deleted after the ablation pass (14.10.8): read and dropped
+            float gone = 0.0f;
+            ok = floats({&gone});
+        }
         else if (key == "shape") {
             for (float& s : g->shape) ok = ok && floats({&s});
         } else if (key == "part") {

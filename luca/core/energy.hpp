@@ -8,13 +8,15 @@
 // What the scaffolding guarantees around these functions:
 //   * Light is finite. Each cell receives env.light energy per tick. Every
 //     creature in the cell asks for light_demand(). If the total demand is
-//     more than the cell's light, the canopy rule applies: the biggest body
-//     (by core radius) takes what it asks for first, then the next biggest,
-//     and smaller ones get what is left. Bodies of exactly the same size
-//     share alike. So crowding = competition = carrying capacity, and size
-//     buys sunlight. Unabsorbed light is lost.
-//   * Costs can never exceed the energy a creature has. If it can't pay, it
-//     pays what it has, hits zero, and dies.
+//     more than the cell's light, the canopy rule applies: the tallest body
+//     (Phenotype::canopy: core radius plus stalks) takes what it asks for
+//     first, then the next, and shorter ones get what is left. (With the
+//     LIGHT_FOOTPRINT law a body asks in every cell its outline covers.)
+//     Bodies of exactly the same height share alike. So crowding =
+//     competition = carrying capacity. Unabsorbed light is lost.
+//   * Costs are paid by burning the store (burn). A body that cannot pay
+//     them in full this tick, because its store or its enzymes' rate falls
+//     short, dies.
 //   * Energy is audited: stored(now) must equal stored(before) + in - out.
 
 #include <cstdint>
@@ -36,7 +38,7 @@ float light_demand(const Phenotype& p, const LocalEnv& env);
 // catches after covering `moved` world units last tick. 1 when it sat still.
 float light_while_moving(float moved);
 
-// Folding (2026-11-12, in place of MOVER_SUN): a body that moves further than
+// Folding (2026-11-12, in place of MOVER_SUN, since deleted): a body that moves further than
 // FOLD_STRIDE in a tick folds its sun patches shut, and they take
 // UNFOLD_TICKS (a day) to open again, catching light in proportion. A body
 // that moves now and then (to flee) loses a little; one that creeps every few
@@ -121,14 +123,15 @@ float power(const Phenotype& p, const Mix& pool, float soil_a);
 // Stores up to `energy` in the store. Returns what it stored: less if there
 // is no A to hand, no room, or no enzyme to do it.
 float charge(const Phenotype& p, Mix& pool, float& soil_a, float energy, float* two = nullptr);
-// Neutral exchanges (stage 4): each enzyme in Phenotype::neutral runs once a
-// tick at its rate, as far as its inputs and room allow, turning chemicals
-// the body can't burn into ones it can. Releases and costs nothing. Returns
-// the units turned over.
-float convert(const Phenotype& p, Mix& pool, float& soil_a);
 
 // Energy per tick this creature tries to pull out of dead matter in its cell.
 float corpse_demand(const Phenotype& p);
+// The same pull, from a mouth facing the dead with `pull` (a BodyPlan entry):
+// a corpse in a neighbouring cell (DEAD_IN_REACH, 14.2.3).
+float corpse_demand_toward(float pull);
+// Light demand per unit of light falling on it: light_demand(p, env) is this
+// times env.light (LIGHT_FOOTPRINT reads the light of each cell it covers).
+float light_catch(const Phenotype& p);
 
 // Fraction of pulled energy that arrives in a plain body; the rest is lost as
 // heat. This is why every step up a food chain supports fewer creatures. The

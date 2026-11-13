@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "energy.hpp"
+#include "footprint.hpp"
 #include "mutation.hpp"
 
 namespace luca {
@@ -70,7 +71,9 @@ Simulation::Simulation(const SimConfig& cfg)
     cell_corpse_demand_.assign(cells, 0.0f);
     cell_uptake_demand_.assign(cells * NCHEM, 0.0f);
     biomass_.assign(cells, 0.0f);
-    seen_.assign(cells, 0.0f);
+    leaver_.assign(cells, NO_LEAVER);
+    left_.assign(cells, 0.0f);
+    cell_p_demand_.assign(cells, 0.0f);
 
     // Starting soil: patches of rich ground and stretches of poor ground,
     // scaled so the average is exactly nutrient_mean.
@@ -85,6 +88,24 @@ Simulation::Simulation(const SimConfig& cfg)
     const float patchy = std::clamp(cfg_.nutrient_patchiness, 0.0f, 1.0f);
     for (float& v : soil_.nutrient)
         v = std::max(0.0f, cfg_.nutrient_mean) * ((1.0f - patchy) + patchy * v / mean_raw);
+    lay_out_mineral();
+}
+
+// The mineral P (docs/design/stoichiometry.md): patchier than A (rich spots,
+// long poor stretches), laid out by its own noise, scaled so the mean is P_MEAN.
+void Simulation::lay_out_mineral() {
+    const std::size_t cells = soil_.mineral.size();
+    double sum = 0.0;
+    for (std::size_t c = 0; c < cells; ++c) {
+        const float k = std::clamp((world_.patch_noise(static_cast<int>(c), 131u) - 0.3f) / 0.4f, 0.0f, 1.0f);
+        soil_.mineral[c] = k * k;
+        sum += soil_.mineral[c];
+    }
+    const float mean_raw = sum > 0.0 ? static_cast<float>(sum / static_cast<double>(cells)) : 1.0f;
+    const float patchy = std::clamp(cfg_.nutrient_patchiness, 0.0f, 1.0f);
+    for (float& v : soil_.mineral)
+        v = std::max(0.0f, g_laws.P_MEAN) * ((1.0f - patchy) + patchy * v / mean_raw);
+    std::fill(soil_.corpse_p.begin(), soil_.corpse_p.end(), 0.0f);
 }
 
 void Simulation::seed_population() {
@@ -106,9 +127,11 @@ void Simulation::seed_population() {
 }
 
 void Simulation::admit(float x, float y, const Mix& store, const Mix& body, uint32_t lineage, uint32_t species, uint32_t generation,
-                       Genome genome, const Phenotype& pheno, float body_temp) {
+                       Genome genome, const Phenotype& pheno, float body_temp, float body_p, float store_p) {
     if (body_temp < -273.0f) body_temp = felt_temperature(pheno, world_.env(world_.cell_index(x, y)));
-    c_.add(x, y, store, body, body_temp, next_id_++, lineage, species, generation, std::move(genome), pheno);
+    // body_p < 0: a newcomer from outside, built with exactly the P it needs.
+    c_.add(x, y, store, body, body_temp, next_id_++, lineage, species, generation, std::move(genome), pheno,
+           body_p < 0.0f ? pheno.p_need : body_p, store_p);
     if (!species_.born(species)) return;
 
     // The species has taken hold: enough alive at once to be more than a freak.
@@ -137,14 +160,38 @@ uint64_t Simulation::add_creature(float x, float y, float energy, const Genome& 
     return id;
 }
 
-Rgb Simulation::ground_colour_at(int cell) const {
-    return ground_colour(world_.height(cell), world_.mean_temperature(cell), soil_.nutrient[cell], world_.vent(cell));
+void Simulation::fork(uint64_t fork_seed) {
+    draw_seed_ = mix64(draw_seed_ ^ mix64(fork_seed * 0xD1B54A32D192ED03ull + 0xF0F0));
+    events_.fork(fork_seed);
+    chronicle_.add(tick_, "The world forks (fork " + std::to_string(fork_seed) + ").");
 }
 
-float Simulation::shows(std::size_t i) const {
-    const Rgb ground = ground_colour_at(world_.cell_index(c_.x[i], c_.y[i]));
-    const float moving = std::min(c_.moved[i] * (1.0f / SOCIAL_FAST), 1.0f);
-    return std::max(visibility(c_.pheno[i].skin, ground), moving);
+void Simulation::start_scenario(uint32_t id) {
+    if (id >= scenario_list().size()) id = 0;
+    scenario_ = ScenarioState{};
+    scenario_.id = id;
+    scenario_.start_tick = tick_;
+    if (id != 0) chronicle_.add(tick_, std::string("A goal is set: ") + scenario_.info().title + ". " + scenario_.info().brief);
+}
+
+std::size_t Simulation::knockout(uint32_t species) {
+    std::size_t gone = 0;
+    for (std::size_t k = c_.size(); k-- > 0;) {
+        if (c_.species[k] != species) continue;
+        // As any death: its body and store stay where it stood, as a corpse.
+        Mix remains = c_.tissue[k];
+        remains.add(c_.pool[k]);
+        soil_.add_corpse(static_cast<std::size_t>(world_.cell_index(c_.x[k], c_.y[k])), remains, c_.tissue_p[k] + c_.pool_p[k]);
+        species_.note_death(species, c_.id[k], c_.age[k], c_.kills[k], c_.children[k], false, tick_);
+        if (species_.died(species, tick_)) {
+            const Species& s = species_.get(species);
+            chronicle_.add(tick_, s.name + " is knocked out of the world (" + std::to_string(gone + 1) + " bodies).");
+        }
+        if (!borrowed_.empty()) borrowed_.erase(c_.id[k]);
+        c_.remove_swap(k);
+        ++gone;
+    }
+    return gone;
 }
 
 double Simulation::stored_energy() const {
@@ -163,6 +210,15 @@ double Simulation::total_matter() const {
     for (float m : soil_.nutrient) s += m;
     for (const Mix& m : soil_.corpse) s += m.mass();
     for (const Mix& m : soil_.dissolved) s += m.mass();
+    return s;
+}
+
+double Simulation::total_p() const {
+    double s = 0.0;
+    for (float m : c_.pool_p) s += m;
+    for (float m : c_.tissue_p) s += m;
+    for (float m : soil_.mineral) s += m;
+    for (float m : soil_.corpse_p) s += m;
     return s;
 }
 
@@ -212,7 +268,7 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
             dy += gy * k;
         };
         lean(world_.lights(),       0.02f, w[OUT_LIGHT]);
-        lean(seen_,                 0.5f,  w[OUT_BIOMASS]);   // the living, as they show against the ground
+        lean(biomass_,              0.5f,  w[OUT_BIOMASS]);
         lean(soil_.corpse_energy,   1.0f,  w[OUT_CORPSE]);
         lean(soil_.nutrient,        0.2f,  w[OUT_NUTRIENT]);
         // Comfort: uphill in temperature when too cold, downhill when too hot.
@@ -228,8 +284,8 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
             const uint32_t mine = c_.species[i];
             float sx = 0.0f, sy = 0.0f;
             for (int yy = std::max(cy - reach, 0); yy <= std::min(cy + reach, n - 1); ++yy) {
-                const uint32_t stop = grid_.end(yy * n + std::min(cx + reach, n - 1));
-                for (uint32_t slot = grid_.begin(yy * n + std::max(cx - reach, 0)); slot < stop; ++slot) {
+                for (int xx = std::max(cx - reach, 0); xx <= std::min(cx + reach, n - 1); ++xx)
+                for (uint32_t slot = grid_.begin(yy * n + xx), stop = grid_.end(yy * n + xx); slot < stop; ++slot) {
                     const uint32_t j = grid_.creature_at(slot);
                     if (j == i) continue;
                     const float ox = c_.x[j] - px, oy = c_.y[j] - py;
@@ -239,8 +295,8 @@ void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
                     const float bigger = std::clamp(q.radius / p.radius - 1.0f, -1.0f, 1.0f);
                     const float moving = std::min(c_.moved[j] * (1.0f / SOCIAL_FAST), 1.0f);
                     const float score = (c_.species[j] == mine ? w[OUT_KIN] : 0.0f) + w[OUT_BIGGER] * bigger + w[OUT_MOVING] * moving;
-                    // Nearer, heavier and plainer-showing bodies count for more.
-                    const float k = score * shows_[j] * q.mass / (dist * (1.0f + dist));
+                    // Nearer and heavier bodies count for more.
+                    const float k = score * q.mass / (dist * (1.0f + dist));
                     sx += ox * k;
                     sy += oy * k;
                 }
@@ -308,7 +364,9 @@ void Simulation::step() {
     stats_.energy_in += arrived_energy_;
     stats_.in_meteor += arrived_energy_;
     stats_.matter_in += arrived_matter_;
-    arrived_energy_ = arrived_matter_ = 0.0;
+    stats_.p_in += arrived_p_;
+    arrived_energy_ = arrived_matter_ = arrived_p_ = 0.0;
+    const bool p_on = g_laws.P_BASE > 0.0f;   // stoichiometry (docs/design/stoichiometry.md); off: no body needs P
 
     // God powers act first, then the sun moves, so every creature sees the
     // same world this tick.
@@ -340,26 +398,27 @@ void Simulation::step() {
     top_taker_.assign(n, 0);
     top_take_.assign(n, 0.0f);
     poisoned_.assign(n, 0.0f);
+    if (p_on) {
+        p_want_.resize(n);
+        p_gain_.resize(n);
+        intake_p_.assign(n, 0.0f);
+    }
 
     // --- Phase 0: bin creatures into cells; living mass per cell --------------
-    // Camouflage (colour.hpp): each body shows against its ground by the
-    // contrast between its skin and the ground's colour; moving gives it away.
-    std::fill(biomass_.begin(), biomass_.end(), 0.0f);
-    std::fill(seen_.begin(), seen_.end(), 0.0f);
-    shows_.resize(n);
+    // The per-cell sums are cleared only where last tick wrote them (14.5 item 1).
+    for (int c : scratch_cells_) {
+        biomass_[c] = cell_demand_[c] = cell_corpse_demand_[c] = cell_p_demand_[c] = 0.0f;
+        for (int ch = 0; ch < NCHEM; ++ch) cell_uptake_demand_[static_cast<std::size_t>(c) * NCHEM + ch] = 0.0f;
+    }
     for (std::size_t i = 0; i < n; ++i) {
         const int cell = world_.cell_index(c_.x[i], c_.y[i]);
         cell_of_[i] = cell;
-        shows_[i] = shows(i);
         biomass_[cell] += c_.pheno[i].mass;
-        seen_[cell] += c_.pheno[i].mass * shows_[i];
     }
     grid_.build(cell_of_, world_.num_cells());
+    scratch_cells_ = grid_.occupied();
 
     // --- Phase 1a: what everyone asks for, summed per cell --------------------
-    std::fill(cell_demand_.begin(), cell_demand_.end(), 0.0f);
-    std::fill(cell_corpse_demand_.begin(), cell_corpse_demand_.end(), 0.0f);
-    std::fill(cell_uptake_demand_.begin(), cell_uptake_demand_.end(), 0.0f);
     const bool dark = world_.daylight() <= 0.0f;
     for (std::size_t i = 0; i < n; ++i) {
         const Phenotype& p = c_.pheno[i];
@@ -375,9 +434,54 @@ void Simulation::step() {
         if (uptake_want_[i] > 0.0f)
             for (int ch = CHEM_B; ch < NCHEM; ++ch)
                 if (p.can_burn(ch)) cell_uptake_demand_[static_cast<std::size_t>(cell) * NCHEM + ch] += uptake_want_[i];
+        // The mineral P, through its skin, while its store has room for more.
+        if (p_on) {
+            p_want_[i] = c_.pool_p[i] < p.p_store_cap ? std::max(0.0f, g_laws.P_UPTAKE * p.surface_area) * (1.0f - c_.sleep[i]) : 0.0f;
+            cell_p_demand_[cell] += p_want_[i];
+        }
     }
 
-    if (!dark) share_light_by_canopy();
+    // The dead in the next cells (DEAD_IN_REACH, 14.2.3): a mouth pulls on the
+    // corpses of a neighbouring cell when that cell lies within its reach,
+    // with the pull it has towards it, as it would on a living body there.
+    corpse_asks_.clear();
+    if (g_laws.DEAD_IN_REACH != 0.0f) {
+        const int wn = world_.size();
+        const float cs = world_.cell_size();
+        for (std::size_t i = 0; i < n; ++i) {
+            if (corpse_want_[i] <= 0.0f) continue;
+            const Phenotype& p = c_.pheno[i];
+            const BodyPlan& mine = c_.body[i];
+            const int cx = cell_of_[i] % wn, cy = cell_of_[i] / wn;
+            const float px = c_.x[i], py = c_.y[i], hx = c_.hx[i], hy = c_.hy[i];
+            const float longest = std::min(p.reach + mine.longest_stalk, MAX_REACH);
+            for (int yy = std::max(cy - 1, 0); yy <= std::min(cy + 1, wn - 1); ++yy)
+                for (int xx = std::max(cx - 1, 0); xx <= std::min(cx + 1, wn - 1); ++xx) {
+                    const int c = yy * wn + xx;
+                    if (c == cell_of_[i] || soil_.corpse[c].mass() <= 0.0f) continue;
+                    // Nearest point of that cell, and the way to its middle.
+                    const float qx = std::clamp(px, xx * cs, (xx + 1) * cs), qy = std::clamp(py, yy * cs, (yy + 1) * cs);
+                    const float d = std::hypot(qx - px, qy - py);
+                    if (d > longest) continue;
+                    float pull;
+                    if (mine.even_mouth) pull = mine.mouth[0];
+                    else {
+                        const float ddx = (xx + 0.5f) * cs - px, ddy = (yy + 0.5f) * cs - py;
+                        const int dir = body_dir(ddx * hx + ddy * hy, hx * ddy - hy * ddx);
+                        if (d <= p.reach) pull = mine.mouth[dir];
+                        else pull = d <= std::min(p.reach + mine.stalk[dir], MAX_REACH) ? mine.far_mouth[dir] : 0.0f;
+                    }
+                    const float want = std::max(0.0f, corpse_demand_toward(pull)) / TOP_LEVEL * (1.0f - c_.sleep[i]);
+                    if (want <= 0.0f) continue;
+                    corpse_asks_.push_back({static_cast<uint32_t>(i), c, want, 0.0f});
+                    cell_corpse_demand_[c] += want;
+                    scratch_cells_.push_back(c);
+                }
+        }
+    }
+
+    if (g_laws.LIGHT_FOOTPRINT != 0.0f) share_light_by_footprint(dark);
+    else if (!dark) share_light_by_canopy();
 
     // --- Phase 1b: contact. Only bodies that can pull look at their neighbours
     // Positions, reach and membrane are copied into cell order first, so the
@@ -401,9 +505,8 @@ void Simulation::step() {
             const float hx = c_.hx[i], hy = c_.hy[i];
             const BodyPlan& mine = c_.body[i];
             for (int yy = std::max(cy - 1, 0); yy <= std::min(cy + 1, wn - 1); ++yy) {
-                // Cells in a row are neighbours in slot order too: one strip per row.
-                const uint32_t stop = grid_.end(yy * wn + x1);
-                for (uint32_t slot = grid_.begin(yy * wn + x0); slot < stop; ++slot) {
+                for (int xx = x0; xx <= x1; ++xx)
+                for (uint32_t slot = grid_.begin(yy * wn + xx), stop = grid_.end(yy * wn + xx); slot < stop; ++slot) {
                     const Near& q = near_[slot];
                     const float ddx = q.x - px, ddy = q.y - py;
                     const float touch = std::min(p.reach + q.reach, MAX_REACH);
@@ -461,6 +564,9 @@ void Simulation::step() {
                 uptake_gain_[i].v[ch] = soil_.dissolved[cell].v[ch] * uptake_want_[i] / std::max(1.0f, asked);
             }
 
+        if (p_on)
+            p_gain_[i] = p_want_[i] > 0.0f ? soil_.mineral[cell] * p_want_[i] / std::max(1.0f, cell_p_demand_[cell]) : 0.0f;
+
         // A dormant body burns less, whatever the weather.
         const float burning = cost_while_asleep(c_.sleep[i]);
         cost_upkeep_[i]  = std::max(0.0f, upkeep_cost(p, c_.age[i]) * burning);
@@ -474,6 +580,11 @@ void Simulation::step() {
         if (p.has_brain && p.max_speed > 0.0f && c_.sleep[i] < AWAKE) decide_movement(i, cell, env);
     }
 
+    for (CorpseAsk& a : corpse_asks_) {
+        const float have = soil_.corpse[a.cell].mass(), want = cell_corpse_demand_[a.cell];
+        a.gain = a.want * (want > have ? have / want : 1.0f);
+    }
+
     // --- Phase 2a: flows between touching bodies ------------------------------
     // What flows is the giver's store, chemicals as they are mixed in it. A
     // body can't give more than it holds: if several pull on it at once, each
@@ -485,20 +596,23 @@ void Simulation::step() {
         if (amount <= 0.0f || have <= 0.0f) continue;
         drained_[k.giver] += amount;
         intake_[k.taker].add(from, amount / have);
+        if (p_on) intake_p_[k.taker] += c_.pool_p[k.giver] * (amount / have);   // its store's P goes with it
         if (amount > top_take_[k.giver]) {
             top_take_[k.giver] = amount;
             top_taker_[k.giver] = k.taker;
         }
         // A poisonous body costs its eater energy for every unit taken.
         poisoned_[k.taker] += amount * from.density() * c_.pheno[k.giver].toxicity;
+        food_.add(c_.species[k.taker], FoodKind::Living, c_.species[k.giver], amount * from.density());   // the food web (observation)
 
         // Gene transfer: now and then, something of the body being drained is
         // taken up as a blueprint. It goes into the taker's genome only: its
         // own body is already built and does not change, but its children
         // are built from the new plan (and pay for the extra part).
-        const uint64_t transfer_key = cfg_.gene_transfer_chance > 0.0f
+        const float transfer_chance = cfg_.gene_transfer_chance * g_laws.GENE_TRANSFER;   // law: 0 switches it off
+        const uint64_t transfer_key = transfer_chance > 0.0f
             ? draw_key(draw_seed_, Draw::Transfer, tick_, c_.id[k.taker], c_.id[k.giver]) : 0;
-        if (cfg_.gene_transfer_chance > 0.0f && key_uniform(transfer_key) < cfg_.gene_transfer_chance) {
+        if (transfer_chance > 0.0f && key_uniform(transfer_key) < transfer_chance) {
             Rng rng(transfer_key);   // which part: the same key, drawn on
             float before[static_cast<int>(PartType::Count)] = {};
             for (const Part& part : c_.genome[k.taker].parts) before[static_cast<int>(part.type)] += part.size;
@@ -525,6 +639,8 @@ void Simulation::step() {
     // --- Phase 2b: apply ------------------------------------------------------
     dead_.clear();
     births_.clear();
+    std::size_t ask_k = 0;   // cursor into corpse_asks_, which is in body order
+    const bool spill_lost = g_laws.SPILL_LOST != 0.0f;   // law: 0 burns a meal's lost share at the mouth (14.2.2)
     for (std::size_t i = 0; i < n; ++i) {
         const Phenotype& p = c_.pheno[i];
         const int cell = cell_of_[i];
@@ -532,15 +648,24 @@ void Simulation::step() {
         float& soil_a = soil_.nutrient[cell];
         const LocalEnv env_here = world_.env(cell);
 
-        // Out: what others drained, in proportion to what its store holds.
+        // Out: what others drained, in proportion to what its store holds
+        // (its store's P too, in the same proportion: phase 2a gave it to them).
+        float& pool_p = c_.pool_p[i];
+        if (p_on && drained_[i] > 0.0f) {
+            const float m = pool.mass();
+            if (m > 0.0f) pool_p -= pool_p * std::min(1.0f, drained_[i] / m);
+        }
         const float hurt = drained_[i] > 0.0f ? take_share(pool, drained_[i]).energy() : 0.0f;
 
         // In: the living and the dead arrive as chemicals. Of what it can
         // burn it keeps `efficiency`, or what fits in its store; the rest,
         // and everything it can't burn, spills into its cell as it is.
         Mix& loose = soil_.dissolved[cell];
+        soil_.mark_loose(static_cast<std::size_t>(cell));
         float spilled = 0.0f;
-        auto take_in = [&](const Mix& meal) {
+        TickStats::Probe& probe = stats_.probe;   // observation only
+        const bool full = pool.mass() >= 0.95f * p.pool_capacity;
+        auto take_in = [&](const Mix& meal, bool living) {
             float usable = 0.0f;
             for (int ch = CHEM_B; ch < NCHEM; ++ch) usable += p.can_burn(ch) ? meal.v[ch] : 0.0f;
             const float room = std::max(0.0f, p.pool_capacity - pool.mass());
@@ -550,20 +675,87 @@ void Simulation::step() {
             for (int ch = CHEM_B; ch < NCHEM; ++ch) {
                 const float in = p.can_burn(ch) ? meal.v[ch] * keep : 0.0f;
                 pool.v[ch] += in;
-                loose.v[ch] += meal.v[ch] - in;
                 kept += in * LEVEL[ch];
+                if (!spill_lost && p.can_burn(ch)) {
+                    // SPILL_LOST 0 (14.2.2): what it could burn but didn't keep is
+                    // lost at the mouth as heat, burned down to A in its cell.
+                    const float lost = meal.v[ch] - in;
+                    soil_a += lost;
+                    stats_.out_transfer += lost * LEVEL[ch];
+                    stats_.energy_out += lost * LEVEL[ch];
+                    continue;
+                }
+                loose.v[ch] += meal.v[ch] - in;
                 spilled += (meal.v[ch] - in) * LEVEL[ch];
+            }
+            const double worth = meal.energy();
+            if (living) {
+                double usable_e = 0.0;
+                for (int ch = CHEM_B; ch < NCHEM; ++ch) usable_e += p.can_burn(ch) ? meal.v[ch] * LEVEL[ch] : 0.0;
+                probe.meal_living += worth;
+                probe.kept_living += kept;
+                probe.spill_share += usable_e * (1.0 - p.efficiency);
+                probe.spill_room += usable_e * (p.efficiency - keep);
+                probe.spill_unburnable += worth - usable_e;
+                if (full) probe.meal_by_full += worth;
+            } else {
+                probe.meal_dead += worth;
+                probe.kept_dead += kept;
             }
             return kept;
         };
-        const float from_living = take_in(intake_[i]);
-        const float from_dead = corpse_gain_[i] > 0.0f ? take_in(soil_.take_corpse(cell, corpse_gain_[i])) : 0.0f;
+        const float from_living = take_in(intake_[i], true);
+        // 2.8 causes 2 and 3 (observation only): gear's share of upkeep, and
+        // how long a mouth goes between meals from the living.
+        if (p.absorb > 0.0f && p.upkeep > 0.0f) {
+            probe.mouth_upkeep += cost_upkeep_[i];
+            probe.mouth_gear += cost_upkeep_[i] * (p.gear_upkeep / p.upkeep);
+        }
+        if (p.has_brain && p.max_speed > 0.0f && p.upkeep > 0.0f) {
+            probe.mover_upkeep += cost_upkeep_[i];
+            probe.mover_gear += cost_upkeep_[i] * (p.gear_upkeep / p.upkeep);
+        }
+        if (from_living > 0.0f) {
+            const uint32_t now = static_cast<uint32_t>(tick_) + 1;
+            if (c_.last_meal[i] != 0 && now - c_.last_meal[i] > 1) {
+                probe.meal_gaps += 1.0;
+                probe.meal_gap_ticks += now - c_.last_meal[i];
+            }
+            c_.last_meal[i] = now;
+        }
+        float meal_p_dead = 0.0f;   // P in the corpses it ate
+        float from_dead = corpse_gain_[i] > 0.0f ? take_in(soil_.take_corpse(cell, corpse_gain_[i], meal_p_dead), false) : 0.0f;
+        for (; ask_k < corpse_asks_.size() && corpse_asks_[ask_k].taker == i; ++ask_k)
+            if (corpse_asks_[ask_k].gain > 0.0f)
+                from_dead += take_in(soil_.take_corpse(static_cast<std::size_t>(corpse_asks_[ask_k].cell), corpse_asks_[ask_k].gain, meal_p_dead), false);
+
+        // The mineral P (stoichiometry): of the P its meals carried it keeps
+        // what its store has room for and gives the rest off into its cell's
+        // soil, where others take it up. Then it takes up P through its skin.
+        if (p_on) {
+            float& soil_p = soil_.mineral[cell];
+            const float meal_p = intake_p_[i] + meal_p_dead;
+            const float keep = std::min(meal_p, std::max(0.0f, p.p_store_cap - pool_p));
+            pool_p += keep;
+            soil_p += meal_p - keep;
+            stats_.p_given_off += meal_p - keep;
+            stats_.p_corpse_eaten += meal_p_dead;
+            if (p_gain_[i] > 0.0f) {
+                const float got = std::min({p_gain_[i], soil_p, std::max(0.0f, p.p_store_cap - pool_p)});
+                if (got > 0.0f) {
+                    soil_p -= got;
+                    pool_p += got;
+                    stats_.p_taken_up += got;
+                }
+            }
+        }
 
         // Through its skin it takes up the loose chemicals it can burn, as far
         // as its store has room. What a vent made counts as food from the vent
         // (in proportion to the vent's share of the cell's stock; observation only).
         float from_waste = 0.0f, from_vent = 0.0f;
         const float asked = uptake_gain_[i].mass();
+        const float loose_before = asked > 0.0f && leaver_[cell] != NO_LEAVER ? loose.energy() : 0.0f;   // leavings tag
         if (asked > 0.0f) {
             const float k = std::min(1.0f, std::max(0.0f, p.pool_capacity - pool.mass()) / asked);
             for (int ch = CHEM_B; ch < NCHEM; ++ch) {
@@ -581,19 +773,31 @@ void Simulation::step() {
             }
         }
 
+        // The leavings tag (observation only): the share of what it took up
+        // that the cell's tagged species gave off.
+        float untagged = from_waste;
+        if (loose_before > 0.0f && from_waste > 0.0f) {
+            const float credited = from_waste * std::min(1.0f, left_[cell] / loose_before);
+            left_[cell] = std::max(0.0f, left_[cell] - credited);
+            leavings_eaten_[(static_cast<uint64_t>(c_.species[i]) << 32) | leaver_[cell]] += credited;
+            food_.add(c_.species[i], FoodKind::Leavings, leaver_[cell], credited);
+            untagged -= credited;
+        }
+        {   // the food web (observation only): what did not come from another species' body
+            const uint32_t sp = c_.species[i];
+            food_.add_source(sp, FoodSource::Dead, from_dead);
+            food_.add_source(sp, FoodSource::Vent, from_vent);
+            food_.add_source(sp, FoodSource::Loose, untagged);
+        }
+
         // Light comes in as energy with no matter: the body keeps it by
         // running its enzymes uphill, turning A from the soil into richer
         // chemicals in its store (charge). What it can't keep is never taken in.
         float two = 0.0f;   // units turned over by two-input enzymes (observation)
         const float from_light = gain_[i] > 0.0f ? charge(p, pool, soil_a, gain_[i], &two) : 0.0f;
-        // Neutral exchanges turn what it can't burn into what it can (stage 4).
-        if (p.neutral) {
-            const float moved = convert(p, pool, soil_a);
-            two += moved;
-            stats_.neutral_flow += moved;
-        }
 
         stats_.energy_in += from_light;
+        food_.add_source(c_.species[i], FoodSource::Sun, from_light);
         stats_.eaten_living += from_living;
         stats_.eaten_dead += from_dead;
         stats_.eaten_waste += from_waste + from_vent;
@@ -612,6 +816,7 @@ void Simulation::step() {
         for (int ch = CHEM_B; ch < NCHEM; ++ch) foul_mass += p.can_burn(ch) ? 0.0f : loose.v[ch];
         const float foul = foul_mass > 0.0f ? std::max(0.0f, fouling_cost(p, foul_mass)) : 0.0f;
         const float want = poisoned_[i] + cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i] + foul;
+        const float held = pool.energy();   // probe: what its store was worth before paying
         const float paid = want > 0.0f ? burn(p, pool, soil_a, want, &two) : 0.0f;
         stats_.two_flow += two;
         if (want > 0.0f) {
@@ -632,6 +837,7 @@ void Simulation::step() {
             pool.v[ch] = 0.0f;
         }
         stats_.excreted += spilled;
+        if (spilled > 0.0f) tag_leavings(cell, c_.species[i], spilled);
         const bool starved = paid + 1e-5f * want + 1e-7f < want;
 
         c_.moved[i] = std::hypot(new_x_[i] - c_.x[i], new_y_[i] - c_.y[i]);
@@ -648,12 +854,23 @@ void Simulation::step() {
         c_.sleep[i] = next_sleep(p, env_here, c_.body_temp[i], c_.sleep[i]);
 
         if (starved) {
+            probe.deaths += 1.0;
+            probe.deaths_drained += drained_[i] > 0.0f;
+            probe.deaths_could_pay += held >= want;
+            probe.deaths_poison += poisoned_[i] > 0.0f &&
+                                   poisoned_[i] >= std::max({cost_upkeep_[i], cost_thermal_[i], cost_move_[i], foul});
+            probe.store_at_death += p.energy_capacity > 0.0f ? held / p.energy_capacity : 0.0f;
+            if (p.absorb > 0.0f && c_.last_meal[i] != 0) {
+                probe.mouth_deaths_fed += 1.0;
+                probe.fast_at_death += static_cast<uint32_t>(tick_) + 1 - c_.last_meal[i];
+            }
             // Death: the body and whatever is left in its store stay where it
             // fell, as chemicals: food for whatever can take them.
             Mix remains = c_.tissue[i];
             remains.add(pool);
-            soil_.add_corpse(static_cast<std::size_t>(cell), remains);
+            soil_.add_corpse(static_cast<std::size_t>(cell), remains, c_.tissue_p[i] + pool_p);
             pool.clear();
+            pool_p = 0.0f;
             c_.energy[i] = 0.0f;
             dead_.push_back(static_cast<uint32_t>(i));
             // The record book: whatever took most from it this tick finished it off.
@@ -673,7 +890,9 @@ void Simulation::step() {
             const float adult_mass = p.mass / p.grown;
             const float rich = pool.density();
             const float spare = pool.energy() - GROW_RESERVE * p.energy_capacity;
-            const float dm = rich > 0.0f ? std::min({GROW_STEP * adult_mass, adult_mass - p.mass, pool.mass(), spare / rich}) : 0.0f;
+            float dm = rich > 0.0f ? std::min({GROW_STEP * adult_mass, adult_mass - p.mass, pool.mass(), spare / rich}) : 0.0f;
+            // Liebig: no more body than the P in its store can build.
+            if (p_on && p.p_adult > 0.0f) dm = std::min(dm, pool_p * adult_mass / p.p_adult);
             if (dm > 0.0f && dm >= std::min(GROW_MIN * adult_mass, adult_mass - p.mass)) {
                 float to = (p.mass + dm) / adult_mass;
                 if (to > 0.999f) to = 1.0f;
@@ -681,6 +900,11 @@ void Simulation::step() {
                 const float matter = bigger.mass - p.mass;
                 if (matter > 0.0f && matter <= pool.mass()) {
                     c_.tissue[i].add(take_share(pool, matter));
+                    if (p_on) {
+                        const float dp = std::min(std::max(0.0f, bigger.p_need - p.p_need), pool_p);
+                        pool_p -= dp;
+                        c_.tissue_p[i] += dp;
+                    }
                     stats_.grown_mass += matter;
                     c_.pheno[i] = bigger;   // `p` refers to this slot, so it now reads the bigger body
                     if (!borrowed_.empty())
@@ -695,8 +919,15 @@ void Simulation::step() {
         // left. Nothing is created. A body tries once every 8 ticks.
         // Only a grown body breeds; its child is born at the birth size in its
         // own (mutated) genome, and grows the rest itself.
-        if (p.grown >= 1.0f && pool.energy() >= p.repro_threshold && (c_.age[i] & 7u) == 0 && c_.sleep[i] < AWAKE &&
-            pool.mass() > p.mass * 0.75f * p.birth_size) {
+        // With P (stoichiometry), it also waits until its store holds the P
+        // its child's body needs. Tries held back each way are counted.
+        bool tries = false;
+        if (p.grown >= 1.0f && (c_.age[i] & 7u) == 0 && c_.sleep[i] < AWAKE) {
+            if (pool.energy() < p.repro_threshold || pool.mass() <= p.mass * 0.75f * p.birth_size) ++stats_.energy_limited;
+            else if (pool_p < p.p_adult * p.birth_size) ++stats_.p_limited;
+            else tries = true;
+        }
+        if (tries) {
             Rng rng(draw_key(draw_seed_, Draw::Birth, tick_, c_.id[i]));
             Genome g = mutate(c_.genome[i], rng);
             const Phenotype cp = compile_phenotype(g, g.birth_size);
@@ -705,18 +936,25 @@ void Simulation::step() {
             const float ang = rng.uniform(0.0f, TWO_PI);
             const float flung = rng.uniform() * p.throw_range;
             const float thrown = flung > 0.0f ? std::max(0.0f, throw_cost(cp.mass, flung)) : 0.0f;
-            if (pool.mass() > cp.mass && pool.energy() - cp.mass * pool.density() - thrown > 0.0f) {
+            if (pool.mass() > cp.mass && pool.energy() - cp.mass * pool.density() - thrown > 0.0f && pool_p >= cp.p_need) {
                 Mix body = take_share(pool, cp.mass);
                 const float paid_throw = thrown > 0.0f ? burn(p, pool, soil_a, thrown) : 0.0f;
                 stats_.out_movement += paid_throw;
                 stats_.energy_out += paid_throw;
                 Mix store = take_share(pool, std::min(pool.mass() * p.offspring_share, cp.pool_capacity));
+                float body_p = 0.0f, store_p = 0.0f;
+                if (p_on) {
+                    body_p = cp.p_need;
+                    pool_p -= body_p;
+                    store_p = std::min(pool_p * p.offspring_share, cp.p_store_cap);
+                    pool_p -= store_p;
+                }
                 ++c_.children[i];
                 float bx, by;
                 land_child(c_.x[i], c_.y[i], std::cos(ang), std::sin(ang), p.reach + cp.reach + flung, bx, by);
                 births_.push_back(Birth{
                     bx, by, store, body, c_.body_temp[i], c_.lineage[i], species_.classify(c_.species[i], g, tick_), c_.generation[i] + 1,
-                    std::move(g), cp});
+                    std::move(g), cp, body_p, store_p});
             }
         }
         c_.energy[i] = pool.energy();
@@ -737,20 +975,23 @@ void Simulation::step() {
         c_.remove_swap(*it);
     }
     for (Birth& b : births_)
-        admit(b.x, b.y, b.store, b.body, b.lineage, b.species, b.generation, std::move(b.genome), b.pheno, b.body_temp);
+        admit(b.x, b.y, b.store, b.body, b.lineage, b.species, b.generation, std::move(b.genome), b.pheno, b.body_temp, b.body_p, b.store_p);
 
     stats_.deaths = dead_.size();
     stats_.births = births_.size();
     ++tick_;
     if (tick_ % FIELD_INTERVAL == 0) { weather_corpses(); spread_dissolved(); }
     if (tick_ % WASH_INTERVAL == 0) wash_soil();
-    // What the loose chemicals are worth, for the viewer and the metrics.
-    for (std::size_t c = 0; c < soil_.waste.size(); ++c) soil_.waste[c] = soil_.dissolved[c].energy();
+    // What the loose chemicals are worth, for the viewer and the metrics, where
+    // bodies changed them (vents and the drift keep their own cells in step).
+    for (int c : scratch_cells_) soil_.waste[c] = soil_.dissolved[c].energy();
     if (tick_ % SPLIT_INTERVAL == 0) check_splits();
     if (!watch_.empty() && tick_ % WATCH_INTERVAL == 0) watch_followed();
     if (tick_ % 50 == 0 || c_.size() == 0) {
         take_census();
+        food_.fade();
         detect_events();
+        if (check_scenario(scenario_, tick_, c_.size(), census_)) chronicle_.add(tick_, scenario_.verdict);
     }
 
     const auto t1 = std::chrono::steady_clock::now();
@@ -787,6 +1028,70 @@ void Simulation::share_light_by_canopy() {
     }
 }
 
+// LIGHT_FOOTPRINT (a law, 14.2.1): a body catches light over the cells its
+// outline covers (Footprints), each in proportion, and in each cell the
+// canopy rule shares the light among every body asking there: the tallest
+// takes its fill first, bodies of the same height share alike. Demand and
+// gain are the sums over its cells.
+void Simulation::share_light_by_footprint(bool dark) {
+    const std::size_t n = c_.size();
+    const int wn = world_.size();
+    const float cs = world_.cell_size();
+    light_asks_.clear();
+    light_ask_cell_.clear();
+    for (std::size_t i = 0; i < n; ++i) {
+        demand_[i] = gain_[i] = 0.0f;
+        if (dark) continue;
+        const Phenotype& p = c_.pheno[i];
+        const float k = light_catch(p) * light_while_moving(c_.moved[i]) * c_.unfold[i] * (1.0f - c_.sleep[i]);
+        if (k <= 0.0f) continue;
+        const Footprints::Stencil& st = Footprints::of(p.radius / cs);
+        const int cx = cell_of_[i] % wn, cy = cell_of_[i] / wn;
+        float total = 0.0f;
+        for (int dy = -st.ring; dy <= st.ring; ++dy) {
+            const int yy = cy + dy;
+            if (yy < 0 || yy >= wn) continue;
+            for (int dx = -st.ring; dx <= st.ring; ++dx) {
+                const int xx = cx + dx;
+                const float w = st.w[std::abs(dx)][std::abs(dy)];
+                if (xx < 0 || xx >= wn || w <= 0.0f) continue;   // light off the edge of the map falls on nothing
+                const int cell = yy * wn + xx;
+                const float want = k * world_.light(cell) * w;
+                if (want <= 0.0f) continue;
+                light_asks_.push_back({p.canopy, static_cast<uint32_t>(i), want});
+                light_ask_cell_.push_back(cell);
+                total += want;
+            }
+        }
+        demand_[i] = total;
+    }
+    if (light_asks_.empty()) return;
+    light_grid_.build(light_ask_cell_, world_.num_cells());
+    for (int cell : light_grid_.occupied()) {
+        float left = world_.light(cell);
+        float want = 0.0f;
+        for (uint32_t a : light_grid_.in_cell(cell)) want += light_asks_[a].want;
+        if (want <= left) {
+            for (uint32_t a : light_grid_.in_cell(cell)) gain_[light_asks_[a].who] += light_asks_[a].want;
+            continue;
+        }
+        light_cell_.clear();
+        for (uint32_t a : light_grid_.in_cell(cell)) light_cell_.push_back(light_asks_[a]);
+        std::sort(light_cell_.begin(), light_cell_.end(), [](const LightAsk& a, const LightAsk& b) {
+            return a.canopy != b.canopy ? a.canopy > b.canopy : a.who < b.who;
+        });
+        for (std::size_t a = 0; a < light_cell_.size();) {
+            std::size_t b = a;
+            float tier = 0.0f;
+            for (; b < light_cell_.size() && light_cell_[b].canopy == light_cell_[a].canopy; ++b) tier += light_cell_[b].want;
+            const float share = tier > left ? left / tier : 1.0f;
+            for (std::size_t k = a; k < b; ++k) gain_[light_cell_[k].who] += light_cell_[k].want * share;
+            left = std::max(0.0f, left - tier);
+            a = b;
+        }
+    }
+}
+
 void Simulation::land_child(float x, float y, float ux, float uy, float dist, float& out_x, float& out_y) const {
     out_x = x;
     out_y = y;
@@ -805,17 +1110,35 @@ void Simulation::land_child(float x, float y, float ux, float uy, float dist, fl
 
 // Corpses nobody eats still fall apart, slowly: their chemicals burn down to A in the soil, the energy to heat.
 void Simulation::weather_corpses() {
-    const std::size_t cells = soil_.corpse.size();
-    for (std::size_t c = 0; c < cells; ++c) {
+    Soil::each(soil_.corpse_bits, [&](std::size_t c) {
         const float cm = soil_.corpse[c].mass();
-        if (cm <= 0.0f) continue;
+        float& cp = soil_.corpse_p[c];
+        if (cm <= 0.0f) {
+            if (cp != 0.0f) {   // the last of its P, once nothing is left to eat
+                soil_.mineral[c] += cp;
+                stats_.p_corpse_weathered += cp;
+                cp = 0.0f;
+            }
+            bool any = false;
+            for (float v : soil_.corpse[c].v) any = any || v != 0.0f;
+            if (!any) Soil::unmark(soil_.corpse_bits, c);
+            return;
+        }
         const float rate = cm < 1e-3f ? 1.0f : CORPSE_WEATHERING;  // sweep up crumbs
         const Mix gone = soil_.take_corpse(c, cm * rate);
+        // Weathering frees P more slowly than mass (P_WEATHER_SHARE): eating
+        // the dead is the fast way it goes back to the soil.
+        if (cp > 0.0f) {
+            const float freed = rate >= 1.0f ? cp : cp * rate * std::clamp(g_laws.P_WEATHER_SHARE, 0.0f, 1.0f);
+            cp -= freed;
+            soil_.mineral[c] += freed;
+            stats_.p_corpse_weathered += freed;
+        }
         const float de = gone.energy();
         soil_.nutrient[c] += gone.mass();   // burned down to A
         stats_.out_decay += de;
         stats_.energy_out += de;
-    }
+    });
 }
 
 // Windfalls: food falls on random cells, windfall_rate per cell per tick on
@@ -863,10 +1186,17 @@ void Simulation::run_vents() {
         const float made = world_.vent_energy(static_cast<int>(c)) / level;
         soil_.dissolved[c].v[VENT_CHEM] += made;
         soil_.vent_made[c] += made;
+        soil_.mark_loose(c);
+        soil_.waste[c] = soil_.dissolved[c].energy();
         stats_.energy_in += made * level;
         stats_.in_vent += made * level;
         stats_.matter_in += made;
         matter_brought_up_ += made;
+        // Mineral comes up with it (stoichiometry): new P.
+        const float pp = made * std::max(0.0f, g_laws.VENT_P);
+        soil_.mineral[c] += pp;
+        stats_.p_in += pp;
+        p_brought_up_ += pp;
     }
 }
 
@@ -888,7 +1218,7 @@ void Simulation::land_meteor(const PowerCommand& cmd, bool between_ticks) {
     const int count = std::clamp(static_cast<int>(std::lround(cmd.amount)), 1, 500);
     const uint32_t sp = species_.classify_newcomer(cargo.bodies.front(), tick_, cargo.name);
     const uint32_t lineage = next_lineage_++;   // one founding event
-    double energy = 0.0, matter = 0.0;
+    double energy = 0.0, matter = 0.0, mineral = 0.0;
     for (int k = 0; k < count; ++k) {
         const Genome& g = cargo.bodies[static_cast<std::size_t>(k) % cargo.bodies.size()];
         const Phenotype p = compile_phenotype(g);
@@ -902,14 +1232,18 @@ void Simulation::land_meteor(const PowerCommand& cmd, bool between_ticks) {
         const Mix body = pure(CHEM_D, p.mass);
         energy += store.energy() + body.energy();
         matter += store.mass() + body.mass();
+        mineral += p.p_need;   // built with the P it needs, brought from outside
         admit(world_.clamp_coord(cmd.x + r * std::cos(a)), world_.clamp_coord(cmd.y + r * std::sin(a)), store, body,
               lineage, sp, 0, g, p);
     }
     matter_brought_up_ += matter;
+    p_brought_up_ += mineral;
     if (between_ticks) {
         arrived_energy_ += energy;
         arrived_matter_ += matter;
+        arrived_p_ += mineral;
     } else {
+        stats_.p_in += mineral;
         stats_.energy_in += energy;
         stats_.in_meteor += energy;
         stats_.matter_in += matter;
@@ -921,56 +1255,96 @@ void Simulation::land_meteor(const PowerCommand& cmd, bool between_ticks) {
                               (s.name == cargo.name || cargo.name.empty() ? "." : " (counted among the " + s.name + ")."));
 }
 
+// The leavings tag (observation only; docs/design/cooperation.md): a cell
+// remembers the species that gave off most of its loose chemicals, and how
+// much of their worth that covers. A species that gives off more than the tag
+// holds takes it over; the tag drifts and fades with the chemicals, and
+// uptake draws on it in proportion.
+void Simulation::tag_leavings(int cell, uint32_t species, float energy) {
+    if (leaver_[cell] == species) left_[cell] += energy;
+    else if (energy >= left_[cell]) {
+        leaver_[cell] = species;
+        left_[cell] = energy;
+    }
+}
+
 // Loose chemicals drift: each cell hands WASTE_SPREAD of them to its four
 // neighbours (a quarter each; what would fall off the edge stays put), then
 // WASTE_DECAY of what is left breaks down to A in the soil, its energy lost as
 // heat. All taking is worked out before any giving, so cell order doesn't matter.
 void Simulation::spread_dissolved() {
+    // Only cells that may hold something are walked (Soil::loose_bits), in
+    // ascending order, so the sums come out as a walk over every cell would.
     const int n = world_.size();
     const std::size_t cells = soil_.dissolved.size();
-    spread_.assign(cells, Mix{});
-    spread_vent_.assign(cells, 0.0f);
-    for (int y = 0; y < n; ++y)
-        for (int x = 0; x < n; ++x) {
-            const int c = y * n + x;
-            Mix& m = soil_.dissolved[c];
-            const float mass = m.mass();
-            if (mass <= 0.0f) continue;
-            if (mass < 1e-7f) {  // sweep up crumbs
-                const double e = m.energy();
-                stats_.out_waste_decay += e;
-                stats_.energy_out += e;
-                soil_.nutrient[c] += mass;
-                m.clear();
-                soil_.vent_made[c] = 0.0f;
-                continue;
-            }
-            const Mix part = m.scaled(WASTE_SPREAD * 0.25f);
-            float& vented = soil_.vent_made[c];
-            const float vent_part = vented * (WASTE_SPREAD * 0.25f);
-            const int nb[4] = {x > 0 ? c - 1 : -1, x + 1 < n ? c + 1 : -1, y > 0 ? c - n : -1, y + 1 < n ? c + n : -1};
-            for (int k : nb)
-                if (k >= 0) {
-                    spread_[k].add(part);
-                    m.add(part, -1.0f);
-                    spread_vent_[k] += vent_part;
-                    vented -= vent_part;
-                }
+    if (spread_.size() != cells) {
+        spread_.assign(cells, Mix{});
+        spread_vent_.assign(cells, 0.0f);
+    }
+    if (tag_in_.size() != cells) tag_in_.assign(cells, TagIn{});
+    loose_was_ = soil_.loose_bits;   // the cells giving; their neighbours are marked as they receive
+    Soil::each(loose_was_, [&](std::size_t cell) {
+        const int c = static_cast<int>(cell);
+        const int x = c % n, y = c / n;
+        Mix& m = soil_.dissolved[c];
+        const float mass = m.mass();
+        if (mass <= 0.0f) return;
+        if (mass < 1e-7f) {  // sweep up crumbs
+            const double e = m.energy();
+            stats_.out_waste_decay += e;
+            stats_.energy_out += e;
+            soil_.nutrient[c] += mass;
+            m.clear();
+            soil_.vent_made[c] = 0.0f;
+            leaver_[c] = NO_LEAVER;
+            left_[c] = 0.0f;
+            return;
         }
-    for (std::size_t c = 0; c < cells; ++c) {
+        const Mix part = m.scaled(WASTE_SPREAD * 0.25f);
+        const float tag_part = leaver_[c] != NO_LEAVER ? left_[c] * (WASTE_SPREAD * 0.25f) : 0.0f;
+        float& vented = soil_.vent_made[c];
+        const float vent_part = vented * (WASTE_SPREAD * 0.25f);
+        const int nb[4] = {x > 0 ? c - 1 : -1, x + 1 < n ? c + 1 : -1, y > 0 ? c - n : -1, y + 1 < n ? c + n : -1};
+        for (int k : nb)
+            if (k >= 0) {
+                spread_[k].add(part);
+                m.add(part, -1.0f);
+                spread_vent_[k] += vent_part;
+                vented -= vent_part;
+                soil_.mark_loose(static_cast<std::size_t>(k));
+                if (tag_part > 0.0f) {   // the leavings tag drifts too (observation only)
+                    left_[c] -= tag_part;
+                    if (tag_in_[k].species == leaver_[c]) tag_in_[k].amount += tag_part;
+                    else if (tag_part > tag_in_[k].amount) tag_in_[k] = {leaver_[c], tag_part};
+                }
+            }
+    });
+    Soil::each(soil_.loose_bits, [&](std::size_t c) {
         Mix& m = soil_.dissolved[c];
         m.add(spread_[c]);
         // The vent's share drifts and breaks down with the rest, and never
         // exceeds what is there.
         float& vented = soil_.vent_made[c];
         vented = std::min((vented + spread_vent_[c]) * (1.0f - WASTE_DECAY), m.v[VENT_CHEM] * (1.0f - WASTE_DECAY));
+        spread_[c] = Mix{};
+        spread_vent_[c] = 0.0f;
         const Mix gone = m.scaled(WASTE_DECAY);
         m.add(gone, -1.0f);
         const double e = gone.energy();
         stats_.out_waste_decay += e;
         stats_.energy_out += e;
         soil_.nutrient[c] += gone.mass();
-    }
+        soil_.waste[c] = m.energy();
+        if (tag_in_[c].amount > 0.0f) {
+            tag_leavings(static_cast<int>(c), tag_in_[c].species, tag_in_[c].amount);
+            tag_in_[c] = TagIn{};
+        }
+        left_[c] = std::min(left_[c] * (1.0f - WASTE_DECAY), soil_.waste[c]);
+        if (left_[c] <= 0.0f) leaver_[c] = NO_LEAVER;
+        bool any = vented != 0.0f;
+        for (float v : m.v) any = any || v != 0.0f;
+        if (!any) Soil::unmark(soil_.loose_bits, c);
+    });
 }
 
 // Rain: a little free matter moves from each cell to its lowest neighbour,
@@ -989,6 +1363,16 @@ void Simulation::wash_soil() {
         wash_[static_cast<std::size_t>(low)] += moved;
     }
     for (std::size_t c = 0; c < cells; ++c) soil_.nutrient[c] += wash_[c];
+    // The mineral P washes downhill the same way (stoichiometry).
+    wash_.assign(cells, 0.0f);
+    for (std::size_t c = 0; c < cells; ++c) {
+        const int low = world_.downhill(static_cast<int>(c));
+        if (low < 0 || soil_.mineral[c] <= 0.0f) continue;
+        const float moved = soil_.mineral[c] * std::min(cfg_.wash_rate * world_.steepness(static_cast<int>(c)), 1.0f);
+        soil_.mineral[c] -= moved;
+        wash_[static_cast<std::size_t>(low)] += moved;
+    }
+    for (std::size_t c = 0; c < cells; ++c) soil_.mineral[c] += wash_[c];
 }
 
 void Simulation::take_census() {

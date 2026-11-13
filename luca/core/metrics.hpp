@@ -24,12 +24,25 @@ public:
     double eaten_living = 0.0, eaten_dead = 0.0;
     double out_fouling = 0.0, out_waste_decay = 0.0, excreted = 0.0, eaten_waste = 0.0;
     double in_windfall = 0.0, in_vent = 0.0, in_meteor = 0.0, grown_mass = 0.0;
-    double two_flow = 0.0, neutral_flow = 0.0, matter_in = 0.0;
+    double two_flow = 0.0, matter_in = 0.0;
+    double p_in = 0.0, p_taken_up = 0.0, p_given_off = 0.0, p_corpse_eaten = 0.0, p_corpse_weathered = 0.0;
+    std::size_t p_limited = 0, energy_limited = 0;
     std::size_t windfalls = 0;
     std::size_t births = 0, deaths = 0;
     std::size_t gene_transfers = 0, gene_transfers_cross = 0, gene_transfers_novel = 0;
     double total_ms = 0.0;
     uint64_t ticks = 0;
+    TickStats::Probe probe;
+};
+
+// The probe ledgers (TickStats::Probe), one row per metrics interval: headless --probe.
+class ProbeWriter {
+public:
+    bool open(const std::string& path);
+    void write_row(const Simulation& sim, const IntervalTotals& t);
+
+private:
+    std::ofstream out_;
 };
 
 class MetricsWriter {

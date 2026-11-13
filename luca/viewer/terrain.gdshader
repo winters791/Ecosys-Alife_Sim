@@ -13,7 +13,8 @@ uniform float extent = 128.0;    // world units per side
 uniform float cells = 128.0;     // cells per side
 uniform float px_size = 0.125;   // world units per pixel (shared with the creatures)
 uniform float max_height = 40.0;
-uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead, 5 waste, 6 vents
+uniform sampler2D mineral_tex : filter_nearest, repeat_disable; // r = soil P as a share of 3x its mean (stoichiometry)
+uniform int overlay = 0;         // 0 natural, 1 temperature, 2 light, 3 nutrients, 4 the dead, 5 waste, 6 vents, 7 mineral P
 uniform vec3 brush = vec3(0.0, 0.0, -1.0);  // x, z, radius; radius <= 0 hides it
 uniform vec3 brush_color : source_color = vec3(1.0);
 uniform vec3 tint = vec3(1.0);   // day / night
@@ -77,6 +78,8 @@ void fragment() {
 		col = steps3(soil.b / 30.0, vec3(0.08, 0.10, 0.08), vec3(0.45, 0.42, 0.12), vec3(0.80, 0.90, 0.20));
 	} else if (overlay == 6) {
 		col = steps3(vent / 3.0, vec3(0.08, 0.07, 0.07), vec3(0.55, 0.20, 0.10), vec3(1.00, 0.80, 0.30));
+	} else if (overlay == 7) {
+		col = steps3(texture(mineral_tex, uv).r, vec3(0.08, 0.08, 0.10), vec3(0.30, 0.38, 0.45), vec3(0.85, 0.90, 0.95));
 	} else {
 		// Height bands, with the boundary between two bands dithered.
 		const vec3 BANDS[6] = vec3[](

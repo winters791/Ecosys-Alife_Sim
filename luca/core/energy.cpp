@@ -42,8 +42,7 @@ inline const float& DORMANT_SAVING = g_laws.DORMANT_SAVING;  // law, 0.9f: fract
 inline const float& FALL_ASLEEP    = g_laws.FALL_ASLEEP;  // law, 1.0f / 20.0f: sleep gained per tick while it is dark or too cold
 inline const float& WAKE_UP        = g_laws.WAKE_UP;  // law, 1.0f / 90.0f: sleep lost per tick once it is light and warm enough
 
-// Wear: upkeep is multiplied by 1 + wear x (age / AGE_SCALE)^2, where wear is 1
-// for an unrepaired body and less with the repair gene (phenotype.cpp). Nothing
+// Wear: upkeep is multiplied by 1 + (age / AGE_SCALE)^2. Nothing
 // dies "of old age"; an old body just costs more than it can earn, and its
 // matter is freed.
 inline const float& AGE_SCALE = g_laws.AGE_SCALE;  // law, 10000.0f: was 5000: a body now costs 244 to build, so it should last
@@ -88,6 +87,10 @@ float light_demand(const Phenotype& p, const LocalEnv& env) {
     return PHOTO_EFFICIENCY * p.light_capture * env.light;
 }
 
+float light_catch(const Phenotype& p) {
+    return PHOTO_EFFICIENCY * p.light_capture;
+}
+
 float light_while_moving(float moved) {
     return 1.0f - MOVING_SHADE * std::min(moved * (1.0f / FULL_STRIDE), 1.0f);
 }
@@ -104,7 +107,7 @@ float cost_while_asleep(float sleep) {
 
 float upkeep_cost(const Phenotype& p, uint32_t age) {
     const float a = static_cast<float>(age) * (1.0f / AGE_SCALE);
-    return METABOLIC_RATE * p.upkeep * (1.0f + p.wear * a * a);   // repair slows wear (phenotype.cpp)
+    return METABOLIC_RATE * p.upkeep * (1.0f + a * a);
 }
 
 float felt_temperature(const Phenotype& p, const LocalEnv& env) {
@@ -223,18 +226,6 @@ float charge(const Phenotype& p, Mix& pool, float& soil_a, float energy, float* 
     return stored;
 }
 
-float convert(const Phenotype& p, Mix& pool, float& soil_a) {
-    float moved = 0.0f;
-    for (int k = 0; k < p.enzymes; ++k) {
-        if (!(p.neutral >> k & 1u)) continue;
-        const float amount = runnable(p.enz_in[k], p.enz_out[k], pool, soil_a, p.pool_capacity, p.enz_rate[k]);
-        if (amount <= 0.0f) continue;
-        run(p.enz_in[k], p.enz_out[k], amount, pool, soil_a);
-        moved += amount;
-    }
-    return moved;
-}
-
 float fouling_cost(const Phenotype& p, float foul_mass) {
     return FOUL_HARM * foul_mass * p.surface_area;
 }
@@ -245,6 +236,10 @@ float uptake_rate(const Phenotype& p) {
 
 float corpse_demand(const Phenotype& p) {
     return CORPSE_RATE * p.absorb;
+}
+
+float corpse_demand_toward(float pull) {
+    return CORPSE_RATE * pull;
 }
 
 }  // namespace luca

@@ -92,7 +92,7 @@ func _ready() -> void:
 	outer.custom_minimum_size.x = WIDTH - 32
 	margin.add_child(outer)
 
-	empty_label = _label("Select a species in the tree to see its profile.", 13, FAINT)
+	empty_label = _label("Select a species in the tree or the food web to see its profile.", 13, FAINT)
 	outer.add_child(empty_label)
 	content = VBoxContainer.new()
 	content.add_theme_constant_override("separation", 7)
@@ -549,9 +549,6 @@ func _tags() -> Array:
 		elif dt > 4.0: out.append(["Heat-lover", Color(1.0, 0.6, 0.4)])
 	if b["offspring_share"] < 0.3: out.append(["Many small young", Color(0.8, 0.8, 0.6)])
 	elif b["offspring_share"] > 0.65: out.append(["Few strong young", Color(0.8, 0.8, 0.6)])
-	if b["repair"] > 0.3: out.append(["Long-lived", Color(0.7, 0.9, 0.8)])
-	if b["mutability"] > 1.0: out.append(["Sloppy copier", Color(0.9, 0.7, 0.7)])
-	elif b["mutability"] < -1.0: out.append(["Careful copier", Color(0.7, 0.8, 0.9)])
 	if profile["cannibal_kills"] >= 10 and profile["cannibal_kills"] * 2 > profile["kills"]:
 		out.append(["Cannibal", Color(0.95, 0.4, 0.4)])
 	var deaths: int = profile["died_eaten"] + profile["died_other"]
@@ -848,9 +845,6 @@ func _body() -> String:
 	var keep := []
 	keep.append("upkeep %.2f a tick" % b["upkeep"])
 	if b["dormancy"] > 0.0: keep.append("sleeps to %d%%" % roundi(100.0 * b["dormancy"]))
-	if b["repair"] > 0.0: keep.append("ages %.1f× slower" % (1.0 + 2.0 * b["repair"]))
-	var m: float = b["mutability"]
-	if absf(m) >= 0.1: keep.append("copied with %s the usual mistakes" % ("%.1f×" % pow(2.0, m) if m > 0.0 else "1/%.1f of" % pow(2.0, -m)))
 	lines.append("[color=#%s]Upkeep[/color]  %s" % [faint, ", ".join(keep)])
 	lines.append("[color=#%s]Drawn from the %s.[/color]" % [faint, "eldest living member" if b["from"] == "eldest" else "founder's blueprint"])
 	return "\n".join(lines)

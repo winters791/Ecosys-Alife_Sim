@@ -15,7 +15,6 @@ struct Phenotype {
     float radius        = 0.0f;  // core radius: how tall it stands in the canopy
     float surface_area  = 0.0f;
     float upkeep        = 0.0f;  // energy per tick just to stay alive
-    float wear          = 1.0f;  // how fast age raises upkeep: 1 = unrepaired (see upkeep_cost)
     float light_capture = 0.0f;  // how strongly it absorbs light (see energy.hpp)
     float max_speed     = 0.0f;  // world units per tick; 0 = cannot move
     float drag          = 1.0f;  // moving cost and speed, against a round body's (body.hpp)
@@ -27,10 +26,19 @@ struct Phenotype {
     float thermal_optimum   = 0.0f;
     float thermal_tolerance = 0.0f;
     float heat_absorption   = 0.0f;  // from pigment
-    Rgb   skin;                      // skin colour, from hue and pigment (colour.hpp): how it shows against the ground
+    Rgb   skin;                      // skin colour, from hue and pigment (colour.hpp); drawing only
     float heat_follow       = 1.0f;  // fraction of the gap to the air its body temperature closes per tick
     float grown             = 1.0f;  // fraction of adult mass it has built so far; 1 = adult, able to breed
     float birth_size        = 1.0f;  // fraction of adult mass its children are born at
+    // Stoichiometry (docs/design/stoichiometry.md): the mineral P its body is
+    // built of. p_need is what this body holds in its tissue at its present
+    // size; p_adult the same grown; p_store_cap the most P its store keeps.
+    // All 0 while the P_BASE law is 0 (off).
+    float p_need            = 0.0f;
+    float p_adult           = 0.0f;
+    float p_store_cap       = 0.0f;
+    float gear_upkeep       = 0.0f;  // observation only: the part of `upkeep` that is standing gear (mouths,
+                                     // motors, senses, bite, brain, enzymes), paid used or not (2.8 cause 2)
 
     // Contact (the one interaction primitive, see energy.hpp)
     float absorb   = 0.0f;   // how hard it pulls energy across a membrane it touches
@@ -45,20 +53,17 @@ struct Phenotype {
     // Chemistry (chem.hpp): its enzymes, each written the way it runs when
     // burning: `in` (the richer side) to `out` (the poorer side), the second
     // slot NO_CHEM for a one-to-one reaction (genome.hpp); `step` the energy
-    // released per unit (0 for a neutral one); `rate` the most units it can
-    // turn over a tick, each way. Charging runs them out -> in.
-    // A neutral enzyme (step 0) that runs is written from the side the body
-    // can't burn to the side it can, and its bit is set in `neutral`; one
-    // that would turn burnable into burnable never runs (energy.hpp, convert).
+    // released per unit (0 for one with equal levels both sides, which never
+    // runs); `rate` the most units it can turn over a tick, each way.
+    // Charging runs them out -> in.
     uint8_t enzymes = 0;
     uint8_t enz_in[limits::MAX_ENZYMES][2] = {};
     uint8_t enz_out[limits::MAX_ENZYMES][2] = {};
     float   enz_step[limits::MAX_ENZYMES] = {};
     float   enz_rate[limits::MAX_ENZYMES] = {};
-    uint8_t neutral = 0;     // bit k: enzyme k is a neutral exchange that runs
     bool    any_two = false; // it carries a two-input enzyme
     // Which chemicals it can burn: bit c is set when some enzyme has c on its
-    // richer side, or on the side a running neutral enzyme takes from. It
+    // richer side (of a downhill reaction). It
     // takes these up from its cell and keeps them from a meal; anything else
     // in its store it gives off (chemistry stage 2, energy.hpp).
     uint8_t burns = 0;

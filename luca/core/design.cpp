@@ -59,8 +59,6 @@ DesignReport assess_design(const Genome& genome, float sun, float air) {
     add("bite", -1, without([](Genome& h) { h.bite = 0.0f; }));
     add("dormancy", -1, without([](Genome& h) { h.dormancy = 0.0f; }));
     add("throw", -1, without([](Genome& h) { h.seed_throw = 0.0f; }));
-    add("repair", -1, without([](Genome& h) { h.repair = 0.0f; }));
-    add("fidelity", -1, without([](Genome& h) { h.mutability = std::max(h.mutability, 0.0f); }));
     add("shape", -1, without([](Genome& h) { h.elongation = h.squareness = 0.0f; }));
     std::sort(r.costs.begin(), r.costs.end(), [](const CostLine& a, const CostLine& b) { return a.upkeep > b.upkeep; });
     r.costs.insert(r.costs.begin(), CostLine{"body", -1, std::max(0.0f, r.upkeep - explained)});

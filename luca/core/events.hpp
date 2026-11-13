@@ -36,6 +36,8 @@ public:
     explicit WorldEvents(uint64_t seed, float rate = 0.0f);
 
     void  set_rate(float rate) { rate_ = rate > 0.0f ? rate : 0.0f; }
+    // New dice from here on (Simulation::fork).
+    void  fork(uint64_t fork_seed) { seed_ = mix64(seed_ ^ mix64(fork_seed * 0x9E3779B97F4A7C15ull + 0xE7E7)); }
     float rate() const { return rate_; }
 
     // Called at the start of every tick, before the powers run: maybe start an

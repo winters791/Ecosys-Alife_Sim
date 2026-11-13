@@ -1,0 +1,5 @@
+# The four test vents of 10.7 (strength 2, radius 5), open from tick 0.
+0 vent 32 112 5 2
+0 vent 96 112 5 2
+0 vent 64 72 5 2
+0 vent 64 24 5 2

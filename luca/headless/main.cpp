@@ -5,6 +5,7 @@
 //
 // This is where tuning happens. It runs as fast as the core allows.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "laws.hpp"
 #include "metrics.hpp"
@@ -40,6 +42,12 @@ void usage() {
         "  --follow NAME    follow a species by name (from when it appears); alerts.txt\n"
         "  --load FILE      continue a saved world (its config comes from the file;\n"
         "                   --ticks counts on from the tick it was saved at)\n"
+        "  --fork-seed N    with --load: give the loaded world new dice, so each N\n"
+        "                   gives a different future of the same world\n"
+        "  --knockout SP    with --load: every member of species SP (name or id) dies\n"
+        "                   at once and leaves its corpse (repeatable)\n"
+        "  --scenario KEY   set a goal (core/scenario.hpp), e.g. first-steps\n"
+        "  --probe          also write probe.csv (what became of meals, how bodies died) and leavings.csv (who took up whose leavings)\n"
         "  --save FILE      save the world to FILE at the end\n"
         "  --save-every N   also save every N ticks, to FILE with the tick in its name\n"
         "  --set NAME=VALUE change a law for this run (repeatable; core/laws.hpp).\n"
@@ -62,7 +70,11 @@ int main(int argc, char** argv) {
     long long save_every = 0;
     bool snapshot = true, quiet = false;
     std::string world_flag;   // a flag that sets the world's config (not allowed with --load)
-    bool events_given = false, interval_given = false, list_laws = false;
+    bool events_given = false, interval_given = false, list_laws = false, probe = false;
+    bool fork_given = false;
+    unsigned long long fork_seed = 0;
+    std::vector<std::string> knockouts;
+    std::string scenario_key;
     luca::LawChanges law_changes;   // --set and --laws, in the order given
 
     for (int i = 1; i < argc; ++i) {
@@ -78,6 +90,10 @@ int main(int argc, char** argv) {
         if      (arg_is(a, "--ticks"))       ticks = std::atoll(next());
         else if (arg_is(a, "--load"))        load_path = next();
         else if (arg_is(a, "--save"))        save_path = next();
+        else if (arg_is(a, "--fork-seed"))   { fork_seed = std::strtoull(next(), nullptr, 10); fork_given = true; }
+        else if (arg_is(a, "--knockout"))    knockouts.push_back(next());
+        else if (arg_is(a, "--probe"))       probe = true;
+        else if (arg_is(a, "--scenario"))    scenario_key = next();
         else if (arg_is(a, "--save-every"))  save_every = std::atoll(next());
         else if (arg_is(a, "--seed"))        cfg.seed = std::strtoull(next(), nullptr, 10);
         else if (arg_is(a, "--size"))        cfg.world_size = std::atoi(next());
@@ -119,6 +135,10 @@ int main(int argc, char** argv) {
     }
     if (!load_path.empty() && !world_flag.empty()) {
         std::fprintf(stderr, "%s sets up a new world; a loaded world keeps the config it was saved with\n", world_flag.c_str());
+        return 2;
+    }
+    if (load_path.empty() && (fork_given || !knockouts.empty())) {
+        std::fprintf(stderr, "--fork-seed and --knockout act on a saved world: use them with --load\n");
         return 2;
     }
     if (save_every > 0 && save_path.empty()) {
@@ -180,11 +200,36 @@ int main(int argc, char** argv) {
         cfg = owned->config();
         if (events_given) owned->set_event_rate(rate);
         if (interval_given) cfg.metrics_interval = interval;
+        if (fork_given) owned->fork(fork_seed);
+        for (const std::string& name : knockouts) {
+            const auto& all = owned->species().all();
+            char* end = nullptr;
+            const unsigned long id = std::strtoul(name.c_str(), &end, 10);
+            const luca::Species* found = nullptr;
+            for (const luca::Species& sp : all)
+                if (sp.name == name || (end && *end == '\0' && !name.empty() && sp.id == id)) { found = &sp; break; }
+            if (!found) {
+                std::fprintf(stderr, "--knockout: no species called %s\n", name.c_str());
+                return 2;
+            }
+            const std::size_t gone = owned->knockout(found->id);
+            if (!quiet) std::printf("knocked out %s: %zu bodies\n", name.c_str(), gone);
+        }
         if (!quiet)
             std::printf("loaded %s: tick %llu, %zu creatures\n", load_path.c_str(), static_cast<unsigned long long>(owned->tick()),
                         owned->creatures().size());
     }
     luca::Simulation& sim = *owned;
+    if (!scenario_key.empty()) {
+        const int id = luca::find_scenario(scenario_key);
+        if (id < 0) {
+            std::fprintf(stderr, "unknown scenario %s; there are:", scenario_key.c_str());
+            for (const auto& s : luca::scenario_list()) std::fprintf(stderr, " %s", s.key);
+            std::fprintf(stderr, "\n");
+            return 2;
+        }
+        sim.start_scenario(static_cast<uint32_t>(id));
+    }
     {
         // The laws in force, readable back with --laws.
         const luca::LawChanges changed = luca::changed_laws(luca::g_laws);
@@ -226,6 +271,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    luca::ProbeWriter probes;
+    if (probe && !probes.open(out_dir + "/probe.csv")) {
+        std::fprintf(stderr, "cannot write %s/probe.csv\n", out_dir.c_str());
+        return 1;
+    }
+
     luca::IntervalTotals interval;
     interval.begin(sim);
     double worst_audit = 0.0, total_ms = 0.0;
@@ -248,6 +299,7 @@ int main(int argc, char** argv) {
         const bool last = (t + 1 == ticks);
         if (sim.tick() % static_cast<uint64_t>(cfg.metrics_interval) == 0 || last) {
             const double audit = metrics.write_row(sim, interval);
+            if (probe) probes.write_row(sim, interval);
             if (std::abs(audit) > std::abs(worst_audit)) worst_audit = audit;
             if (!quiet)
                 std::printf("tick %8llu  pop %7zu  births %6zu  deaths %6zu  sun/living/dead-fed %zu/%zu/%zu  movers %zu  species %zu  %.3f ms/tick  audit %+.2e\n",
@@ -273,6 +325,17 @@ int main(int argc, char** argv) {
     }
 
     luca::write_species_table(sim, out_dir + "/species.csv");
+    if (probe) {
+        // Who lived on whose leavings (the leavings tag; observation only), most first.
+        std::vector<std::pair<uint64_t, double>> rows(sim.leavings_eaten().begin(), sim.leavings_eaten().end());
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second != b.second ? a.second > b.second : a.first < b.first; });
+        std::ofstream f(out_dir + "/leavings.csv");
+        f << "taker,taker_name,giver,giver_name,energy\n";
+        for (const auto& [key, e] : rows) {
+            const uint32_t taker = static_cast<uint32_t>(key >> 32), giver = static_cast<uint32_t>(key & 0xFFFFFFFFu);
+            f << taker << ',' << sim.species().get(taker).name << ',' << giver << ',' << sim.species().get(giver).name << ',' << e << '\n';
+        }
+    }
     {
         std::ofstream f(out_dir + "/chronicle.txt");
         for (const auto& e : sim.chronicle().entries()) f << luca::format_entry(e) << '\n';
@@ -288,6 +351,9 @@ int main(int argc, char** argv) {
     std::printf("\ndone: %llu ticks, final population %zu, %.3f ms/tick average, worst audit error %+.2e\n",
                 static_cast<unsigned long long>(sim.tick()), sim.creatures().size(),
                 total_ms / static_cast<double>(ticks_run ? ticks_run : 1), worst_audit);
+    if (sim.scenario().active())
+        std::printf("scenario %s: %s\n", sim.scenario().info().key,
+                    sim.scenario().outcome == luca::Outcome::Running ? "still running" : sim.scenario().verdict.c_str());
     std::printf("metrics: %s\n", metrics_path.c_str());
     return 0;
 }

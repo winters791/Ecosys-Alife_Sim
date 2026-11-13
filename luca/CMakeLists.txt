@@ -35,6 +35,7 @@ add_library(luca_core STATIC
   core/energy.cpp
   core/mutation.cpp
   core/species.cpp
+  core/foodweb.cpp
   core/world.cpp
   core/powers.cpp
   core/events.cpp
@@ -43,6 +44,7 @@ add_library(luca_core STATIC
   core/sim.cpp
   core/snapshot.cpp
   core/laws.cpp
+  core/scenario.cpp
   core/metrics.cpp
 )
 target_include_directories(luca_core PUBLIC core)

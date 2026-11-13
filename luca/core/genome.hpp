@@ -35,9 +35,9 @@ inline bool can_have_stalk(PartType t) { return t == PartType::Absorber || t == 
 // x + x2 <-> y + y2, one unit of each, so matter balances. Downhill (richer to
 // poorer) it releases the difference in levels (chem.hpp) for the body to
 // spend; uphill it stores light in the richer side. A reaction that releases
-// nothing either way (equal levels, e.g. B + C <-> A + D) is neutral: it runs
-// on its own each tick, turning chemicals the body can't burn into ones it
-// can (energy.hpp, convert). A from or to A draws on or gives to the cell's
+// nothing either way (equal levels, e.g. B + C <-> A + D) never runs: it only
+// costs upkeep (neutral exchanges were deleted after the ablation pass,
+// 14.10.8). A from or to A draws on or gives to the cell's
 // soil. Every enzyme costs upkeep in proportion to its rate (phenotype.cpp).
 constexpr uint8_t NO_CHEM = 0xFF;   // the second slot of a one-to-one enzyme
 struct Enzyme {
@@ -170,8 +170,6 @@ struct Genome {
     float elongation        = 0.0f;   // 0 round .. 1 three times as long as it is wide
     float squareness        = 0.0f;   // 0 rounded .. 1 a box with rounded corners
     // Copying and upkeep of the body itself (2026-11-12).
-    float mutability        = 0.0f;   // log2 of how sloppily it is copied: 0 = the usual rates, -3 = an eighth, +2 = four times
-    float repair            = 0.0f;   // 0..1: energy spent repairing wear, so it ages more slowly
     float birth_size        = 0.5f;   // fraction of adult mass a child is born at; it grows the rest (2026-11-12)
     std::vector<Part>  parts;
     std::vector<Enzyme> enzymes;   // its chemistry (see Enzyme)
@@ -191,7 +189,6 @@ constexpr float MIN_TAU    = 1.0f,  MAX_TAU = 1000.0f;   // a neuron's time cons
 constexpr float MAX_THROW  = 6.0f;   // cells
 constexpr float MAX_BITE   = 3.0f;   // at most four times the plain pull
 constexpr float MAX_STALK  = 1.0f;   // world units: a part can sit at most this far out
-constexpr float MIN_MUTABILITY = -3.0f, MAX_MUTABILITY = 2.0f;   // an eighth to four times the usual mutation rates
 constexpr float MIN_BIRTH  = 0.1f,  MAX_BIRTH  = 1.0f;   // born at a tenth of adult mass, up to full size
 constexpr int   MAX_ENZYMES = 8;
 constexpr float MIN_ENZYME_RATE = 0.0005f, MAX_ENZYME_RATE = 0.2f;   // units of mass a tick

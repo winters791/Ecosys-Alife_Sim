@@ -26,7 +26,7 @@ class Simulation;
 // (its mass included, so a heavy part's share of Kleiber upkeep is its own).
 // "body" is everything the other lines don't explain: the core blob itself.
 struct CostLine {
-    std::string kind;   // body, part, enzyme, brain, tolerance, bite, dormancy, throw, repair, fidelity, shape
+    std::string kind;   // body, part, enzyme, brain, tolerance, bite, dormancy, throw, shape
     int index = -1;     // which part or enzyme, else -1
     float upkeep = 0.0f;
 };
@@ -34,7 +34,7 @@ struct CostLine {
 struct DesignReport {
     Phenotype p;
     float upkeep = 0.0f;        // energy a tick at birth (what the world charges, not the raw gene sum)
-    float upkeep_old = 0.0f;    // the same at age 10,000 ticks: wear, slowed by repair
+    float upkeep_old = 0.0f;    // the same at age 10,000 ticks: wear
     std::vector<CostLine> costs;   // biggest first
     float light_income = 0.0f;  // mean energy a tick from the sun, sitting still alone in a cell
     float thermal = 0.0f;       // mean energy a tick lost to living outside its comfort range

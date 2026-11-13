@@ -1,4 +1,5 @@
 build/
+build-dev/
 build-godot/
 out/
 __pycache__/
@@ -6,3 +7,5 @@ __pycache__/
 thirdparty/
 viewer/bin/
 viewer/.godot/
+worlds/
+ab_out/

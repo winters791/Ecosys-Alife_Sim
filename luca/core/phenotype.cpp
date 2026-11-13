@@ -17,6 +17,10 @@ constexpr int NUM_PARTS = static_cast<int>(PartType::Count);
 //                                           Photo  Absorber Flagellum Legs  Sensor Armour Storage Poison
 constexpr float MASS_PER_SIZE[NUM_PARTS] = { 0.1f,  0.2f,    0.15f,    0.3f, 0.05f, 0.6f,  0.4f,   0.1f };
 constexpr float COST_PER_SIZE[NUM_PARTS] = { 0.1f,  0.15f,   0.2f,     0.2f, 0.05f, 0.05f, 0.02f,  0.12f };
+// Stoichiometry: P a part needs per unit of size, on top of P_BASE per unit of
+// body mass, as units of mass worth of P (times P_PART_SCALE). Shells and bone
+// are mineral; leaves and fat are mostly carbon (docs/design/stoichiometry.md).
+constexpr float P_PER_SIZE[NUM_PARTS]    = { 0.0f,  0.5f,    0.5f,     1.5f, 0.5f,  2.0f,  0.0f,   0.2f };
 // Sensor upkeep was 0.3 per unit of size until 2026-11-11, the dearest part
 // there is: seeing one cell cost 0.15 a tick, ~40% of a LUCA's whole upkeep,
 // so movers went blind and their brains were a fixed wander urge.
@@ -29,13 +33,8 @@ inline const float& PHOTO_PER_AREA = g_laws.PHOTO_PER_AREA;  // law, 1.0f: max p
 inline const float& FLAGELLUM_THRUST = g_laws.FLAGELLUM_THRUST;  // law, 0.125f: world units per tick, per unit size, per unit mass
 inline const float& LEGS_THRUST      = g_laws.LEGS_THRUST;  // law, 0.10f
 inline const float& MAX_SPEED        = g_laws.MAX_SPEED;  // law, 0.5f: hard physical ceiling (a law, not a population cap)
-// A body built to move (a motor and a brain to drive it) catches only this
-// share of the light its patches could take, moving or not. It was 0.5 from
-// 2026-11-12 to stop slow sun-fed creepers taking over worlds; folding
-// (UNFOLD_TICKS in energy.hpp) replaced it the same day at Uday's call, since
-// it stops creepers without taxing a plant that moves only now and then.
-// 1 = off; kept as a lever.
-inline const float& MOVER_SUN        = g_laws.MOVER_SUN;  // law, 1.0f
+// MOVER_SUN (movers caught a share of the light, moving or not) was replaced
+// by folding (UNFOLD_TICKS, energy.hpp) and deleted in step 0.5 (14.10.8).
 
 // Contact. MEMBRANE_BASE, ARMOUR_RESIST and ARMOUR_CLOGS are in body.hpp:
 // where a plate sits decides what it protects and what it clogs.
@@ -82,14 +81,6 @@ inline const float& SKIN_UPKEEP          = g_laws.SKIN_UPKEEP;  // law, 0.1f: up
 // in the canopy.
 inline const float& STALK_MASS   = g_laws.STALK_MASS;  // law, 0.1f
 
-// Copying and repair (2026-11-12). Faithful copying needs proofreading: each
-// halving of the mutation rate below the usual costs FIDELITY_UPKEEP. Copying
-// more sloppily than usual is free; its price is broken children. Repair
-// stretches the wear clock (energy.cpp) up to 1 + REPAIR_GAIN times longer,
-// for up to REPAIR_SHARE more upkeep: a bigger body has more to repair.
-inline const float& FIDELITY_UPKEEP = g_laws.FIDELITY_UPKEEP;  // law, 0.02f
-inline const float& REPAIR_GAIN     = g_laws.REPAIR_GAIN;  // law, 2.0f
-inline const float& REPAIR_SHARE    = g_laws.REPAIR_SHARE;  // law, 0.15f
 inline const float& STALK_UPKEEP = g_laws.STALK_UPKEEP;  // law, 0.06f
 
 // Feeding specialisation: pure cost to a body that eats nothing.
@@ -158,13 +149,19 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     float armour_cover    = 0.0f;  // armour averaged over every direction
     float photo_lift      = 0.0f;  // photo size x stalk, summed
     float stalk_upkeep    = 0.0f;
+    float gear            = 0.0f;  // observation: upkeep of standing gear
+    float p_parts         = 0.0f;  // stoichiometry: extra P the parts need
 
     for (const Part& part : g.parts) {
         const int   t    = static_cast<int>(part.type);
         const float size = std::max(0.0f, part.size);  // negative parts would be free energy
         const float stalk = can_have_stalk(part.type) ? std::clamp(part.stalk, 0.0f, limits::MAX_STALK) : 0.0f;
         mass        += size * MASS_PER_SIZE[t] + stalk * STALK_MASS;
+        p_parts     += size * P_PER_SIZE[t];
         part_upkeep += size * COST_PER_SIZE[t];
+        if (part.type == PartType::Absorber || part.type == PartType::Flagellum || part.type == PartType::Legs ||
+            part.type == PartType::Sensor)
+            gear += size * COST_PER_SIZE[t];
         stalk_upkeep += stalk * STALK_UPKEEP;
         if (part.type == PartType::Photo) photo_lift += size * stalk;
 
@@ -203,6 +200,9 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     }
 
     p.mass         = mass;
+    p.p_adult      = g_laws.P_BASE > 0.0f ? g_laws.P_BASE * (mass + g_laws.P_PART_SCALE * p_parts) : 0.0f;
+    p.p_need       = p.p_adult;
+    p.p_store_cap  = g_laws.P_STORE * p.p_adult;
     p.radius       = r;
     p.canopy       = r + (photo_total > 0.0f ? photo_lift / photo_total : 0.0f);   // patches held up on stalks overtop their neighbours
     p.throw_range  = seed_throw;
@@ -213,12 +213,11 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     p.upkeep       = BASE_UPKEEP * std::pow(mass, 0.75f) + part_upkeep  // Kleiber + parts
                    + (skin - 1.0f) * r * r * SKIN_UPKEEP + stalk_upkeep
                    + tolerance * TOLERANCE_COST + brain_upkeep + seed_throw * THROW_UPKEEP
-                   + bite * BITE_UPKEEP + dormancy * DORMANCY_UPKEEP
-                   + std::max(0.0f, -std::clamp(g.mutability, limits::MIN_MUTABILITY, limits::MAX_MUTABILITY)) * FIDELITY_UPKEEP;
-    const float repair = std::clamp(g.repair, 0.0f, 1.0f);
-    // Chemistry: compile the enzymes. First what the downhill ones can burn
-    // (the richer side of each, A aside); then each neutral one runs from the
-    // side holding fewer of those to the side holding more, or not at all.
+                   + bite * BITE_UPKEEP + dormancy * DORMANCY_UPKEEP;
+    // Chemistry: compile the enzymes, each written the richer side first. An
+    // enzyme with equal levels on both sides releases and stores nothing, so
+    // it never runs (neutral exchanges were deleted after the ablation pass,
+    // 14.10.8); it still costs upkeep.
     float enzyme_rate = 0.0f;
     {
         Enzyme es[limits::MAX_ENZYMES];
@@ -229,38 +228,25 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
         }
         auto level = [](uint8_t c) { return c == NO_CHEM ? 0.0f : LEVEL[c]; };
         auto bit = [](uint8_t c) { return c == NO_CHEM || c == CHEM_A ? 0u : 1u << c; };
-        uint8_t direct = 0;
-        for (int k = 0; k < ne; ++k)
-            if (level(es[k].y) + level(es[k].y2) > level(es[k].x) + level(es[k].x2)) direct |= static_cast<uint8_t>(bit(es[k].y) | bit(es[k].y2));
         for (int k = 0; k < ne; ++k) {
             const Enzyme& e = es[k];
             const float rate = std::clamp(e.rate, limits::MIN_ENZYME_RATE, limits::MAX_ENZYME_RATE);
             const float step = level(e.y) + level(e.y2) - level(e.x) - level(e.x2);
             const int j = p.enzymes;
-            bool rich_first = true;   // write the richer side (y) as `in`
-            if (step <= 0.0f) {       // neutral: which way, if any, it runs
-                auto score = [&](uint8_t a, uint8_t b) { return ((direct & bit(a)) ? 1 : 0) + ((direct & bit(b)) ? 1 : 0); };
-                const int sx = score(e.x, e.x2), sy = score(e.y, e.y2);
-                if (sx != sy) {
-                    rich_first = sx < sy ? false : true;   // from the lower score to the higher
-                    p.neutral |= static_cast<uint8_t>(1u << j);
-                }
-            }
-            p.enz_in[j][0]  = rich_first ? e.y : e.x;
-            p.enz_in[j][1]  = rich_first ? e.y2 : e.x2;
-            p.enz_out[j][0] = rich_first ? e.x : e.y;
-            p.enz_out[j][1] = rich_first ? e.x2 : e.y2;
+            p.enz_in[j][0]  = e.y;   // the richer side, burned from
+            p.enz_in[j][1]  = e.y2;
+            p.enz_out[j][0] = e.x;
+            p.enz_out[j][1] = e.x2;
             p.enz_step[j] = std::max(0.0f, step);
             p.enz_rate[j] = rate;
-            if (step > 0.0f || (p.neutral >> j & 1u)) p.burns |= static_cast<uint8_t>(bit(p.enz_in[j][0]) | bit(p.enz_in[j][1]));
+            if (step > 0.0f) p.burns |= static_cast<uint8_t>(bit(p.enz_in[j][0]) | bit(p.enz_in[j][1]));
             p.any_two = p.any_two || e.two();
             ++p.enzymes;
             enzyme_rate += rate;
         }
     }
     p.upkeep += enzyme_rate * ENZYME_UPKEEP;
-    p.upkeep *= 1.0f + REPAIR_SHARE * repair;
-    p.wear    = 1.0f / ((1.0f + REPAIR_GAIN * repair) * (1.0f + REPAIR_GAIN * repair));   // the age clock runs 1 + 2 x repair times slower
+    p.gear_upkeep = gear + bite * BITE_UPKEEP + brain_upkeep + enzyme_rate * ENZYME_UPKEEP;
     // LUCA (r = 1, one photo patch of size 1): mass 1.1, upkeep ≈ 0.42 + 0.04 for its ±10 °C.
 
     // --- 4. Light capture: patches need skin to sit on, and plates cover skin
@@ -271,7 +257,6 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     // A tail pushes best from the back and legs from the sides (body.hpp).
     p.max_speed = std::min(thrust / (p.mass * p.drag), MAX_SPEED);
     // LUCA + one size-1 flagellum straight behind: mass 1.25, speed 0.1.
-    if (p.has_brain && p.max_speed > 0.0f) p.light_capture *= MOVER_SUN;
 
     // --- 6. Heat: absorbed over skin, spread over body mass ------------------
     p.heat_absorption = pigment * p.surface_area / p.mass;
@@ -321,9 +306,11 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     if (f < 1.0f) {
         const float k = std::cbrt(f);
         p.mass            *= f;
+        p.p_need          *= f;
         p.energy_capacity *= f;
         p.repro_threshold  = std::min(p.repro_threshold, 0.95f * p.energy_capacity);
         p.upkeep          *= std::pow(f, 0.75f);
+        p.gear_upkeep     *= std::pow(f, 0.75f);
         p.radius          *= k;
         p.canopy          *= k;
         p.reach           *= k;

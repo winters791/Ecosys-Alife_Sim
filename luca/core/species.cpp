@@ -24,8 +24,6 @@ inline const float& W_BITE      = g_laws.W_BITE;  // law, 0.8f: per unit of bite
 inline const float& W_DORMANCY  = g_laws.W_DORMANCY;  // law, 1.5f: never sleeps to sleeps fully is 0..1
 inline const float& W_ELONGATE  = g_laws.W_ELONGATE;  // law, 1.5f: round to three times as long is 0..1
 inline const float& W_SQUARE    = g_laws.W_SQUARE;  // law, 1.0f: rounded to boxy is 0..1
-inline const float& W_MUTABILITY = g_laws.W_MUTABILITY;  // law, 0.3f: per doubling of the mutation rate
-inline const float& W_REPAIR    = g_laws.W_REPAIR;  // law, 1.5f: none to full is 0..1
 inline const float& W_BIRTH     = g_laws.W_BIRTH;  // law, 1.5f: a tenth to full size is 0.1..1
 inline const float& W_STALK     = g_laws.W_STALK;  // law, 0.8f: per world unit of stalk, summed over a kind of part
 inline const float& W_ENZ_KIND  = g_laws.W_ENZ_KIND;  // law, 0.6f: one can run a reaction the other cannot
@@ -77,8 +75,6 @@ float genome_distance(const Genome& a, const Genome& b) {
     term(W_THROW,     a.seed_throw - b.seed_throw);
     term(W_BITE,      a.bite - b.bite);
     term(W_DORMANCY,  a.dormancy - b.dormancy);
-    term(W_MUTABILITY, a.mutability - b.mutability);
-    term(W_REPAIR,    a.repair - b.repair);
     term(W_BIRTH,     a.birth_size - b.birth_size);
     term(W_ELONGATE,  a.elongation - b.elongation);
     term(W_SQUARE,    a.squareness - b.squareness);

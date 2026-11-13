@@ -148,8 +148,11 @@ void io_genome(IO& io, Genome& g) {
     io(g.seed_throw);
     io(g.elongation);
     io(g.squareness);
-    io(g.mutability);
-    io(g.repair);
+    // Two genes deleted after the ablation pass (mutability, repair; 14.10.8):
+    // still written as 0 and read and dropped, so the format is unchanged.
+    float retired[2] = {0.0f, 0.0f};
+    io(retired[0]);
+    io(retired[1]);
     io(g.birth_size);
     io.list(g.parts, [](auto& r, Part& p) {
         r(p.type);
@@ -290,6 +293,17 @@ struct SnapshotIO {
     }
 
     template <class IO>
+    static void scenario(IO& io, ScenarioState& sc) {
+        uint32_t outcome = static_cast<uint32_t>(sc.outcome);
+        io(sc.id);
+        io(sc.start_tick);
+        io(outcome);
+        io(sc.end_tick);
+        io(sc.verdict);
+        sc.outcome = static_cast<Outcome>(outcome);
+    }
+
+    template <class IO>
     static void events(IO& io, WorldEvents& e) {
         io(e.seed_);
         io(e.rate_);
@@ -318,6 +332,17 @@ struct SnapshotIO {
         io.array(s.corpse);
         io.array(s.dissolved);
         io.array(s.vent_made);
+    }
+
+    // Stoichiometry (docs/design/stoichiometry.md): the mineral P, in sections
+    // of its own so worlds saved before it still load. Missing, the soil's P
+    // is laid out afresh and every body holds exactly the P its body needs.
+    template <class IO>
+    static void minerals(IO& io, Simulation& s) {
+        io(s.p_brought_up_);
+        io(s.arrived_p_);
+        io.array(s.soil_.mineral);
+        io.array(s.soil_.corpse_p);
     }
 
     template <class IO>
@@ -577,11 +602,20 @@ std::string SnapshotIO::to_bytes(const Simulation& sim_in) {
     section("WRLD", [&](auto& io) { world(io, s.world_); });
     section("SOIL", [&](auto& io) { soil(io, s.soil_); });
     section("CRTR", [&](auto& io) { io.list(bodies, [](auto& r, Body& b) { body(r, b); }); });
+    section("MINR", [&](auto& io) { minerals(io, s); });
+    std::vector<float> body_p;   // tissue then store, a pair a body, in creature order
+    body_p.reserve(2 * s.c_.size());
+    for (std::size_t i = 0; i < s.c_.size(); ++i) {
+        body_p.push_back(s.c_.tissue_p[i]);
+        body_p.push_back(s.c_.pool_p[i]);
+    }
+    section("BODP", [&](auto& io) { io.array(body_p); });
     section("POWR", [&](auto& io) { powers(io, s.powers_); });
     section("SPEC", [&](auto& io) { species(io, s.species_); });
     section("CHRN", [&](auto& io) { chronicle(io, s.chronicle_); });
     section("ALRT", [&](auto& io) { chronicle(io, s.alerts_); });
     section("WTCH", [&](auto& io) { watches(io, s); });
+    section("SCEN", [&](auto& io) { scenario(io, s.scenario_); });
     return head.str() + out.buf;
 }
 
@@ -689,11 +723,16 @@ std::unique_ptr<Simulation> SnapshotIO::from_bytes(const std::string& bytes, std
     ok = ok && read("WRLD", [&](In& io) { world(io, s.world_); });
     ok = ok && read("SOIL", [&](In& io) { soil(io, s.soil_); });
     ok = ok && read("CRTR", [&](In& io) { io.list(bodies, [](auto& r, Body& b) { body(r, b); }); });
+    ok = ok && read("MINR", [&](In& io) { minerals(io, s); });
+    std::vector<float> body_p;
+    ok = ok && read("BODP", [&](In& io) { io.array(body_p); });
     ok = ok && read("POWR", [&](In& io) { powers(io, s.powers_); });
     ok = ok && read("SPEC", [&](In& io) { species(io, s.species_); });
     ok = ok && read("CHRN", [&](In& io) { chronicle(io, s.chronicle_); });
     ok = ok && read("ALRT", [&](In& io) { chronicle(io, s.alerts_); });
     ok = ok && read("WTCH", [&](In& io) { watches(io, s); });
+    ok = ok && read("SCEN", [&](In& io) { scenario(io, s.scenario_); });
+    if (s.scenario_.id >= scenario_list().size()) s.scenario_ = ScenarioState{};   // one this build doesn't know
     if (!ok) {
         error = "snapshot is damaged";
         return nullptr;
@@ -701,7 +740,8 @@ std::unique_ptr<Simulation> SnapshotIO::from_bytes(const std::string& bytes, std
     const World& w = s.world_;
     const Soil& so = s.soil_;
     if (w.height_.size() != cells || w.heat_.size() != cells || w.vent_.size() != cells || so.nutrient.size() != cells ||
-        so.corpse.size() != cells || so.dissolved.size() != cells || so.vent_made.size() != cells) {
+        so.corpse.size() != cells || so.dissolved.size() != cells || so.vent_made.size() != cells || so.mineral.size() != cells ||
+        so.corpse_p.size() != cells || (!body_p.empty() && body_p.size() != 2 * bodies.size())) {
         error = "snapshot's fields don't match its world size";
         return nullptr;
     }
@@ -721,6 +761,11 @@ std::unique_ptr<Simulation> SnapshotIO::from_bytes(const std::string& bytes, std
         s.soil_.waste[c] = s.soil_.dissolved[c].energy();
     }
     restore_bodies(s, bodies);
+    for (std::size_t i = 0; i < s.c_.size(); ++i) {
+        s.c_.tissue_p[i] = body_p.empty() ? s.c_.pheno[i].p_need : body_p[2 * i];
+        s.c_.pool_p[i] = body_p.empty() ? 0.0f : body_p[2 * i + 1];
+    }
+    s.soil_.rebuild_bits();
     if (!changed.empty()) {
         std::string text = "The laws of the world change:";
         for (std::size_t k = 0; k < changed.size(); ++k) {
@@ -731,7 +776,12 @@ std::unique_ptr<Simulation> SnapshotIO::from_bytes(const std::string& bytes, std
     }
     // Living mass per cell, as the last tick left it (the viewer reads it between ticks).
     std::fill(s.biomass_.begin(), s.biomass_.end(), 0.0f);
-    for (std::size_t i = 0; i < s.c_.size(); ++i) s.biomass_[w.cell_index(s.c_.x[i], s.c_.y[i])] += s.c_.pheno[i].mass;
+    s.scratch_cells_.clear();
+    for (std::size_t i = 0; i < s.c_.size(); ++i) {
+        const int cell = w.cell_index(s.c_.x[i], s.c_.y[i]);
+        s.biomass_[cell] += s.c_.pheno[i].mass;
+        s.scratch_cells_.push_back(cell);
+    }
     return sim;
 }
 

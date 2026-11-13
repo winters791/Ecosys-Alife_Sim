@@ -34,13 +34,15 @@ extends Node3D
 ##   --template=NAME          ... on that template (Luca, Swimmer, Hunter, ...)
 ##   --vault                  ... with the seed vault open
 ##   --bank                   bank the most numerous species in the seed vault at the start
+##   --load=PATH              open a saved world (a .snap file, as luca_headless --save writes)
+##   --scenario=KEY           start a scenario in a fresh world (e.g. first-steps)
 
 const PX_SIZE := 0.125            # world units per sprite pixel: 8 pixels to a cell
 const ZOOMS := [0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]  # screen pixels per sprite pixel
 const FRAME_BUDGET_MS := 10.0     # sim time allowed per frame; beyond it the world just runs slower
 const SPEED_TICKS := [0, 1, 4, 16, 100000]
 const SPEED_NAMES := ["Pause", "1x", "4x", "16x", "Max"]
-const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead", "Waste", "Vents"]
+const OVERLAY_NAMES := ["Natural", "Temperature", "Light", "Nutrients", "The dead", "Waste", "Vents", "Mineral (P)"]
 const GRADUAL_TICKS := 1000       # how long a power takes in Gradual mode
 const NIGHT_GROUND := Vector3(0.30, 0.34, 0.58)
 const NIGHT_BLOBS := Vector3(0.58, 0.62, 0.82)
@@ -55,6 +57,22 @@ const TOOL_NAMES := ["Look", "Raise land", "Lower land", "Warm spot", "Cold spot
 const TOOL_COLORS := [Color(1, 1, 1), Color(1.0, 0.85, 0.4), Color(0.6, 0.75, 1.0), Color(1.0, 0.45, 0.3), Color(0.5, 0.9, 1.0), Color(1.0, 0.55, 0.15), Color(0.55, 0.5, 0.6), Color(0.98, 0.62, 0.22)]
 
 var world: LucaWorld
+
+## Loading a world or starting a scenario reloads the scene with a new world,
+## so every texture, panel and the camera start clean (the saved world may even
+## be another size). These carry the request across the reload.
+static var pending_load := ""
+static var pending_scenario := ""
+static var restarted := false           # after the first reload the command line no longer applies
+const SAVE_DIR := "user://saves"
+const SCENARIO_POP := 200               # a scenario starts from the same 200 LUCAs its goal was measured on
+var start_message := ""                 # said in the chronicle once the UI is up
+var scenario_panel: PanelContainer
+var scenario_label: RichTextLabel
+var scenario_buttons: HBoxContainer
+var scenario_pick: OptionButton
+var scenario_decided := false           # the verdict has been shown (and the world paused once)
+var file_dialog: FileDialog
 var world_size := 128
 var extent := 128.0
 
@@ -65,6 +83,7 @@ var height_tex: ImageTexture
 var temp_tex: ImageTexture
 var light_tex: ImageTexture
 var soil_tex: ImageTexture
+var mineral_tex: ImageTexture
 var height_rev := -1
 var climate_rev := -1
 var multimesh: MultiMesh
@@ -99,6 +118,8 @@ var left_column: VBoxContainer
 var species_box: RichTextLabel
 var tree_panel: PanelContainer
 var tree_view: Control
+var web_view: Control              # the food web (food_web.gd), shown in the tree's place
+var web_mode := false              # the panel shows the food web instead of the tree
 var tree_title: Label
 var species_card: PanelContainer   # the species profile beside the tree (species_card.gd)
 var by_species := false
@@ -122,6 +143,8 @@ var event_rate := 1.0                   # storms, eruptions, meteors, climate dr
 var start_zoom := -1.0
 var start_at := Vector2(-1, -1)
 var start_tree := false
+var start_web := false
+var start_overlay := 0
 var test_poison := false       # draw every body as poisonous, to check the art
 var parade := false            # an empty world with one hand-made creature of each body plan
 var parts_tex: ImageTexture    # every creature's parts, one texel each (see LucaWorld::get_part_buffer)
@@ -151,7 +174,8 @@ var start_bank := false
 func _ready() -> void:
 	var seed_value := 42
 	var population := 600
-	for arg in OS.get_cmdline_user_args():
+	var args: PackedStringArray = PackedStringArray() if restarted else OS.get_cmdline_user_args()
+	for arg: String in args:
 		if arg.begins_with("--size="): world_size = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--seed="): seed_value = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--pop="): population = int(arg.get_slice("=", 1))
@@ -165,6 +189,8 @@ func _ready() -> void:
 			parade = true
 			population = 0
 		elif arg == "--tree": start_tree = true
+		elif arg == "--web": start_web = true
+		elif arg.begins_with("--overlay="): start_overlay = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--tree="):
 			start_tree = true
 			start_tree_root = arg.get_slice("=", 1)
@@ -182,12 +208,31 @@ func _ready() -> void:
 		elif arg.begins_with("--template="): start_template = arg.get_slice("=", 1)
 		elif arg == "--vault": start_vault = true
 		elif arg == "--bank": start_bank = true
+		elif arg.begins_with("--load="): pending_load = arg.get_slice("=", 1)
+		elif arg.begins_with("--scenario="): pending_scenario = arg.get_slice("=", 1)
 		elif arg.begins_with("--at="):
 			var at := arg.get_slice("=", 1).split(",")
 			if at.size() == 2: start_at = Vector2(float(at[0]), float(at[1]))
 
 	world = LucaWorld.new()
-	world.setup(world_size, seed_value, population, true)
+	if pending_load != "":
+		var err: String = world.load_world(pending_load)
+		if err == "":
+			start_message = "Loaded %s, at tick %s." % [pending_load.get_file(), _commas(world.get_tick())]
+			event_rate = world.get_event_rate()   # a saved world keeps its own
+		else:
+			start_message = "[color=#f88]Could not load %s: %s[/color]" % [pending_load.get_file(), err]
+			world.setup(world_size, seed_value, population, true)
+		pending_load = ""
+	elif pending_scenario != "":
+		# A fresh world for the scenario, with new dice each time it is played.
+		world.setup(128, randi() % 1000000, SCENARIO_POP, true)
+		if not world.start_scenario(pending_scenario):
+			start_message = "[color=#f88]No scenario called %s.[/color]" % pending_scenario
+		event_rate = 0.0   # the player shapes this world; nothing else does unless they turn it on
+		pending_scenario = ""
+	else:
+		world.setup(world_size, seed_value, population, true)
 	if parade:
 		event_rate = 0.0   # an art check: keep the ground still
 	world.set_event_rate(event_rate)
@@ -220,12 +265,18 @@ func _ready() -> void:
 	_build_blobs()
 	_build_camera()
 	_build_ui()
+	if start_message != "":
+		chronicle_box.append_text(start_message + "\n")
 	_set_speed(1 if not demo else 3)
 	_set_tool(Tool.LOOK)
 	if by_species:
 		(find_child("SpeciesCheck", true, false) as CheckBox).button_pressed = true
 	if test_poison:
 		blob_mat.set_shader_parameter("poison_test", 0.6)
+	if start_overlay != 0:
+		_set_overlay(start_overlay)
+	if start_web:
+		_toggle_web()
 	if start_tree:
 		_toggle_tree()
 		for i in tree_view.species.size():
@@ -338,6 +389,14 @@ func _upload_soil() -> void:
 		terrain_mat.set_shader_parameter("soil_tex", soil_tex)
 	else:
 		soil_tex.update(img)
+	# The mineral P (stoichiometry), only while its overlay is shown.
+	if overlay == 7:
+		var mimg := Image.create_from_data(world_size, world_size, false, Image.FORMAT_RF, world.get_mineral().to_byte_array())
+		if mineral_tex == null:
+			mineral_tex = ImageTexture.create_from_image(mimg)
+			terrain_mat.set_shader_parameter("mineral_tex", mineral_tex)
+		else:
+			mineral_tex.update(mimg)
 
 
 func _build_blobs() -> void:
@@ -490,6 +549,23 @@ func _build_ui() -> void:
 	for i in SPEED_NAMES.size():
 		speed_buttons.append(_button(speeds, SPEED_NAMES[i], _set_speed.bind(i), true))
 
+	var game := _panel(Control.PRESET_TOP_LEFT, Vector2(330, 0), column)
+	_heading(game, "GAME")
+	var file_row := HBoxContainer.new()
+	game.add_child(file_row)
+	_button(file_row, "Save world", _ask_file.bind(true))
+	_button(file_row, "Load world", _ask_file.bind(false))
+	var scenario_row := HBoxContainer.new()
+	game.add_child(scenario_row)
+	scenario_pick = OptionButton.new()
+	scenario_pick.focus_mode = Control.FOCUS_NONE
+	for sc: Dictionary in world.get_scenarios():
+		if sc["key"] != "none":
+			scenario_pick.add_item(sc["title"])
+			scenario_pick.set_item_metadata(scenario_pick.item_count - 1, sc["key"])
+	scenario_row.add_child(scenario_pick)
+	_button(scenario_row, "Start scenario", func() -> void: _restart_with("", str(scenario_pick.get_selected_metadata())))
+
 	var tools := _panel(Control.PRESET_TOP_LEFT, Vector2(330, 0), column)
 	_heading(tools, "TOOLS")
 	var tool_grid := GridContainer.new()
@@ -549,6 +625,7 @@ func _build_ui() -> void:
 	var view_row := HBoxContainer.new()
 	tools.add_child(view_row)
 	_button(view_row, "Tree of life (T)", _toggle_tree)
+	_button(view_row, "Food web (G)", _toggle_web)
 	_button(view_row, "Save powers", _save_powers)
 	var zoom_row := HBoxContainer.new()
 	tools.add_child(zoom_row)
@@ -565,6 +642,26 @@ func _build_ui() -> void:
 	chronicle_box.custom_minimum_size = Vector2(360, 200)
 	chronicle_box.add_theme_font_size_override("normal_font_size", 13)
 	history.add_child(chronicle_box)
+
+	# Top middle: the scenario's goal and clock, and its verdict.
+	var banner := _panel(Control.PRESET_CENTER_TOP, Vector2(460, 0))
+	scenario_panel = banner.get_parent()
+	scenario_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	scenario_label = RichTextLabel.new()
+	scenario_label.bbcode_enabled = true
+	scenario_label.fit_content = true
+	scenario_label.scroll_active = false
+	scenario_label.custom_minimum_size = Vector2(440, 0)
+	scenario_label.add_theme_font_size_override("normal_font_size", 14)
+	banner.add_child(scenario_label)
+	scenario_buttons = HBoxContainer.new()
+	scenario_buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	banner.add_child(scenario_buttons)
+	_button(scenario_buttons, "Play again", func() -> void: _restart_with("", str(world.get_scenario()["key"])))
+	_button(scenario_buttons, "Keep playing (sandbox)", func() -> void:
+		world.start_scenario("none")
+		_update_scenario())
+	scenario_panel.visible = false
 
 	# Middle: the tree of life, shown on demand.
 	var tree_box := _panel(Control.PRESET_CENTER, Vector2(0, 0))
@@ -587,11 +684,21 @@ func _build_ui() -> void:
 	tree_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tree_view.close_requested.connect(_toggle_tree)
 	tree_row.add_child(tree_view)
+	web_view = Control.new()
+	web_view.set_script(load("res://food_web.gd"))
+	web_view.custom_minimum_size = Vector2(900, 570)
+	web_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	web_view.visible = false
+	web_view.close_requested.connect(_toggle_web)
+	tree_row.add_child(web_view)
 	species_card = PanelContainer.new()
 	species_card.set_script(load("res://species_card.gd"))
 	species_card.world = world
 	tree_row.add_child(species_card)
 	tree_view.selection_changed.connect(func(id: int) -> void: species_card.show_species(id))
+	web_view.selection_changed.connect(func(id: int) -> void:
+		tree_view.select_id(id)
+		species_card.show_species(id))
 	species_card.species_link.connect(_open_species)
 	species_card.bank_requested.connect(_bank)
 
@@ -659,6 +766,11 @@ func _bank(species_id: int) -> void:
 
 ## The designer handed over a creature file: drop it where the player clicks next.
 func _start_drop(text: String, title: String, count: int) -> void:
+	var sc: Dictionary = world.get_scenario()
+	if sc["active"] and sc["outcome"] == "running" and not sc["meteors"]:
+		_set_speed(designer_speed)
+		chronicle_box.append_text("[color=#f88]%s is won by evolution alone: no creatures can be dropped in.[/color]\n" % sc["title"])
+		return
 	drop_text = text
 	drop_name = title
 	drop_count = count
@@ -726,21 +838,55 @@ func _set_overlay(index: int) -> void:
 	overlay = index % OVERLAY_NAMES.size()
 	overlay_button.select(overlay)
 	terrain_mat.set_shader_parameter("overlay", overlay)
+	_upload_soil()
+
+
+## G: the food web in the tree's panel. From the tree it switches; from the
+## web it closes.
+func _toggle_web() -> void:
+	if tree_panel.visible and web_mode:
+		tree_panel.visible = false
+		return
+	_set_web_mode(true)
+	if not tree_panel.visible:
+		_toggle_tree()
+	else:
+		_update_tree()
+	web_view.grab_focus()
+
+
+func _set_web_mode(on: bool) -> void:
+	web_mode = on
+	tree_view.visible = not on
+	web_view.visible = on
+	if on:
+		web_view.select_id(tree_view.selected_id)
 
 
 func _toggle_tree() -> void:
+	# T over the food web switches back to the tree.
+	if tree_panel.visible and web_mode:
+		_set_web_mode(false)
+		_update_tree()
+		tree_view.grab_focus()
+		return
 	tree_panel.visible = not tree_panel.visible
 	if not tree_panel.visible:
+		_set_web_mode(false)
 		return
 	# Nearly the whole window, over the other panels: it is a view of its own.
 	var win := get_viewport().get_visible_rect().size
 	var card_w: float = species_card.custom_minimum_size.x + 8.0
 	tree_view.custom_minimum_size = Vector2(maxf(win.x - 80.0 - card_w, 480.0), maxf(win.y - 90.0, 360.0))
+	web_view.custom_minimum_size = tree_view.custom_minimum_size
 	tree_panel.reset_size()
 	tree_panel.position = ((win - tree_panel.size) * 0.5).floor()
 	tree_panel.move_to_front()
 	_update_tree()
-	tree_view.grab_focus()
+	if web_mode:
+		web_view.grab_focus()
+	else:
+		tree_view.grab_focus()
 	# Open on the species of the creature being followed, if any; otherwise on
 	# whatever was picked last, or the most numerous species alive.
 	if inspected_id >= 0:
@@ -779,6 +925,12 @@ func _open_inspected_species() -> void:
 
 func _update_tree() -> void:
 	if not tree_panel.visible:
+		return
+	if web_mode:
+		var web: Dictionary = world.get_food_web(10)
+		tree_title.text = "FOOD WEB    %d species with 10 or more alive, by trophic level    G or Esc to close, T for the tree" % web["nodes"].size()
+		web_view.show_web(web)
+		species_card.refresh()
 		return
 	var tree: Array = world.get_species_tree(10)
 	var alive := 0
@@ -867,14 +1019,6 @@ func _diet(info: Dictionary) -> String:
 	return text
 
 
-## How the mutability gene (log2 of the mutation rate) reads in words.
-func _rate_words(m: float) -> String:
-	var rate := pow(2.0, m)
-	if absf(m) < 0.1:
-		return "about"
-	return "%.1fx" % rate if rate >= 1.0 else "1/%.1f of" % (1.0 / rate)
-
-
 func _shape_words(info: Dictionary) -> String:
 	var e: float = info["elongation"]
 	var sq: float = info["squareness"]
@@ -916,8 +1060,10 @@ func _show_creature(info: Dictionary) -> void:
 		"Eats: " + _diet(info),
 		"Enzymes: %s" % (", ".join(info["enzymes"]) if info["enzymes"].size() > 0 else "none"),
 		"Holds %s   body of %s" % [info["store_chemicals"] if info["store_chemicals"] != "" else "nothing", info["body_chemicals"]],
+		("Mineral P: body %.3f, store %.3f (a child needs %.3f%s)" % [info["p_body"], info["p_store"], info["p_child"],
+			", short" if info["p_store"] < info["p_child"] else ""]) if info["p_on"] else "",
 		"Radius %.2f   mass %.2f   %s" % [info["radius"], info["mass"], _shape_words(info)],
-		"Skin %s, %s   %s" % [_skin_hue_word(info["hue"]), "pale" if info["pigment"] < 0.3 else ("dark" if info["pigment"] > 0.7 else "mid-toned"), "blends into the ground here" if info["shows"] < 0.5 else ("stands out a little here" if info["shows"] < 0.85 else "stands out here")],
+		"Skin %s, %s" % [_skin_hue_word(info["hue"]), "pale" if info["pigment"] < 0.3 else ("dark" if info["pigment"] > 0.7 else "mid-toned")],
 		"Upkeep %.2f / tick   speed %.2f" % [info["upkeep"], info["max_speed"]],
 		("Young land touching it" if info["throw_range"] < 0.05 else "Flings its young up to %.1f cells" % info["throw_range"]) + ", born at %d%% of its mass" % roundi(100.0 * info["birth_size"]),
 		"Fully grown" if info["grown"] >= 1.0 else "Still growing: %d%% of its adult mass, can't breed yet" % roundi(100.0 * info["grown"]),
@@ -926,12 +1072,11 @@ func _show_creature(info: Dictionary) -> void:
 		"Never sleeps" if info["dormancy"] < 0.01 else "Sleeps to %d%% depth   now %s" % [roundi(100.0 * info["dormancy"]), "awake" if info["sleep"] < 0.1 else "%d%% asleep" % roundi(100.0 * info["sleep"])],
 		"Bite x%.1f   keeps %d%% of a meal" % [info["bite"], roundi(100.0 * info["efficiency"])],
 		"Burns %s" % info["burns"] + ("   can live on what vents make" if info["burns_vent"] else "   can't feed at vents"),
-		"Copied with %s the usual mistakes   %s" % [_rate_words(info["mutability"]), "no repair" if info["repair"] <= 0.0 else "repairs itself: ages %.1fx slower" % (1.0 + 2.0 * info["repair"])],
 		"Not poisonous" if info["toxicity"] <= 0.0 else "Poisonous: eating 10 costs the eater %.0f" % (10.0 * info["toxicity"]),
 		"Body %.1f °C   comfort %.0f ± %.0f °C" % [info["body_temperature"], info["thermal_optimum"], info["thermal_tolerance"]],
-		"Here: light %.2f, %.1f °C, soil %.1f, waste %.1f%s" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"], info["cell_waste"], "" if info["cell_vent"] <= 0.0 else ", vent %.2f" % info["cell_vent"]],
+		"Here: light %.2f, %.1f °C, soil %.1f%s, waste %.1f%s" % [info["cell_light"], info["cell_temperature"], info["cell_nutrient"], (", P %.2f" % info["cell_mineral"]) if info["p_on"] else "", info["cell_waste"], "" if info["cell_vent"] <= 0.0 else ", vent %.2f" % info["cell_vent"]],
 		"Parts: " + ("\n  ".join(parts) if parts.size() > 0 else "none"),
-	])
+	].filter(func(line): return line != ""))
 
 
 # --- Input -----------------------------------------------------------------------
@@ -976,6 +1121,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_5: _set_speed(4)
 			KEY_TAB: _set_overlay(overlay + 1)
 			KEY_T: _toggle_tree()
+			KEY_G: _toggle_web()
 			KEY_F: _toggle_follow()
 			KEY_P: _open_inspected_species()
 			KEY_B: _open_designer()
@@ -1150,6 +1296,8 @@ func _update_ui() -> void:
 
 	if frame % 30 == 2:
 		_update_tree()
+	if frame % 10 == 3:
+		_update_scenario()
 
 	var size := world.get_chronicle_size()
 	if size > chronicle_seen:
@@ -1173,6 +1321,64 @@ func _update_ui() -> void:
 			_update_follow_button(false, "")
 		else:
 			_show_creature(info)
+
+
+# --- Save, load and scenarios ----------------------------------------------------------
+
+## Reload the scene with a saved world (path) or a fresh scenario world (key).
+func _restart_with(path: String, scenario_key: String) -> void:
+	pending_load = path
+	pending_scenario = scenario_key
+	restarted = true
+	get_tree().reload_current_scene()
+
+
+func _ask_file(saving: bool) -> void:
+	var dir := ProjectSettings.globalize_path(SAVE_DIR)
+	DirAccess.make_dir_recursive_absolute(dir)
+	if file_dialog != null:
+		file_dialog.queue_free()
+	file_dialog = FileDialog.new()
+	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE if saving else FileDialog.FILE_MODE_OPEN_FILE
+	file_dialog.title = "Save the world" if saving else "Load a world"
+	file_dialog.filters = PackedStringArray(["*.snap ; Saved worlds"])
+	file_dialog.current_dir = dir
+	if saving:
+		file_dialog.current_file = "world_%d.snap" % world.get_tick()
+	file_dialog.file_selected.connect(func(path: String) -> void:
+		if saving:
+			var err: String = world.save_world(path)
+			chronicle_box.append_text(("Saved %s.\n" % path.get_file()) if err == "" else "[color=#f88]Could not save: %s[/color]\n" % err)
+		else:
+			_restart_with(path, ""))
+	$UI.add_child(file_dialog)
+	file_dialog.popup_centered(Vector2i(760, 480))
+
+
+## The scenario banner: goal, progress and clock while it runs; the verdict,
+## and a pause, once it is decided.
+func _update_scenario() -> void:
+	var sc: Dictionary = world.get_scenario()
+	scenario_panel.visible = sc["active"]
+	if not sc["active"]:
+		return
+	var decided: bool = sc["outcome"] != "running"
+	scenario_buttons.visible = decided
+	if decided:
+		var colour := "8fe388" if sc["outcome"] == "won" else "f88"
+		scenario_label.text = "[center][b]%s[/b]\n[color=#%s][font_size=20]%s[/font_size][/color][/center]" % [
+			sc["title"], colour, sc["verdict"]]
+		if not scenario_decided:
+			scenario_decided = true
+			_set_speed(0)
+	else:
+		scenario_decided = false
+		var clock := ""
+		if int(sc["left"]) >= 0:
+			clock = "   %s ticks left" % _commas(int(sc["left"]))
+		scenario_label.text = "[center][b]%s[/b]   %s%s\n[font_size=12][color=#a8b4c4]%s[/color][/font_size][/center]" % [
+			sc["title"], sc["progress"], clock, sc["brief"]]
 
 
 func _commas(value: int) -> String:

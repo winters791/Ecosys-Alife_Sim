@@ -40,8 +40,6 @@ Dictionary to_dict(const luca::Genome& g) {
     d["bite"] = g.bite;
     d["dormancy"] = g.dormancy;
     d["seed_throw"] = g.seed_throw;
-    d["mutability"] = g.mutability;
-    d["repair"] = g.repair;
     Array shape;
     for (float s : g.shape) shape.push_back(s);
     d["shape"] = shape;
@@ -102,8 +100,6 @@ luca::Genome from_dict(const Dictionary& d) {
     g.bite = num(d, "bite", 0.0f);
     g.dormancy = num(d, "dormancy", 0.0f);
     g.seed_throw = num(d, "seed_throw", 0.0f);
-    g.mutability = num(d, "mutability", 0.0f);
-    g.repair = num(d, "repair", 0.0f);
     if (d.has("shape")) {
         const Array shape = d["shape"];
         for (int k = 0; k < 8 && k < shape.size(); ++k) g.shape[k] = static_cast<float>(static_cast<double>(shape[k]));
@@ -192,8 +188,6 @@ Dictionary LucaWorld::get_brain_layout() const {
     d["max_bite"] = luca::limits::MAX_BITE;
     d["min_threshold"] = luca::limits::MIN_THRESHOLD;
     d["max_threshold"] = luca::limits::MAX_THRESHOLD;
-    d["min_mutability"] = luca::limits::MIN_MUTABILITY;
-    d["max_mutability"] = luca::limits::MAX_MUTABILITY;
     d["min_birth"] = luca::limits::MIN_BIRTH;
     d["vault_sample"] = luca::VAULT_SAMPLE;
     d["day_length"] = sim_ ? sim_->world().day_length() : 600;
@@ -259,7 +253,6 @@ Dictionary LucaWorld::assess_design(const Dictionary& genome, double sun, double
     d["canopy"] = p.canopy;
     d["reach"] = p.reach;
     d["heat_follow"] = p.heat_follow;
-    d["wear"] = p.wear;
     String burns;
     for (int c = 1; c < luca::NCHEM; ++c)
         if (p.can_burn(c)) burns += String(burns.is_empty() ? "" : " ") + luca::chem_name(c);
@@ -332,6 +325,7 @@ Dictionary LucaWorld::genome_of(int64_t id) const {
 
 bool LucaWorld::release(const String& text, double x, double z, double radius, int count) {
     if (!sim_ || !std::isfinite(x) || !std::isfinite(z) || !std::isfinite(radius)) return false;
+    if (!sim_->scenario().info().meteors) return false;   // this scenario is won by evolution alone
     luca::CreatureFile f;
     std::string error;
     if (!luca::read_creature_file(text.utf8().get_data(), f, error)) return false;

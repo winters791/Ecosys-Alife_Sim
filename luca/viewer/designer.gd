@@ -5,7 +5,7 @@ extends Control
 ##   Body       the outline (pen), parts stamped on the rim, sizes, stalks
 ##   Brain      the evolved CTRNN as a graph: wire senses to urges, try it
 ##   Chemistry  its enzymes: what it can burn, and so what it can live on
-##   Life       when it breeds, how big its young are, comfort, sleep, repair
+##   Life       when it breeds, how big its young are, comfort, sleep
 ##   Test tank  a small walled-off world: watch twelve of them try to live
 ##
 ## The energy budget on the right is the game: income (the sun, as the real
@@ -494,9 +494,9 @@ func _build_chem_tools(parent: VBoxContainer) -> VBoxContainer:
 func _build_life_help(parent: VBoxContainer) -> VBoxContainer:
 	var box := _page(parent)
 	_heading(box, "LIFE CYCLE")
-	box.add_child(_note("These genes have no part to draw; they shape how it lives and breeds. Each costs something: a wide comfort range, bite, sleep machinery, flinging seeds, repair and careful copying all add upkeep."))
+	box.add_child(_note("These genes have no part to draw; they shape how it lives and breeds. Each costs something: a wide comfort range, bite, sleep machinery, and flinging seeds all add upkeep."))
 	box.add_child(_note("Breeding: when its store reaches the threshold it builds a child (at birth size) out of its store and hands it a share of what is left. Many small young, or a few big ones, is up to you."))
-	box.add_child(_note("Evolution starts at the first child: mutation rate is a gene too. Copy carefully to keep your design; copy sloppily to let it explore."))
+	box.add_child(_note("Evolution starts at the first child."))
 	return box
 
 
@@ -542,10 +542,6 @@ func _build_life(page: Control) -> void:
 		"Bite", 0.0, layout["max_bite"], 0.05, "bite", func(v: float) -> String: return "×%.2f pull" % (1.0 + v))
 	_bind_slider(cell.call("DORMANCY", "Sleeps through dark and cold, paying a tenth of its upkeep, but helpless, and slow to wake."),
 		"Sleeps", 0.0, 1.0, 0.01, "dormancy", func(v: float) -> String: return "not at all" if v <= 0.0 else "%d%% deep" % roundi(v * 100.0))
-	_bind_slider(cell.call("REPAIR", "Slows ageing (up to three times) for up to 15% more upkeep."),
-		"Repair", 0.0, 1.0, 0.01, "repair", func(v: float) -> String: return "ages %.1f× slower" % (1.0 + 2.0 * v))
-	_bind_slider(cell.call("MUTATION RATE", "How faithfully its children are copied. Careful copying costs upkeep; sloppy copying is free but breaks children."),
-		"Copies at", layout["min_mutability"], layout["max_mutability"], 0.05, "mutability", func(v: float) -> String: return "×%.2f the usual rate" % pow(2.0, v))
 
 
 func _build_tank_tools(parent: VBoxContainer) -> VBoxContainer:
@@ -1128,7 +1124,7 @@ func _update_chem_labels() -> void:
 		if step > 0.0:
 			info.text = "%s: burning releases %d a unit, up to %.2f energy a tick; in the light it can store as much." % [words, int(step), rate * step]
 		else:
-			info.text = "%s: neutral, releases nothing. It swaps chemicals the body can't burn for ones it can." % words
+			info.text = "%s: equal on both sides, so it releases and stores nothing and never runs; it only costs upkeep." % words
 		var cost := 0.0
 		for c: Dictionary in report.get("costs", []):
 			if str(c["kind"]) == "enzyme" and int(c["index"]) == k:
@@ -1276,8 +1272,6 @@ func _cost_name(c: Dictionary) -> String:
 		"bite": return "Bite"
 		"dormancy": return "Sleep machinery"
 		"throw": return "Seed throwing"
-		"repair": return "Repair"
-		"fidelity": return "Careful copying"
 		"shape": return "Extra skin (shape)"
 	return str(c["kind"])
 

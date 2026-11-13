@@ -1,4 +1,5 @@
 #include "world.hpp"
+#include "laws.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -127,12 +128,16 @@ float World::latitude(int row) const {
 void World::refresh_light() {
     ++climate_rev_;
     const float sun = cfg_.sun_strength * sun_scale();
-    for (int y = 0; y < n_; ++y) {
-        const float frac = cfg_.light_mode == LightMode::Gradient
-                               ? 1.0f - (1.0f - cfg_.gradient_min) * latitude(y)
-                               : 1.0f;
-        for (int x = 0; x < n_; ++x) light_[y * n_ + x] = sun * frac * shade_[y * n_ + x];
-    }
+    // The light gradient runs from y = 0 to the far edge, like warmth, or with
+    // LIGHT_ACROSS (a law, 14.2.4) from x = 0 to the far edge, across it, so
+    // bright-and-cold and dim-and-warm ground both exist.
+    const bool gradient = cfg_.light_mode == LightMode::Gradient;
+    const bool across = g_laws.LIGHT_ACROSS != 0.0f;
+    for (int y = 0; y < n_; ++y)
+        for (int x = 0; x < n_; ++x) {
+            const float frac = gradient ? 1.0f - (1.0f - cfg_.gradient_min) * latitude(across ? x : y) : 1.0f;
+            light_[y * n_ + x] = sun * frac * shade_[y * n_ + x];
+        }
 }
 
 void World::refresh_terrain(int x0, int y0, int x1, int y1) {
