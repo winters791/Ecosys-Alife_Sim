@@ -131,6 +131,15 @@ void flag(IO& io, bool& b) {
     b = v != 0;
 }
 
+// Set while reading a version 2 snapshot, whose brain links number outputs from
+// 9 and hidden neurons from 20.
+bool g_legacy_nodes = false;
+uint8_t legacy_source(uint8_t n) { return n >= 20 ? static_cast<uint8_t>(n + (FIRST_HIDDEN - 20)) : n; }
+uint8_t legacy_target(uint8_t n) {
+    if (n >= 20) return static_cast<uint8_t>(n + (FIRST_HIDDEN - 20));
+    return n >= 9 ? static_cast<uint8_t>(n + (FIRST_OUTPUT - 9)) : n;
+}
+
 // --- The genome ---------------------------------------------------------------
 // Add a new gene here, at the end, and an older snapshot reads it as its default.
 template <class IO>
@@ -160,6 +169,7 @@ void io_genome(IO& io, Genome& g) {
         r(p.theta);
         r(p.phi);
         r(p.stalk);
+        r(p.channel);   // 2026-11-13; an older snapshot reads 0
     });
     io.list(g.enzymes, [](auto& r, Enzyme& e) {
         r(e.x);
@@ -178,6 +188,10 @@ void io_genome(IO& io, Genome& g) {
         r(l.to);
         r(l.weight);
     });
+    if constexpr (std::is_same_v<IO, In>) {
+        if (g_legacy_nodes)
+            for (BrainLink& l : g.brain.links) { l.from = legacy_source(l.from); l.to = legacy_target(l.to); }
+    }
 }
 
 // --- The config ---------------------------------------------------------------
@@ -635,7 +649,7 @@ std::unique_ptr<Simulation> SnapshotIO::from_bytes(const std::string& bytes, std
         return nullptr;
     }
     const int version = std::atoi(l.c_str() + sizeof(MAGIC));
-    if (version < SNAPSHOT_VERSION) {
+    if (version < 2) {
         error = "snapshot version " + std::to_string(version) + " was made before counter-based draws and cannot be continued; make it again";
         return nullptr;
     }
@@ -643,6 +657,7 @@ std::unique_ptr<Simulation> SnapshotIO::from_bytes(const std::string& bytes, std
         error = "snapshot version " + std::to_string(version) + " is newer than this build reads (" + std::to_string(SNAPSHOT_VERSION) + ")";
         return nullptr;
     }
+    g_legacy_nodes = version == 2;
     SimConfig cfg;
     Laws laws;   // a file with no law lines was made under the defaults
     while (true) {

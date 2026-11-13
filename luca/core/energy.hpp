@@ -117,7 +117,9 @@ float contact_flow(const Phenotype& taker, float pull, const Phenotype& giver, f
 // `two`, if given, gains the units turned over by two-input enzymes (observation).
 // Releases up to `want` energy from the store. Returns what it released:
 // less if the store or its enzymes can't give more.
-float burn(const Phenotype& p, Mix& pool, float& soil_a, float want, float* two = nullptr);
+// `loose`, if given, is the cell's loose chemicals: with INHIBIT_K on (2.9 B) they slow
+// the enzymes that make them.
+float burn(const Phenotype& p, Mix& pool, float& soil_a, float want, float* two = nullptr, const Mix* loose = nullptr);
 // The most `burn` could release from this store this tick.
 float power(const Phenotype& p, const Mix& pool, float soil_a);
 // Stores up to `energy` in the store. Returns what it stored: less if there

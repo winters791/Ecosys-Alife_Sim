@@ -59,7 +59,23 @@ struct Part {
     float theta = 0.0f;  // where on the outline it sits: radians from the body's front, 0 front, pi back
     float phi   = 0.0f;  // unused (left over from a 3D surface position); kept so old genomes load
     float stalk = 0.0f;  // how far out on a stalk it sits, in world units; 0 = on the skin
+    uint8_t channel = 0; // a sensor's channel: which field it reads (SenseChannel); ignored on other parts
 };
+
+// The fields a sensor can read (14.9, stage 1). Adding a sense is adding a row
+// here and in Simulation::sample_channel; no existing brain changes.
+enum SenseChannel : int {
+    CH_LIGHT = 0,
+    CH_WARMTH,     // temperature against the body's own comfort, signed
+    CH_CORPSE,     // dead matter's energy
+    CH_NUTRIENT,   // free matter in the soil (chemical A)
+    CH_LOOSE_B,
+    CH_LOOSE_C,
+    CH_LOOSE_D,
+    CH_LIVING,     // living mass
+    CH_COUNT
+};
+const char* channel_name(int c);
 
 // --- The brain ---------------------------------------------------------------
 // A small network that is itself evolved: how many neurons it has and what is
@@ -97,8 +113,16 @@ enum BrainInput : int {
     // feels these; no sensor is needed.
     IN_EATING,     // what it took in from the living and the dead: 1 = twice its upkeep
     IN_HURT,       // what was drained out of it: 1 = its upkeep
-    NUM_INPUTS
+    IN_NOISE,      // a number from a hash of (its id, the tick), -1 .. 1: wire it to wander (SENSOR_BRAIN)
+    // The bus (SENSOR_BRAIN, 14.9): per channel, how much its sensors feel
+    // (level) and how much more on the left than the right (contrast). The
+    // brain never names a part.
+    IN_BUS,
+    NUM_INPUTS = IN_BUS + 2 * CH_COUNT
 };
+constexpr int LEGACY_INPUTS = IN_NOISE;   // inputs before 2026-11-13
+constexpr int bus_level(int channel)    { return IN_BUS + 2 * channel; }
+constexpr int bus_contrast(int channel) { return IN_BUS + 2 * channel + 1; }
 enum BrainOutput : int {
     // Leaning: towards where there is more of something. The first five follow
     // the slope of a field and need a Sensor part to be felt at all.
@@ -117,14 +141,23 @@ enum BrainOutput : int {
     OUT_WANDER,    // a random direction
     OUT_INERTIA,   // the way it was already going
     OUT_THROTTLE,  // how fast to go: speed is 0.5 + this, clamped to 0..1
+    // SENSOR_BRAIN (14.9): the brain drives the body directly and the lean
+    // outputs above are not read.
+    OUT_THRUST,    // 0 .. 1 of the body's top speed along its heading (negative = 0)
+    OUT_TURN,      // -1 .. 1 of the most it can turn a tick (positive = to its left)
     NUM_OUTPUTS
 };
+constexpr int LEGACY_OUTPUTS = OUT_THRUST;
 constexpr int MAX_HIDDEN = 8;
 constexpr int MAX_LINKS  = 48;
 
 // Node numbers used by links: inputs first, then outputs, then hidden neurons.
-constexpr int FIRST_OUTPUT = static_cast<int>(NUM_INPUTS);
-constexpr int FIRST_HIDDEN = static_cast<int>(NUM_INPUTS) + static_cast<int>(NUM_OUTPUTS);
+// Fixed offsets, so a new input or output renumbers no saved brain (2026-11-13).
+// Before that they followed the counts: outputs at 9 and hidden at 20 (LEGACY_*
+// in snapshot.cpp translates old files).
+constexpr int FIRST_OUTPUT = 32;
+constexpr int FIRST_HIDDEN = 48;
+static_assert(NUM_INPUTS <= FIRST_OUTPUT && FIRST_OUTPUT + NUM_OUTPUTS <= FIRST_HIDDEN, "node ranges overlap");
 constexpr int input_node(BrainInput i) { return i; }
 constexpr int output_node(BrainOutput o) { return FIRST_OUTPUT + o; }
 constexpr int hidden_node(int k) { return FIRST_HIDDEN + k; }

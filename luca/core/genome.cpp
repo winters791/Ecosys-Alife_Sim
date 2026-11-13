@@ -20,6 +20,11 @@ const char* part_name(PartType t) {
     }
 }
 
+const char* channel_name(int c) {
+    static const char* const NAMES[CH_COUNT] = {"light", "warmth", "corpse", "soil", "loose_b", "loose_c", "loose_d", "living"};
+    return c >= 0 && c < CH_COUNT ? NAMES[c] : "?";
+}
+
 Genome make_luca() {
     Genome g;
     g.core_radius       = 1.0f;
@@ -127,6 +132,7 @@ void clamp_genome(Genome& g) {
         p.size = std::clamp(p.size, MIN_PART, MAX_PART);
         p.stalk = can_have_stalk(p.type) ? std::clamp(p.stalk, 0.0f, MAX_STALK) : 0.0f;
         p.theta = std::remainder(p.theta, 6.2831853f);  // -pi .. pi
+        if (p.type != PartType::Sensor || p.channel >= CH_COUNT) p.channel = 0;
     }
     // Enzymes: canonical (see canonical_enzyme), rate within bounds.
     if (g.enzymes.size() > static_cast<std::size_t>(MAX_ENZYMES)) g.enzymes.resize(MAX_ENZYMES);
@@ -141,7 +147,7 @@ void clamp_genome(Genome& g) {
     const int nodes = FIRST_HIDDEN + b.hidden;
     std::erase_if(b.links, [&](const BrainLink& l) {
         const bool from_ok = l.from < NUM_INPUTS || (l.from >= FIRST_HIDDEN && l.from < nodes);
-        const bool to_ok = l.to >= FIRST_OUTPUT && l.to < nodes;
+        const bool to_ok = (l.to >= FIRST_OUTPUT && l.to < FIRST_OUTPUT + NUM_OUTPUTS) || (l.to >= FIRST_HIDDEN && l.to < nodes);
         return !from_ok || !to_ok;
     });
     if (b.links.size() > static_cast<std::size_t>(MAX_LINKS)) b.links.resize(MAX_LINKS);

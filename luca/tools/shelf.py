@@ -6,8 +6,8 @@ tools/ab.py to fork from. A world already on the shelf is continued from its
 latest snapshot, never started again, so the shelf can be extended to longer
 runs as it is needed.
 
-  tools/shelf.py                          # 30 seeds to 1,000,000 ticks (long)
-  tools/shelf.py --ticks 100000           # the same seeds, only to 100,000
+  tools/shelf.py                          # 30 seeds to 100,000 ticks (the 1,000,000 runs are shelved)
+  tools/shelf.py --ticks 100000           # same as the default; pass --ticks 1000000 to go long
   tools/shelf.py --kind vents             # six seeds with the four test vents, to 100,000
   tools/shelf.py --kind events            # six seeds with world events at rate 1, to 100,000
 
@@ -35,7 +35,7 @@ KINDS = {
     # kind: (default seeds, default ticks, ticks to keep,
     #        flags for a new world only, flags for every leg of the run)
     # A script is cast once, at the start: cast again on a loaded world it would happen twice.
-    "plain": (THIRTY, 1_000_000, "100000,200000,500000,1000000", [], []),
+    "plain": (THIRTY, 100_000, "100000", [], []),
     "vents": (USUAL, 100_000, "100000", ["--script", str(ROOT / "scripts" / "four_vents.txt")], []),
     "events": (USUAL, 100_000, "100000", [], ["--events", "1"]),
 }

@@ -227,7 +227,112 @@ double Simulation::total_p() const {
 // throttle. See BrainInput / BrainOutput in genome.hpp. Reads only the current
 // state of the world; writes this creature's scratch slots and its own memory.
 // -----------------------------------------------------------------------------
+// The field a channel reads, at one point, by bilinear interpolation over the
+// four nearest cell centres (clamped at the world's edge), so any separation
+// between two sensors gives a difference (14.9, trap 1).
+float Simulation::sample_channel(int channel, float x, float y, const Phenotype& p, float body_temp) const {
+    const int n = world_.size();
+    const float cs = std::max(world_.cell_size(), 1e-3f);
+    const float fx = x / cs - 0.5f, fy = y / cs - 0.5f;
+    const int ix = static_cast<int>(std::floor(fx)), iy = static_cast<int>(std::floor(fy));
+    const float tx = fx - static_cast<float>(ix), ty = fy - static_cast<float>(iy);
+    auto at = [&](int cx, int cy) {
+        const int c = std::clamp(cy, 0, n - 1) * n + std::clamp(cx, 0, n - 1);
+        switch (channel) {
+            case CH_LIGHT:    return world_.light(c);
+            case CH_WARMTH:   return std::clamp((world_.temperature(c) - p.thermal_optimum) / std::max(p.thermal_tolerance, 1.0f), -2.0f, 2.0f);
+            case CH_CORPSE:   return soil_.corpse_energy[c];
+            case CH_NUTRIENT: return soil_.nutrient[c];
+            case CH_LOOSE_B:  return soil_.dissolved[c].v[CHEM_B];
+            case CH_LOOSE_C:  return soil_.dissolved[c].v[CHEM_C];
+            case CH_LOOSE_D:  return soil_.dissolved[c].v[CHEM_D];
+            case CH_LIVING:   return biomass_[c];
+            default:          return 0.0f;
+        }
+    };
+    (void)body_temp;
+    const float top = at(ix, iy) * (1.0f - tx) + at(ix + 1, iy) * tx;
+    const float bottom = at(ix, iy + 1) * (1.0f - tx) + at(ix + 1, iy + 1) * tx;
+    return top * (1.0f - ty) + bottom * ty;
+}
+
+// The sensor brain (SENSOR_BRAIN, 14.9, stage 1). Sensors read one point each
+// into a bus of level and side-contrast inputs per channel; the brain drives
+// thrust and turn directly. Heading is state (hx, hy); turning is paid for as
+// distance along the rim and counts as moving.
+void Simulation::decide_sensor_brain(std::size_t i, int cell, const LocalEnv& env) {
+    const Phenotype& p = c_.pheno[i];
+    const BrainPlan& plan = c_.brain[i];
+    const float hunger = 1.0f - std::clamp(c_.energy[i] / p.repro_threshold, 0.0f, 1.0f);
+    const float crowd = std::min(biomass_[cell] * 0.25f, 1.0f);
+    const float want = std::clamp((p.thermal_optimum - c_.body_temp[i]) / std::max(p.thermal_tolerance, 1.0f), -1.0f, 1.0f);
+
+    float in[NUM_INPUTS] = {};
+    in[IN_BIAS]   = 1.0f;
+    in[IN_HUNGER] = hunger;
+    in[IN_LIGHT]  = env.light;
+    in[IN_CROWD]  = crowd;
+    in[IN_COLD]   = want;
+    in[IN_CORPSE] = std::min(soil_.corpse_energy[cell] * (1.0f / 250.0f), 1.0f);
+    in[IN_MOVED]  = p.max_speed > 0.0f ? std::min(c_.moved[i] / p.max_speed, 1.0f) : 0.0f;
+    const float burn = std::max(p.upkeep, 1e-3f);
+    in[IN_EATING] = std::min(c_.ate[i] / (2.0f * burn), 1.0f);
+    in[IN_HURT]   = std::min(c_.hurt[i] / burn, 1.0f);
+    in[IN_NOISE]  = 2.0f * key_uniform(draw_key(draw_seed_, Draw::Noise, tick_, c_.id[i])) - 1.0f;
+
+    // The bus. k scales each field as a receptor would: level = m / (|m| + k),
+    // contrast = (left - right) / (|left| + |right| + k).
+    static constexpr float K[CH_COUNT] = {0.5f, 0.5f, 100.0f, 6.0f, 0.01f, 0.01f, 0.01f, 1.0f};
+    const float heading = std::atan2(c_.hy[i], c_.hx[i]);
+    float size_sum[CH_COUNT] = {}, value_sum[CH_COUNT] = {};
+    float left_w[CH_COUNT] = {}, right_w[CH_COUNT] = {}, left_v[CH_COUNT] = {}, right_v[CH_COUNT] = {};
+    for (int s = 0; s < plan.sensors; ++s) {
+        const SensorPoint& sp = plan.sensor[s];
+        const float a = heading + sp.angle;
+        const float v = sample_channel(sp.channel, c_.x[i] + std::cos(a) * sp.range, c_.y[i] + std::sin(a) * sp.range, p, c_.body_temp[i]);
+        const int ch = sp.channel;
+        size_sum[ch] += sp.size;
+        value_sum[ch] += sp.size * v;
+        const float side = std::sin(sp.angle);
+        if (side > 0.05f)       { left_w[ch] += sp.size * side;  left_v[ch] += sp.size * side * v; }
+        else if (side < -0.05f) { right_w[ch] += sp.size * -side; right_v[ch] += sp.size * -side * v; }
+    }
+    for (int ch = 0; ch < CH_COUNT; ++ch) {
+        if (size_sum[ch] <= 0.0f) continue;
+        const float m = value_sum[ch] / size_sum[ch];
+        in[bus_level(ch)] = m / (std::abs(m) + K[ch]);
+        if (left_w[ch] > 0.0f && right_w[ch] > 0.0f) {
+            const float l = left_v[ch] / left_w[ch], r = right_v[ch] / right_w[ch];
+            in[bus_contrast(ch)] = (l - r) / (std::abs(l) + std::abs(r) + K[ch]);
+        }
+    }
+
+    float w[NUM_OUTPUTS];
+    think(plan, c_.brain_state[i], in, w);
+    const float thrust = std::clamp(g_laws.THRUST_BASE + w[OUT_THRUST], 0.0f, 1.0f);   // THRUST_BASE 0.5 moves by default, as the old throttle did
+    const float turn = std::clamp(w[OUT_TURN], -1.0f, 1.0f);
+    const float dtheta = turn * g_laws.TURN_RATE;
+    const float arc = p.radius * std::abs(dtheta) * g_laws.TURN_COST;   // the rim's distance, as dear as TURN_COST says
+    const float dist = thrust * p.max_speed;
+    if (dist <= 0.0f && arc <= 0.0f) return;
+
+    const float a = heading + dtheta;
+    const float ux = std::cos(a), uy = std::sin(a);
+    const float nx = dist > 0.0f ? world_.clamp_coord(c_.x[i] + ux * dist) : c_.x[i];
+    const float ny = dist > 0.0f ? world_.clamp_coord(c_.y[i] + uy * dist) : c_.y[i];
+    const float dh = dist > 0.0f ? world_.height(world_.cell_index(nx, ny)) - env.height : 0.0f;
+    const float step_cost = std::max(0.0f, movement_cost(p, dist + arc, dh));
+    if (step_cost + cost_upkeep_[i] + cost_thermal_[i] > power(p, c_.pool[i], soil_.nutrient[cell])) return;
+    new_x_[i] = nx;
+    new_y_[i] = ny;
+    new_hx_[i] = ux;
+    new_hy_[i] = uy;
+    arc_[i] = arc;
+    cost_move_[i] = step_cost;
+}
+
 void Simulation::decide_movement(std::size_t i, int cell, const LocalEnv& env) {
+    if (g_laws.SENSOR_BRAIN != 0.0f) return decide_sensor_brain(i, cell, env);
     const Phenotype& p = c_.pheno[i];
     const float hunger = 1.0f - std::clamp(c_.energy[i] / p.repro_threshold, 0.0f, 1.0f);
     const float crowd = std::min(biomass_[cell] * 0.25f, 1.0f);
@@ -388,6 +493,7 @@ void Simulation::step() {
     new_y_.resize(n);
     new_hx_.resize(n);
     new_hy_.resize(n);
+    arc_.resize(n);
     corpse_want_.resize(n);
     corpse_gain_.resize(n);
     uptake_want_.resize(n);
@@ -577,6 +683,7 @@ void Simulation::step() {
         new_hx_[i] = c_.hx[i];
         new_hy_[i] = c_.hy[i];
         cost_move_[i] = 0.0f;
+        arc_[i] = 0.0f;
         if (p.has_brain && p.max_speed > 0.0f && c_.sleep[i] < AWAKE) decide_movement(i, cell, env);
     }
 
@@ -817,7 +924,7 @@ void Simulation::step() {
         const float foul = foul_mass > 0.0f ? std::max(0.0f, fouling_cost(p, foul_mass)) : 0.0f;
         const float want = poisoned_[i] + cost_upkeep_[i] + cost_thermal_[i] + cost_move_[i] + foul;
         const float held = pool.energy();   // probe: what its store was worth before paying
-        const float paid = want > 0.0f ? burn(p, pool, soil_a, want, &two) : 0.0f;
+        const float paid = want > 0.0f ? burn(p, pool, soil_a, want, &two, &loose) : 0.0f;
         stats_.two_flow += two;
         if (want > 0.0f) {
             const float f = paid / want;  // pro-rata if it couldn't pay in full
@@ -840,7 +947,7 @@ void Simulation::step() {
         if (spilled > 0.0f) tag_leavings(cell, c_.species[i], spilled);
         const bool starved = paid + 1e-5f * want + 1e-7f < want;
 
-        c_.moved[i] = std::hypot(new_x_[i] - c_.x[i], new_y_[i] - c_.y[i]);
+        c_.moved[i] = std::hypot(new_x_[i] - c_.x[i], new_y_[i] - c_.y[i]) + arc_[i] * g_laws.ARC_FOLDS;   // turning counts as moving (ARC_FOLDS 0: it does not fold the leaves)
         c_.unfold[i] = next_unfold(c_.unfold[i], c_.moved[i]);
         c_.x[i] = new_x_[i];
         c_.y[i] = new_y_[i];

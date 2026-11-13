@@ -86,7 +86,20 @@ Phenotype compile_phenotype(const Genome& g, float grown = 1.0f);
 // The brain, laid out for running: a fixed-size list of links, those feeding
 // hidden neurons first, then those feeding outputs. Kept beside the phenotype,
 // not in it, because only bodies that move ever read it.
+// One point a sensor reads (SENSOR_BRAIN, 14.9): a channel, an angle from the
+// body's front, how far out (world units) and its size. A sensor part off the
+// midline is a mirrored pair: two of these, at +theta and -theta.
+struct SensorPoint {
+    uint8_t channel = 0;
+    float   angle = 0.0f;   // radians from the heading; positive = to the left
+    float   range = 0.0f;
+    float   size = 0.0f;
+};
+constexpr int MAX_SENSOR_POINTS = 8;
+
 struct BrainPlan {
+    uint8_t sensors = 0;
+    SensorPoint sensor[MAX_SENSOR_POINTS];
     uint8_t hidden = 0;          // hidden neurons
     uint8_t to_hidden = 0;       // links [0, to_hidden) feed hidden neurons
     uint8_t links = 0;           // links [to_hidden, links) feed outputs

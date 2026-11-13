@@ -36,7 +36,10 @@ namespace luca {
 
 // 2 (2026-11-12): the random streams' states gave way to two draw seeds
 // (counter-based draws, rng.hpp). Version 1 files are refused.
-constexpr int SNAPSHOT_VERSION = 2;
+// 3 (2026-11-13): brain nodes have fixed offsets (outputs from 32, hidden from 48,
+// genome.hpp) and sensor parts carry a channel. Version 2 files are still read:
+// their brain links are renumbered as they come in (legacy_nodes in snapshot.cpp).
+constexpr int SNAPSHOT_VERSION = 3;
 
 // The file as bytes, and back. load returns null and fills `error` on a file
 // it cannot read.

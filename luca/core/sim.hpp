@@ -264,6 +264,8 @@ private:
     // stops short of any step in the ground taller than birth_max_step.
     void land_child(float x, float y, float ux, float uy, float dist, float& out_x, float& out_y) const;
     void decide_movement(std::size_t i, int cell, const LocalEnv& env);
+    void decide_sensor_brain(std::size_t i, int cell, const LocalEnv& env);   // SENSOR_BRAIN (14.9)
+    float sample_channel(int channel, float x, float y, const Phenotype& p, float body_temp) const;
 
     struct Birth {
         float x, y;
@@ -334,6 +336,7 @@ private:
     std::vector<float> gain_;
     std::vector<float> cost_upkeep_, cost_thermal_, cost_move_;
     std::vector<float> new_x_, new_y_, new_hx_, new_hy_;
+    std::vector<float> arc_;   // how far a body turned this tick, as distance along its rim (SENSOR_BRAIN)
     std::vector<float> biomass_;             // per cell
     std::vector<float> wash_;                // per cell: matter on its way downhill
     std::vector<float> cell_corpse_demand_;  // per cell

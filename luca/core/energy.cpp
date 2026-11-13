@@ -69,6 +69,11 @@ inline const float& THROW_COST = g_laws.THROW_COST;  // law, 2.0f
 // Fouling (see energy.hpp): per unit of loose chemical it can't burn, per
 // unit of skin. The old waste rule's 0.0025 per unit of energy, at 222 a unit.
 inline const float& FOUL_HARM      = g_laws.FOUL_HARM;  // law, 0.5f
+// 2.9 B, product inhibition: a downhill enzyme runs at 1 / (1 + P e^(-step/INHIBIT_SCALE) / INHIBIT_K)
+// of its rate, P being the units of its products loose in the body's cell (soil A
+// is not counted). A short step feels it most. INHIBIT_K 0 is off.
+inline const float& INHIBIT_K     = g_laws.INHIBIT_K;  // law, 0 (off)
+inline const float& INHIBIT_SCALE = g_laws.INHIBIT_SCALE;  // law, 74
 
 // Contact.
 inline const float& CONTACT_RATE = g_laws.CONTACT_RATE;  // law, 1.5f: energy per tick for a pull of 1 against no membrane
@@ -180,13 +185,20 @@ inline void run(const uint8_t in[2], const uint8_t out[2], float amount, Mix& po
 
 }  // namespace
 
-float burn(const Phenotype& p, Mix& pool, float& soil_a, float want, float* two) {
+float burn(const Phenotype& p, Mix& pool, float& soil_a, float want, float* two, const Mix* loose) {
     float released = 0.0f;
     for (int k = 0; k < p.enzymes && released < want; ++k) {
         const float step = p.enz_step[k];
         if (step <= 0.0f) continue;
+        float rate = p.enz_rate[k];
+        if (loose && INHIBIT_K > 0.0f) {
+            float product = 0.0f;
+            for (int s = 0; s < 2; ++s)
+                if (p.enz_out[k][s] != NO_CHEM && p.enz_out[k][s] != CHEM_A) product += loose->v[p.enz_out[k][s]];
+            rate /= 1.0f + product * std::exp(-step / INHIBIT_SCALE) / INHIBIT_K;
+        }
         const float amount = runnable(p.enz_in[k], p.enz_out[k], pool, soil_a, p.pool_capacity,
-                                      std::min(p.enz_rate[k], (want - released) / step));
+                                      std::min(rate, (want - released) / step));
         if (amount <= 0.0f) continue;
         run(p.enz_in[k], p.enz_out[k], amount, pool, soil_a);
         released += amount * step;

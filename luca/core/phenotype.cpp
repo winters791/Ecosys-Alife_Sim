@@ -98,6 +98,11 @@ inline const float& HEAT_LAG             = g_laws.HEAT_LAG;  // law, 120.0f
 // Enzymes (chemistry layer): upkeep per unit of rate, paid whether or not
 // there is anything to turn over. LUCA's 0.015 costs 0.015 (4% of its upkeep).
 inline const float& ENZYME_UPKEEP        = g_laws.ENZYME_UPKEEP;  // law, 1.0f
+// 2.8 B, screening only: the share of standing gear's upkeep (mouths, motors,
+// senses, bite, brain, enzymes) a body pays. 1 is the rule as it was; below 1
+// gear is cheaper to keep and nothing charges for using it, so it is an upper
+// bound on what splitting resting from working costs could give, not the rule.
+inline const float& GEAR_STANDING        = g_laws.GEAR_STANDING;  // law, 1.0f
 
 // Gene ranges live in genome.hpp (limits::); mutation enforces them through
 // clamp_genome(). The clamps below are a second line of defence for genomes
@@ -247,6 +252,8 @@ Phenotype compile_phenotype(const Genome& g, float grown) {
     }
     p.upkeep += enzyme_rate * ENZYME_UPKEEP;
     p.gear_upkeep = gear + bite * BITE_UPKEEP + brain_upkeep + enzyme_rate * ENZYME_UPKEEP;
+    p.upkeep -= (1.0f - GEAR_STANDING) * p.gear_upkeep;
+    p.gear_upkeep *= GEAR_STANDING;
     // LUCA (r = 1, one photo patch of size 1): mass 1.1, upkeep ≈ 0.42 + 0.04 for its ±10 °C.
 
     // --- 4. Light capture: patches need skin to sit on, and plates cover skin
@@ -329,6 +336,18 @@ BrainPlan compile_brain(const Genome& g) {
     const int hidden = std::min<int>(g.brain.hidden, MAX_HIDDEN);
     const int nodes = FIRST_HIDDEN + hidden;
     plan.hidden = static_cast<uint8_t>(hidden);
+    for (const Part& part : g.parts) {
+        if (part.type != PartType::Sensor) continue;
+        const float range = g.core_radius + g_laws.SENSE_CELLS_PER_SIZE * part.size;
+        const bool pair = std::abs(std::sin(part.theta)) > 0.05f;
+        for (int side = 0; side < (pair ? 2 : 1) && plan.sensors < MAX_SENSOR_POINTS; ++side) {
+            SensorPoint& s = plan.sensor[plan.sensors++];
+            s.channel = part.channel;
+            s.angle = side == 0 ? part.theta : -part.theta;
+            s.range = range;
+            s.size = part.size;
+        }
+    }
     for (int k = 0; k < hidden; ++k) {
         plan.rate[k] = 1.0f / std::clamp(g.brain.tau[k], limits::MIN_TAU, limits::MAX_TAU);
         plan.bias[k] = std::clamp(g.brain.bias[k], -limits::MAX_WEIGHT, limits::MAX_WEIGHT);
@@ -340,7 +359,7 @@ BrainPlan compile_brain(const Genome& g) {
             if (plan.links >= MAX_LINKS) break;
             const bool from_ok = l.from < NUM_INPUTS || (l.from >= FIRST_HIDDEN && l.from < nodes);
             const bool feeds_hidden = l.to >= FIRST_HIDDEN && l.to < nodes;
-            const bool feeds_output = l.to >= FIRST_OUTPUT && l.to < FIRST_HIDDEN;
+            const bool feeds_output = l.to >= FIRST_OUTPUT && l.to < FIRST_OUTPUT + NUM_OUTPUTS;
             if (!from_ok || (pass == 0 ? !feeds_hidden : !feeds_output)) continue;
             plan.link[plan.links] = l;
             plan.link[plan.links].weight = std::clamp(l.weight, -limits::MAX_WEIGHT, limits::MAX_WEIGHT);

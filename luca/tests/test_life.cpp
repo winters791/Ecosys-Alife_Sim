@@ -276,6 +276,50 @@ void test_movement() {
     CHECK(ic < sim.creatures().size() && sim.creatures().x[ic] == 36.0f);  // LUCA sits still
 }
 
+// 14.9 stage 1: sensors read points, the bus gives level and side contrast,
+// and the brain steers with thrust and turn; turning costs energy.
+void test_sensor_brain() {
+    using namespace luca;
+    g_laws.SENSOR_BRAIN = 1.0f;
+    SimConfig cfg = small_config();
+    cfg.light_mode = LightMode::Gradient;
+    cfg.day_length = 0;
+    Simulation sim(cfg);
+    const auto& lights = sim.world().lights();
+    const float bright_top = lights[sim.world().cell_index(24.0f, 4.0f)], bright_bottom = lights[sim.world().cell_index(24.0f, 44.0f)];
+    CHECK(bright_top != bright_bottom);
+
+    Genome g = make_luca();
+    g.parts.push_back({PartType::Flagellum, 1.0f, 3.14159265f, 0.0f});
+    Part eye{PartType::Sensor, 1.0f, 1.5707963f, 0.0f};   // a mirrored pair at the sides
+    eye.channel = CH_LIGHT;
+    g.parts.push_back(eye);
+    g.brain.connect(bus_contrast(CH_LIGHT), output_node(OUT_TURN), 3.0f);   // turn towards the brighter side
+    const uint64_t id = sim.add_creature(24.0f, 24.0f, 300.0f, g);
+
+    double cost = 0.0;
+    for (int t = 0; t < 300; ++t) { sim.step(); cost += sim.last_stats().out_movement; }
+    const std::size_t i = find(sim, id);
+    CHECK(i < sim.creatures().size());
+    if (i < sim.creatures().size()) {
+        const float hy = sim.creatures().hy[i];
+        CHECK((bright_top > bright_bottom) == (hy < 0.0f));    // it faces the brighter end
+        CHECK(sim.creatures().x[i] == 24.0f && sim.creatures().y[i] == 24.0f);   // thrust 0: it only turned
+    }
+    CHECK(cost > 0.0);   // and turning was paid for
+
+    // No sensor, no contrast: the same brain on a blind body does not turn.
+    Genome blind = g;
+    blind.parts.pop_back();
+    const uint64_t b = sim.add_creature(10.0f, 24.0f, 300.0f, blind);
+    const std::size_t ib0 = find(sim, b);
+    const float h0 = sim.creatures().hy[ib0];
+    for (int t = 0; t < 50; ++t) sim.step();
+    const std::size_t ib = find(sim, b);
+    CHECK(ib < sim.creatures().size() && sim.creatures().hy[ib] == h0);
+    g_laws.SENSOR_BRAIN = 0.0f;
+}
+
 // One tick-by-tick audit helper: returns the worst relative error seen.
 double run_audited(luca::Simulation& sim, int ticks) {
     double start = sim.stored_energy(), in = 0, out = 0, worst = 0;
@@ -2070,6 +2114,28 @@ void test_vents() {
     CHECK(out.str().find("100 vent 10 12 3 1.5 200") != std::string::npos);
 }
 
+// 2.9 B: loose product slows the enzyme that makes it; off at INHIBIT_K 0.
+void test_product_inhibition() {
+    using namespace luca;
+    Genome g = make_luca();
+    Enzyme e{CHEM_B, CHEM_D, 0.1f};   // D -> B (poorer side first)
+    g.enzymes = {e};
+    const Phenotype p = compile_phenotype(g);
+    Mix loose; loose.v[CHEM_B] = 1.0f;
+    auto run_once = [&](const Mix* l) {
+        Mix pool; pool.v[CHEM_D] = 1.0f;
+        float soil = 0.0f;
+        burn(p, pool, soil, 1000.0f, nullptr, l);
+        return 1.0f - pool.v[CHEM_D];   // units turned over
+    };
+    CHECK(std::abs(run_once(&loose) - 0.1f) < 1e-6f);            // off: full rate
+    g_laws.INHIBIT_K = 1.0f;
+    const float slowed = run_once(&loose);
+    CHECK(std::abs(slowed - 0.1f / (1.0f + std::exp(-2.0f))) < 1e-5f);   // D -> B steps 148 = 2 scales: 1 loose B slows it to 1/1.135
+    CHECK(std::abs(run_once(nullptr) - 0.1f) < 1e-6f);            // no cell given: full rate
+    g_laws.INHIBIT_K = 0.0f;
+}
+
 // Chemistry stage 4: two-input reactions, X + Y <-> Z + W, one unit of each.
 // They run as far as the scarcer input allows; one with equal levels on both
 // sides never runs (neutral exchanges were deleted, 14.10.8).
@@ -2512,6 +2578,8 @@ int main() {
     test_vents();
     test_windfalls();
     test_two_input_reactions();
+    test_sensor_brain();
+    test_product_inhibition();
     test_creature_files_and_meteors();
     test_snapshot_round_trip();
     test_laws();

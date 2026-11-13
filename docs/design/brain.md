@@ -4,6 +4,8 @@
 
 ### 14.9 Sensor and motor brain: design (Uday's proposal, 2026-11-12; nothing built)
 
+*Stage 1 built 2026-11-13 behind the law `SENSOR_BRAIN` (default off); it does not yet pass its judge (movers persist). What exists and the six-seed results are in CLAUDE.md 10.4, "Sensor brain".*
+
 **Why:** finding 14.2.8. Today the brain sets gains on eight built-in steering rules (lean to light, the living, the dead, comfort, soil, kin, bigger, moving), plus wander, inertia and throttle. Every new thing to notice needs a new rule. Uday's proposal: the brain reads **physical sensors** and drives **effectors** directly, so steering is wiring that evolves, and the rules hold none of it. It replaces the eight lean outputs, `OUT_WANDER`, `OUT_INERTIA`, `OUT_THROTTLE`, the `WANDER_PATH` rule, and (in stage 3) the fixed dark-or-cold trigger for dormancy.
 
 **Sensors.**

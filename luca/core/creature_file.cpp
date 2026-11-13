@@ -10,9 +10,11 @@ namespace luca {
 
 namespace {
 
-const char* const INPUT_NAMES[NUM_INPUTS] = {"bias", "hunger", "light", "crowd", "cold", "corpse", "moved", "eating", "hurt"};
+const char* const INPUT_NAMES[NUM_INPUTS] = {"bias", "hunger", "light", "crowd", "cold", "corpse", "moved", "eating", "hurt", "noise",
+    "light_level", "light_side", "warmth_level", "warmth_side", "corpse_level", "corpse_side", "soil_level", "soil_side",
+    "loose_b_level", "loose_b_side", "loose_c_level", "loose_c_side", "loose_d_level", "loose_d_side", "living_level", "living_side"};
 const char* const OUTPUT_NAMES[NUM_OUTPUTS] = {"light", "biomass", "corpse", "comfort", "nutrient", "kin",
-                                               "bigger", "moving", "wander", "inertia", "throttle"};
+                                               "bigger", "moving", "wander", "inertia", "throttle", "thrust", "turn"};
 const char* const PART_WORDS[static_cast<int>(PartType::Count)] = {"photo", "absorber", "flagellum", "legs",
                                                                    "sensor", "armour", "storage", "poison"};
 
@@ -27,7 +29,7 @@ std::string num(float v) {
 std::string node_name(int node, bool as_source) {
     if (node >= FIRST_HIDDEN) return "h" + std::to_string(node - FIRST_HIDDEN);
     if (as_source) return node < NUM_INPUTS ? INPUT_NAMES[node] : "?";
-    return node >= FIRST_OUTPUT ? OUTPUT_NAMES[node - FIRST_OUTPUT] : "?";
+    return node >= FIRST_OUTPUT && node < FIRST_OUTPUT + NUM_OUTPUTS ? OUTPUT_NAMES[node - FIRST_OUTPUT] : "?";
 }
 
 // A node by name; -1 if unknown. Sources are inputs or hidden neurons,
@@ -96,7 +98,7 @@ void write_genome(std::ostringstream& o, const Genome& g, const char* sep) {
     o << "throw " << num(g.seed_throw) << sep;
     for (const Part& p : g.parts)
         o << "part " << PART_WORDS[static_cast<int>(p.type)] << ' ' << num(p.size) << ' ' << num(p.theta) << ' '
-          << num(p.stalk) << sep;
+          << num(p.stalk) << (p.type == PartType::Sensor && p.channel != 0 ? " " + std::to_string(p.channel) : std::string()) << sep;
     for (const Enzyme& e : g.enzymes) o << "enzyme " << enzyme_words(e) << ' ' << num(e.rate) << sep;
     for (int k = 0; k < g.brain.hidden; ++k) o << "neuron " << num(g.brain.tau[k]) << ' ' << num(g.brain.bias[k]) << sep;
     for (const BrainLink& l : g.brain.links)
@@ -209,6 +211,8 @@ bool read_creature_file(const std::string& text, CreatureFile& out, std::string&
             if (t < 0) return fail("unknown part '" + type + "'");
             p.type = static_cast<PartType>(t);
             ok = floats({&p.size, &p.theta, &p.stalk});
+            int channel = 0;
+            if (ok && (ss >> channel)) p.channel = static_cast<uint8_t>(std::clamp(channel, 0, static_cast<int>(CH_COUNT) - 1));   // optional, sensors only
             if (ok) g->parts.push_back(p);
         } else if (key == "enzyme") {
             std::string w;

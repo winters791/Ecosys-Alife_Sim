@@ -81,6 +81,7 @@ enum class Draw : uint64_t {
     Windfall,       // how many lumps fall this tick, and where
     Event,          // whether the world acts this tick, and how
     EventTrigger,   // an event started by hand (a = events so far)
+    Noise,          // a brain's noise input (a = creature id)
 };
 
 // splitmix64's finaliser: a good 64-bit mix.

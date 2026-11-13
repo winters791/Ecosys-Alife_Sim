@@ -43,6 +43,8 @@ namespace luca {
     X(CLIMB_COST,           1.0f,          "energy") \
     X(THROW_COST,           2.0f,          "energy") \
     X(FOUL_HARM,            0.5f,          "energy") \
+    X(INHIBIT_K,            0.0f,          "energy") \
+    X(INHIBIT_SCALE,        74.0f,         "energy") \
     X(CONTACT_RATE,         1.5f,          "energy") \
     X(CORPSE_RATE,          2.0f,          "energy") \
     X(SIZE_POWER,           2.0f,          "energy") \
@@ -79,6 +81,13 @@ namespace luca {
     X(DORMANCY_UPKEEP,      0.02f,         "phenotype") \
     X(HEAT_LAG,             120.0f,        "phenotype") \
     X(ENZYME_UPKEEP,        1.0f,          "phenotype") \
+    X(GEAR_STANDING,        1.0f,          "phenotype") \
+    X(SENSOR_BRAIN,         0.0f,          "sim") \
+    X(TURN_RATE,            0.3f,          "sim") \
+    X(TURN_COST,            1.0f,          "sim") \
+    X(THRUST_BASE,          0.0f,          "sim") \
+    X(ARC_FOLDS,            1.0f,          "sim") \
+    X(P_CHANNEL,            0.05f,         "mutation") \
     X(MOUTH_ARC_BASE,       0.5f,          "body") \
     X(MOUTH_ARC_PER_SIZE,   0.8f,          "body") \
     X(COVER_ARC,            1.5707963f,    "body") \

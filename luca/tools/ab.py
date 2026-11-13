@@ -49,6 +49,8 @@ METRICS = [
     ("species_established", "established species", "mean"),
     ("producers", "sun-fed", "mean"),
     ("hunters", "hunters", "mean"),
+    ("eyed", "movers with eyes", "mean"),
+    ("steering", "steered by side contrast", "mean"),
     ("scavengers", "scavengers", "mean"),
     ("cleaners", "cleaners", "mean"),
     ("chemotrophs", "vent-fed", "mean"),
